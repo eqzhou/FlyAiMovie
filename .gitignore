@@ -1,0 +1,25 @@
+# data
+data/*.db
+data/*.db-*
+data/storage/**
+!data/storage/.gitkeep
+!data/.gitkeep
+
+# config secrets
+configs/config.yaml
+
+# node / go
+frontend/node_modules/
+frontend/dist/
+backend/flyaimovie
+backend/server
+*.exe
+*.test
+.run/*.log
+.run/*.out
+.run/*.pid
+.run/flyaimovie-server*
+logs/*.log
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,52 @@
+app:
+  name: "FlyAiMovie API"
+  version: "0.1.0"
+  debug: false
+  language: "zh"
+
+server:
+  port: 5679
+  host: "0.0.0.0"
+  cors_origins:
+    - "http://localhost:3013"
+    - "http://localhost:5679"
+  # Prefer WEBHOOK_SECRET in production. Leave empty to disable callbacks.
+  webhook_secret: ""
+  read_timeout: 600
+  write_timeout: 600
+  # Per source IP across all /api routes. X-Forwarded-For is ignored.
+  rate_limit_per_minute: 600
+
+database:
+  type: "sqlite"
+  path: "./data/flyaimovie.db"
+
+storage:
+  type: "local"
+  local_path: "./data/storage"
+  base_url: "http://localhost:5679/static"
+
+ai:
+  default_text_provider: "openai"
+  default_image_provider: "openai"
+  default_video_provider: "volcengine"
+
+auth:
+  # Required for any public or commercial deployment.
+  enabled: true
+  cookie_name: "flyaimovie_session"
+  secure_cookies: true
+  session_ttl_hours: 24
+
+email:
+  # Configure SMTP_HOST/SMTP_PORT/SMTP_USERNAME/SMTP_PASSWORD/EMAIL_FROM in production.
+  smtp_host: ""
+  smtp_port: 587
+  smtp_username: ""
+  smtp_password: ""
+  from: ""
+  # Public HTTPS origin, e.g. https://movie.example.com
+  reset_url_base: ""
+
+# Required for production; inject through the environment or a secret manager.
+# AI_CONFIG_ENCRYPTION_KEY: set in the process environment

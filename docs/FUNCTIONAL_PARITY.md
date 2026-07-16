@@ -1,0 +1,76 @@
+# 功能对等与验收矩阵
+
+本文定义 FlyAiMovie 的 clean-room 目标：保持用户可观察的短剧生产能力对等，同时让代码、接口内部设计、提示词、视觉、文案、品牌与素材保持独立表达。
+
+## 规格来源
+
+- 公开功能基线：[huobao-drama README（固定版本）](https://github.com/chatfire-AI/huobao-drama/blob/ad1cd7cd0127389ce8304aa9ebda3cfc8f406a6d/README.md)
+- 许可参考：[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+- 不使用上游源码、提示词、CSS、测试、数据库脚本、截图或演示素材作为实现输入。
+- 厂商适配只依据各厂商官方 API 文档和自行构造的请求/响应样例。
+
+## 对等口径
+
+`已实现` 表示存在可运行路径，不等于已经达到生产质量。只有绑定自动化用例后，能力才可标记为 `已验收`。
+
+| 编号 | 用户能力 | 可观察结果 | 当前实现 | 自动验收 |
+|---|---|---|---|---|
+| P-01 | 创建短剧与多集 | 项目和指定集数持久化，可继续编辑 | 已验收 | `TestMockAgentAndGridWorkflow` |
+| P-02 | 小说/大纲改写 | 生成结构化剧本并写回单集 | 已验收：Mock Agent 通过公开 HTTP 路由写回剧集脚本 | `TestMockAgentAndGridWorkflow` |
+| P-03 | 提取角色与场景 | 去重后关联项目/单集 | 已验收：Mock Agent 通过公开 HTTP 路由写回并按项目关联 | `TestMockAgentAndGridWorkflow` |
+| P-04 | 角色资产 | 上传/生成形象，批量生成，分配音色并试听 | 已验收 Mock 主路径：角色创建/剧集关联、Mock 形象生成、音色样本生成、素材库登记 | `TestMockAssetGenerationWorkflow`、上传/角色归属回归测试 |
+| P-05 | 场景与道具资产 | 创建、编辑、生成和复用素材 | 已验收 Mock 主路径：场景/道具创建、Mock 形象生成、素材库登记和跨项目归属校验 | `TestMockAssetGenerationWorkflow`、`TestImageUploadBindsPropAndRegistersAsset`、素材归属回归测试 |
+| P-06 | 分镜拆解与编辑 | 得到有序镜头，可增删改镜头字段 | 已验收：Mock Agent 写回有序分镜；工作台支持手工新增、字段编辑和删除，API 另有归属回归覆盖 | `TestMockAgentAndGridWorkflow`、router 资源归属测试、`frontend/tests/e2e/workbench.spec.ts` |
+| P-07 | 宫格工作流 | 生成提示词和宫格图，切分并分配到镜头帧 | 已验收：Mock HTTP 流程覆盖提示词、出图、FFmpeg 切分和首帧写回 | `TestMockAgentAndGridWorkflow` |
+| P-08 | 镜头帧生成 | 支持首帧、尾帧和批量生成 | 已验收 Mock 主路径：首帧生成写回分镜，批量入口和首尾/多参考模式已有归属校验 | `TestMockPipelineEndToEnd`、`TestMockAgentAndGridWorkflow`、pipeline 归属回归测试 |
+| P-09 | 图生视频 | 单镜头/批量提交，展示状态和结果 | 已验收 Mock 主路径：单镜头生成、异步任务轮询、结果写回和批量提交 | `TestMockPipelineEndToEnd`、`TestAsyncVideoPollingCompletesPersistentJob` |
+| P-10 | TTS 配音 | 单镜头/批量生成并可试听 | 已验收 Mock 主路径：队列任务、音频落盘、分镜写回和试听 URL | `TestMockPipelineEndToEnd` |
+| P-11 | 镜头合成 | 视频、音频、字幕合成为镜头成片 | 已验收：持久任务执行 FFmpeg，支持字幕、取消、租约和恢复 | Mock FFmpeg compose E2E；`TestComposeShotAndMergeEpisode`、`TestComposeAndMergeValidationAndCancellation` |
+| P-12 | 整集导出 | 按分镜顺序拼接并写回单集视频 | 已验收 Mock 主路径：按分镜顺序合并、任务恢复和缺失镜头返回 409 | `TestMockPipelineEndToEnd`、`TestComposeShotAndMergeEpisode` |
+| P-13 | 生成历史与进度 | 查询图片、视频、宫格和合成状态 | 已验收：图片、视频、TTS、镜头合成与整集导出统一进入任务系统 | jobs 并发、恢复、重试、claim；`TestAsyncImagePollingCompletesPersistentJob`、`TestAsyncVideoPollingCompletesPersistentJob` |
+| P-14 | AI 服务设置 | 配置文本/图片/视频/音频供应商，密钥不回显 | 已验收 | `TestAIConfigResponsesNeverExposeAPIKey` |
+| P-15 | Agent 配置与 Skills | 运行时读取独立编写的技能说明并覆盖 Agent 配置 | 已验收：模型、系统提示、温度、最大 token 与模型迭代限制生效；五类 Agent 离线流程写回数据库 | `TestChatWithMaxTokensForwardsLimit`、`TestOfflineFallbackAgentsPersistWorkflow` |
+| P-16 | 本地离线演示 | 无外部密钥时通过 mock 走完整流程 | 已验收 | `TestMockPipelineEndToEnd` |
+| P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已实现：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
+| P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
+| P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI/Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
+| P-20 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
+| P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收主路径：导出内容按组织隔离且排除密码、会话、CSRF 和 API Key；导出查询失败会报错；删除会清理组织数据、会话和本地媒体，同时保留仍属于其他组织的共享用户；媒体删除异常会显式失败。删除后的外部文件补偿/重试待补 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser` |
+
+## 非功能验收
+
+| 编号 | 要求 | 当前状态 | 自动验收 |
+|---|---|---|---|
+| N-01 | API 密钥不出现在读取、创建或更新响应中 | 已验收 | `TestAIConfigResponsesNeverExposeAPIKey` |
+| N-02 | 非法分页参数不会导致 panic 或无界查询 | 已验收 | `TestDramaPaginationClampsInvalidPageSize` |
+| N-03 | 未列入配置的跨域来源不获得 CORS 授权 | 已验收 | `TestCORSRejectsUntrustedOrigin` |
+| N-04 | 写入操作具备 schema 校验、事务和明确错误码 | 主要路径已加固：所有 JSON 解析错误均返回 400；主要更新接口拒绝空对象、未知字段、错误类型和越界值；严格未知字段/枚举审计仍待补 | `write_contracts_test.go`、`write_validation.go`、jobs/assets/AI config 测试 |
+| N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
+| N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；AI 自定义 `base_url` 拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；`TestValidateAIConfigRejectsNonPublicBaseURLs`、`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
+| N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：当前全包约 53.2%，仍有 agents、generation 等核心包低于 80% | `go test ./... -coverprofile=...` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 部分验收：工作台桌面端覆盖五阶段切换与剧本保存，390px 移动端覆盖阶段导航、导出入口和页面横向溢出；首屏加载失败提供明确错误和重试恢复。登录、设置、素材管理等关键流程仍待补齐 | `frontend/tests/e2e/workbench.spec.ts`（desktop/mobile） |
+| N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
+| N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
+| N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务和活跃任务上限，幂等请求不重复计额，超限返回 429 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestOrganizationQuotaIsScopedAndAdminManaged` |
+| N-13 | 多用户组织具备成员管理与组织切换 | 已验收主路径：owner/admin 角色边界、owner 保护、移除成员会话撤销、切换组织旋转 Session；已有账号必须通过邮箱绑定的一次性邀请接受，新账号在接受时设置密码；邀请支持状态查询、撤销和重发，旧 token 立即失效 | `TestMemberManagementAndOrganizationSwitch`、`TestAdminCannotManageOwnerOrGrantAdmin`、`TestOrganizationInvitationAcceptsNewUserOnce`、`TestOrganizationInvitationRequiresExistingUserPassword`、`TestOrganizationInvitationExpires`、`TestOrganizationInvitationCanBeRevokedAndResent` |
+| N-14 | 密码变更具备身份校验与会话撤销 | 已验收：校验当前密码、旋转自助会话、旧密码和旧 Session 失效；组织管理员不得修改成员的全局账号凭据 | `TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`TestOrganizationAdminCannotResetGlobalMemberPassword` |
+| N-16 | 忘记密码具备安全恢复流程 | 已验收核心及 SMTP 投递实现：请求响应不枚举账号；SMTP 支持 587 STARTTLS/465 隐式 TLS；token 只存哈希、30 分钟过期、一次性消费；成功后更新密码并撤销所有 Session；主动改密和组织删除会清理未消费 token。真实 SMTP 账号 smoke test 待部署 | `TestPasswordResetRequestDoesNotEnumerateAccounts`、`TestPasswordResetConsumesTokenAndRevokesSessions`、`TestPasswordResetExpiredTokenRejected`、`TestSMTPPasswordResetSenderRequiresHTTPSAndCredentials` |
+| N-15 | 敏感组织操作具备 owner 权限与二次确认 | 主路径已验收：组织导出仅 owner 可用且查询错误会失败；组织删除要求当前密码及组织 slug，并在事务内撤销会话和删除租户数据；媒体删除异常会显式返回失败。外部媒体删除补偿机制待补 | 组织导出与删除集成测试 |
+
+## 独立表达红线
+
+1. 不使用“火宝/Huobao”及其 logo、域名风格、宣传语或演示素材。
+2. 不逐文件翻译上游实现，不复制其提示词、Skills、测试、CSS、数据库定义或独特文案。
+3. UI 以制作效率和本项目信息架构为依据独立设计，不以截图像素相似为目标。
+4. 对外宣传使用“同类功能”或“功能对等”，不暗示官方、授权或兼容关系。
+5. 商业发布前单独审计依赖、FFmpeg 构建、字体、图标、模型服务条款、声音和肖像授权。
+
+## 下一阶段完成标准
+
+- 补齐 P-01 至 P-10 的 Mock 集成/E2E 验收，并增加桌面和移动端 Playwright 关键流程。
+- 为组织邀请增加邮件发送适配；当前接口返回一次性 token，需由部署方接入邮件服务。撤销、重发和写操作审计已实现。
+- 将核心 Go 包与前端关键业务逻辑覆盖率提升至 80% 以上。
+- 执行真实厂商账号 smoke test，并归档供应商协议版本与测试证据。
+- 为生成任务补金额预算和指数退避，为组织导出/删除补错误传播、可观测性和失败补偿。
+- 建立 Git 发布基线、生产部署配置、回滚流程、SBOM、漏洞扫描及许可证归档。
