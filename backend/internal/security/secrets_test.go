@@ -78,11 +78,11 @@ func TestMigrateAIConfigSecrets(t *testing.T) {
 	if err := database.First(&stored, row.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(stored.APIKey, encryptedPrefix) || strings.Contains(stored.APIKey, "legacy-secret") {
+	if !strings.HasPrefix(stored.APIKey, encryptedPrefix) || strings.Contains(stored.APIKey, "test-placeholder-key") {
 		t.Fatalf("not migrated: %q", stored.APIKey)
 	}
 	plaintext, err := DecryptSecret(stored.APIKey)
-	if err != nil || plaintext != "legacy-secret" {
+	if err != nil || plaintext != "test-placeholder-key" {
 		t.Fatalf("decrypt=%q err=%v", plaintext, err)
 	}
 	if err := MigrateAIConfigSecrets(database); err != nil {

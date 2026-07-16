@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,17 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
+
+func TestMediaHTTPClientDoesNotUseEnvironmentProxy(t *testing.T) {
+	client := mediaHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type=%T, want *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("media client inherited a process proxy")
+	}
+}
 
 func TestValidateRemoteURLRejectsUnsafeDestinations(t *testing.T) {
 	unsafe := []string{

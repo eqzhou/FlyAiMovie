@@ -123,7 +123,7 @@ func TestAliyunVideoUsesAsyncTaskContract(t *testing.T) {
 
 func TestViduVideoUsesTokenAndCreationsContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Token vidu-key" {
+		if r.Header.Get("Authorization") != "Token test-placeholder-key" {
 			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
 		}
 		switch r.Method + " " + r.URL.Path {

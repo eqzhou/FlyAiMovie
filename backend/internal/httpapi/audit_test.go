@@ -17,7 +17,7 @@ func TestAuditLogsAreTenantScopedAndDoNotCaptureBodies(t *testing.T) {
 	cookieA, csrfA, organizationA := createTestActorSession(t, server, "audit-a@example.com", "audit-a", "owner")
 	cookieB, csrfB, organizationB := createTestActorSession(t, server, "audit-b@example.com", "audit-b", "owner")
 
-	secret := "sk-audit-must-never-be-logged"
+	secret := "audit-test-placeholder"
 	createdConfig := performAuthRequest(router, http.MethodPost, "/api/v1/ai-configs", `{
 		"service_type":"image","provider":"openai","name":"private",
 		"base_url":"https://api.example.test","api_key":"`+secret+`"

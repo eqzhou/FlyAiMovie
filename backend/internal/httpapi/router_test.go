@@ -91,7 +91,7 @@ func TestAIConfigResponsesNeverExposeAPIKey(t *testing.T) {
 		"provider":"openai",
 		"name":"private-provider",
 		"base_url":"https://api.example.com",
-		"api_key":"sk-super-secret",
+		"api_key":"test-api-key-one",
 		"model":"image-model"
 	}`, nil)
 	if created.Code != http.StatusCreated {
@@ -108,7 +108,7 @@ func TestAIConfigResponsesNeverExposeAPIKey(t *testing.T) {
 	}
 	id := data["id"].(float64)
 	updated := performRequest(router, http.MethodPut, "/api/v1/ai-configs/"+jsonNumber(id), `{
-		"api_key":"sk-replacement-secret"
+		"api_key":"test-api-key-two"
 	}`, nil)
 	if updated.Code != http.StatusOK {
 		t.Fatalf("update status = %d; body=%s", updated.Code, updated.Body.String())
