@@ -18,8 +18,9 @@ server:
   rate_limit_per_minute: 600
 
 database:
-  type: "sqlite"
+  type: "postgres"
   path: "./data/flyaimovie.db"
+  dsn: "host=127.0.0.1 user=your-user dbname=flyaimovie password=your-password sslmode=disable"
 
 storage:
   type: "local"

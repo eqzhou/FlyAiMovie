@@ -54,10 +54,13 @@ pm2 restart flyaimovie
 ## 配置
 
 - `configs/config.yaml`：端口默认 5679，PM2 通过 `PORT=8088` 覆盖
-- 数据：`data/flyaimovie.db`、`data/storage/`
+- 数据库：本地正式配置使用 PostgreSQL（`flyaimovie` 数据库）；SQLite 文件 `data/flyaimovie.db` 保留作旧数据备份
+- 素材：`data/storage/`
 - `server.rate_limit_per_minute`：所有 `/api` 路由按直连来源 IP 限流，默认每分钟 600 次；不信任 `X-Forwarded-For`
 - `AI_CONFIG_ENCRYPTION_KEY`：生产环境必填；启用后新旧 AI 厂商密钥会以 AES-GCM 密文保存在数据库中
 - 密码恢复生产配置：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`EMAIL_FROM`、`PASSWORD_RESET_URL_BASE`；默认支持 SMTP 587 STARTTLS 与 465 隐式 TLS。
+
+本地 PostgreSQL 配置位于被 git 忽略的 `configs/config.yaml`，服务启动时会自动执行 GORM 迁移并补齐厂商、Agent、Mock 默认数据。切换数据库前请先备份数据；当前不会自动把旧 SQLite 业务数据复制到 PostgreSQL。
 
 ## 健康检查
 

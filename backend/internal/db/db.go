@@ -8,6 +8,7 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -16,22 +17,39 @@ import (
 var DB *gorm.DB
 
 func Open(path string) (*gorm.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+	return OpenDatabase("sqlite", path, "")
+}
+
+func OpenDatabase(databaseType, path, dsn string) (*gorm.DB, error) {
+	var dialector gorm.Dialector
+	switch databaseType {
+	case "", "sqlite":
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		dialector = sqlite.Open(path)
+	case "postgres", "postgresql":
+		if dsn == "" {
+			return nil, fmt.Errorf("postgres DSN is required")
+		}
+		dialector = postgres.Open(dsn)
+	default:
+		return nil, fmt.Errorf("unsupported database type %q", databaseType)
 	}
-	gdb, err := gorm.Open(sqlite.Open(path), &gorm.Config{
+	gdb, err := gorm.Open(dialector, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("open %s: %w", databaseType, err)
 	}
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		return nil, err
 	}
-	// Enable WAL for concurrent reads
-	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-		log.Printf("warn: enable WAL: %v", err)
+	if databaseType == "" || databaseType == "sqlite" {
+		if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+			log.Printf("warn: enable WAL: %v", err)
+		}
 	}
 	DB = gdb
 	return gdb, nil

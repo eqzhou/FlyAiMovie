@@ -42,7 +42,7 @@ func main() {
 		cfg.Storage.LocalPath = filepath.Join(root, cfg.Storage.LocalPath)
 	}
 
-	gdb, err := db.Open(cfg.Database.Path)
+	gdb, err := db.OpenDatabase(cfg.Database.Type, cfg.Database.Path, cfg.Database.DSN)
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
