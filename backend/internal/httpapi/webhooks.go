@@ -64,7 +64,13 @@ func (s *Server) verifyWebhook(c *gin.Context) (body []byte, duplicate bool, ok 
 	if err := db.DB.Create(&receipt).Error; err != nil {
 		var existing models.WebhookReceipt
 		if findErr := db.DB.First(&existing, "event_id = ?", eventID).Error; findErr == nil {
-			return body, true, true
+			// An event id is an idempotency key, not an authorization key. Reusing
+			// it with a different signed payload must not silently discard data.
+			if subtle.ConstantTimeCompare([]byte(existing.SignatureHash), []byte(receipt.SignatureHash)) == 1 {
+				return body, true, true
+			}
+			c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "webhook event id was already used with a different payload"})
+			return nil, false, false
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "failed to record webhook"})
 		return nil, false, false

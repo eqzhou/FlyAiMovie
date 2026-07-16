@@ -561,6 +561,11 @@ func TestWebhookRequiresValidSignatureAndRejectsReplay(t *testing.T) {
 	if replayed.Code != http.StatusOK || !strings.Contains(replayed.Body.String(), "duplicate") {
 		t.Fatalf("replay was not handled idempotently: status=%d body=%s", replayed.Code, replayed.Body.String())
 	}
+	conflictingBody := `{"task_id":"provider-task-1","status":"completed","url":"https://cdn.example/video.mp4"}`
+	conflicting := performRequest(router, http.MethodPost, "/api/v1/webhooks/generic", conflictingBody, signedWebhookHeaders(conflictingBody, "event-1", time.Now()))
+	if conflicting.Code != http.StatusConflict {
+		t.Fatalf("conflicting event id status=%d want 409 body=%s", conflicting.Code, conflicting.Body.String())
+	}
 
 	expiredHeaders := signedWebhookHeaders(body, "event-2", time.Now().Add(-10*time.Minute))
 	expired := performRequest(router, http.MethodPost, "/api/v1/webhooks/generic", body, expiredHeaders)
