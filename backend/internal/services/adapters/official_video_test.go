@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -144,10 +145,9 @@ func TestViduVideoUsesTokenAndCreationsContract(t *testing.T) {
 	defer server.Close()
 
 	adapter := &ViduVideoAdapter{}
-	var cfg AIConfig
-	if err := json.Unmarshal([]byte(`{"base_url":"`+server.URL+`","api_key":"test-placeholder-key","model":"vidu2.0"}`), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("TEST_VIDU_KEY", "test-placeholder-key")
+	cfg := AIConfig{BaseURL: server.URL, Model: "vidu2.0"}
+	cfg.APIKey = os.Getenv("TEST_VIDU_KEY")
 	submitted, err := adapter.Generate(context.Background(), cfg, VideoGenInput{Prompt: "scene", FirstFrameURL: "https://cdn/first.png"})
 	if err != nil || submitted.TaskID != "task-vidu" {
 		t.Fatalf("submitted=%+v err=%v", submitted, err)
