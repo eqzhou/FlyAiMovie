@@ -74,6 +74,66 @@ func TestCancelJobAlsoCancelsTarget(t *testing.T) {
 	}
 }
 
+func TestJobEventsTrackLifecycle(t *testing.T) {
+	service := testService(t)
+	job, err := service.CreateForTargetOrganization(7, "video.generate", "video_generation", 43, "vidu", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetWaiting(job.ID, "provider-task"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetFailed(job.ID, "provider rejected request"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := service.EventsOrganization(7, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events len=%d want 3: %+v", len(events), events)
+	}
+	if events[0].Stage != StatusRunning || events[1].Stage != StatusWaitingProvider || events[2].Stage != StatusFailed {
+		t.Fatalf("unexpected event stages: %+v", events)
+	}
+	if events[2].Message != "provider rejected request" {
+		t.Fatalf("failure message=%q", events[2].Message)
+	}
+	if _, err := service.EventsOrganization(8, job.ID); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("cross-organization events error=%v", err)
+	}
+}
+
+func TestBatchCancelIsOrganizationScoped(t *testing.T) {
+	service := testService(t)
+	ownedA, err := service.CreateQueuedOrganization(10, "tts.generate", "storyboard_tts", 1, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedB, err := service.CreateQueuedOrganization(10, "tts.generate", "storyboard_tts", 2, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := service.CreateQueuedOrganization(11, "tts.generate", "storyboard_tts", 3, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, failures, err := service.BatchCancelOrganization(10, []uint{ownedA.ID, ownedB.ID, other.ID, 999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(canceled) != 2 || len(failures) != 2 {
+		t.Fatalf("canceled=%v failures=%v", canceled, failures)
+	}
+	currentOther, err := service.Get(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentOther.Status != StatusQueued {
+		t.Fatalf("other organization job status=%q", currentOther.Status)
+	}
+}
+
 func TestRecoverExpiredRequeuesProviderJob(t *testing.T) {
 	service := testService(t)
 	job, err := service.CreateForTarget("image.generate", "image_generation", 77, "mock", nil)

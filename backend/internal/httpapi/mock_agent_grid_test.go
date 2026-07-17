@@ -38,6 +38,19 @@ func TestMockAgentAndGridWorkflow(t *testing.T) {
 			t.Fatalf("%s status=%d body=%s", agentType, result.Code, result.Body.String())
 		}
 	}
+	runs := performRequest(router, http.MethodGet, "/api/v1/agent-runs?episode_id="+itoa(episodeID), "", nil)
+	if runs.Code != http.StatusOK {
+		t.Fatalf("agent runs status=%d body=%s", runs.Code, runs.Body.String())
+	}
+	runRows := decodeResponse(t, runs)["data"].([]any)
+	if len(runRows) != 3 {
+		t.Fatalf("agent run count=%d body=%s", len(runRows), runs.Body.String())
+	}
+	latest := runRows[0].(map[string]any)
+	detail := performRequest(router, http.MethodGet, "/api/v1/agent-runs/"+itoa(uint(latest["id"].(float64))), "", nil)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"events"`) {
+		t.Fatalf("agent run detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
 
 	var characters []models.Character
 	if err := db.DB.Where("drama_id = ?", dramaID).Find(&characters).Error; err != nil || len(characters) < 1 {

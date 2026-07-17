@@ -15,7 +15,46 @@ import (
 
 type MiniMaxTTSAdapter struct{}
 
+type VoiceInfo struct {
+	ID           string
+	Name         string
+	Language     string
+	Description  string
+	Capabilities string
+}
+
 func (a *MiniMaxTTSAdapter) Name() string { return "minimax" }
+
+func ListMiniMaxVoices(ctx context.Context, cfg AIConfig) ([]VoiceInfo, error) {
+	endpoint, err := miniMaxVoiceEndpoint(cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	data, err := providerJSON(ctx, http.MethodGet, endpoint, cfg.APIKey, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("minimax voices: %w", err)
+	}
+	if err := providerBaseError("minimax", data); err != nil {
+		return nil, err
+	}
+	voices := make([]VoiceInfo, 0)
+	for _, key := range []string{"system_voice", "voice_cloning", "voice_generation"} {
+		items, _ := data[key].([]any)
+		for _, item := range items {
+			row, _ := item.(map[string]any)
+			id := firstString(row, "voice_id", "id")
+			if id == "" {
+				continue
+			}
+			voices = append(voices, VoiceInfo{ID: id, Name: defaultString(firstString(row, "voice_name", "name"), id),
+				Language: firstString(row, "language"), Description: firstString(row, "description"), Capabilities: key})
+		}
+	}
+	if len(voices) == 0 {
+		return nil, fmt.Errorf("minimax voices: response contains no voices")
+	}
+	return voices, nil
+}
 
 func (a *MiniMaxTTSAdapter) Generate(ctx context.Context, cfg AIConfig, in TTSInput) (*TTSResult, error) {
 	endpoint, err := miniMaxTTSEndpoint(cfg.BaseURL)
@@ -127,6 +166,28 @@ func miniMaxTTSEndpoint(base string) (string, error) {
 	} else {
 		u.Path = path + "/v1/t2a_v2"
 	}
+	return u.String(), nil
+}
+
+func miniMaxVoiceEndpoint(base string) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", fmt.Errorf("minimax voices: base URL is required")
+	}
+	u, err := url.Parse(strings.TrimRight(base, "/"))
+	if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", fmt.Errorf("minimax voices: invalid base URL")
+	}
+	u.RawQuery, u.Fragment = "", ""
+	path := strings.TrimRight(u.Path, "/")
+	if strings.HasSuffix(path, "/v1") {
+		u.Path = path + "/get_voice"
+	} else {
+		u.Path = path + "/v1/get_voice"
+	}
+	query := u.Query()
+	query.Set("voice_type", "all")
+	u.RawQuery = query.Encode()
 	return u.String(), nil
 }
 

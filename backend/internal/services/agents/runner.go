@@ -137,6 +137,9 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 	toolCalls := make([]map[string]any, 0)
 	toolResults := make([]map[string]any, 0)
 	for _, act := range plan.Actions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		toolCalls = append(toolCalls, map[string]any{"toolName": act.Tool, "args": act.Args})
 		res, err := r.execTool(agentType, organizationID, dramaID, episodeID, act.Tool, act.Args)
 		if err != nil {
@@ -174,6 +177,9 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 			}
 			if json.Unmarshal([]byte(raw2), &plan2) == nil {
 				for _, act := range plan2.Actions {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
 					if r.isReadOnlyTool(act.Tool) {
 						continue
 					}

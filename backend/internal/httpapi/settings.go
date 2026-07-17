@@ -15,6 +15,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/security"
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/agents"
+	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/gin-gonic/gin"
 )
 
@@ -444,6 +445,7 @@ func (s *Server) deleteAgentConfig(c *gin.Context) {
 func (s *Server) registerAgent(api *gin.RouterGroup) {
 	api.POST("/agent/:type/chat", s.agentChat)
 	api.GET("/agent/:type/debug", s.agentDebug)
+	s.registerAgentRuns(api)
 }
 
 func (s *Server) agentChat(c *gin.Context) {
@@ -466,7 +468,17 @@ func (s *Server) agentChat(c *gin.Context) {
 		response.NotFound(c, "episode not found")
 		return
 	}
-	res, err := s.Agents.Run(c.Request.Context(), currentOrganizationID(c), agentType, body.DramaID, body.EpisodeID, body.Message)
+	run, runContext, cleanup, err := s.beginAgentRun(c.Request.Context(), currentOrganizationID(c), agentType, body.DramaID, body.EpisodeID, body.Message)
+	if err != nil {
+		response.ServerError(c, "failed to create agent run")
+		return
+	}
+	defer cleanup()
+	res, err := s.Agents.Run(runContext, currentOrganizationID(c), agentType, body.DramaID, body.EpisodeID, body.Message)
+	if finishErr := s.finishAgentRun(run, res, err); finishErr != nil {
+		response.ServerError(c, "failed to save agent run")
+		return
+	}
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
@@ -522,24 +534,55 @@ func (s *Server) registerVoices(api *gin.RouterGroup) {
 		for _, r := range rows {
 			out = append(out, gin.H{
 				"voice_id": r.VoiceID, "voice_name": r.VoiceName, "description": r.Description,
-				"language": r.Language, "provider": r.Provider,
+				"language": r.Language, "provider": r.Provider, "capabilities": r.Capabilities, "is_active": r.IsActive,
 			})
 		}
 		response.Success(c, out)
 	})
 	api.POST("/ai-voices/sync", func(c *gin.Context) {
-		// Seed a few default Chinese voices when remote sync is unavailable.
 		ts := response.Now()
-		defaults := []models.AIVoice{
-			{OrganizationID: currentOrganizationID(c), VoiceID: "male-qn-qingse", VoiceName: "青涩青年", Language: "中文", Provider: "minimax", CreatedAt: ts},
-			{OrganizationID: currentOrganizationID(c), VoiceID: "male-qn-jingying", VoiceName: "精英青年", Language: "中文", Provider: "minimax", CreatedAt: ts},
-			{OrganizationID: currentOrganizationID(c), VoiceID: "female-shaonv", VoiceName: "少女", Language: "中文", Provider: "minimax", CreatedAt: ts},
-			{OrganizationID: currentOrganizationID(c), VoiceID: "female-yujie", VoiceName: "御姐", Language: "中文", Provider: "minimax", CreatedAt: ts},
-			{OrganizationID: currentOrganizationID(c), VoiceID: "presenter_male", VoiceName: "男性主持人", Language: "中文", Provider: "minimax", CreatedAt: ts},
-			{OrganizationID: currentOrganizationID(c), VoiceID: "presenter_female", VoiceName: "女性主持人", Language: "中文", Provider: "minimax", CreatedAt: ts},
+		organizationID := currentOrganizationID(c)
+		cfg, err := ai.GetOrganizationConfig(organizationID, "audio", nil)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
 		}
-		organizationDB(c).Where("provider = ?", "minimax").Delete(&models.AIVoice{})
-		organizationDB(c).Create(&defaults)
-		response.Success(c, gin.H{"count": len(defaults), "message": "Seeded default voices (configure MiniMax for live sync)"})
+		voices := []adapters.VoiceInfo{}
+		message := "MiniMax voices synchronized"
+		if cfg.Provider == "mock" {
+			voices = []adapters.VoiceInfo{{ID: "male-qn-qingse", Name: "青涩青年", Language: "中文", Capabilities: "mock"},
+				{ID: "male-qn-jingying", Name: "精英青年", Language: "中文", Capabilities: "mock"}, {ID: "female-shaonv", Name: "少女", Language: "中文", Capabilities: "mock"},
+				{ID: "female-yujie", Name: "御姐", Language: "中文", Capabilities: "mock"}, {ID: "presenter_male", Name: "男性主持人", Language: "中文", Capabilities: "mock"},
+				{ID: "presenter_female", Name: "女性主持人", Language: "中文", Capabilities: "mock"}}
+			message = "Mock voices seeded"
+		} else if cfg.Provider == "minimax" {
+			voices, err = adapters.ListMiniMaxVoices(c.Request.Context(), adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+		} else {
+			response.BadRequest(c, "active audio provider does not support voice synchronization")
+			return
+		}
+		seen := make([]string, 0, len(voices))
+		for _, voice := range voices {
+			seen = append(seen, voice.ID)
+			row := models.AIVoice{OrganizationID: organizationID, VoiceID: voice.ID, VoiceName: voice.Name, Description: voice.Description,
+				Language: voice.Language, Provider: cfg.Provider, Capabilities: voice.Capabilities, IsActive: true, CreatedAt: ts, UpdatedAt: ts}
+			var existing models.AIVoice
+			if organizationDB(c).Where("voice_id = ?", voice.ID).First(&existing).Error == nil {
+				organizationDB(c).Model(&existing).Updates(map[string]any{"voice_name": row.VoiceName, "description": row.Description, "language": row.Language,
+					"provider": row.Provider, "capabilities": row.Capabilities, "is_active": true, "updated_at": ts})
+			} else {
+				organizationDB(c).Create(&row)
+			}
+		}
+		query := organizationDB(c).Model(&models.AIVoice{}).Where("provider = ?", cfg.Provider)
+		if len(seen) > 0 {
+			query = query.Where("voice_id NOT IN ?", seen)
+		}
+		query.Updates(map[string]any{"is_active": false, "updated_at": ts})
+		response.Success(c, gin.H{"count": len(voices), "message": message})
 	})
 }

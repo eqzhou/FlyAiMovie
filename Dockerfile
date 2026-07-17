@@ -16,7 +16,7 @@ RUN CGO_ENABLED=1 go build -o /out/flyaimovie ./cmd/server
 
 # Runtime
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend-build /out/flyaimovie /app/flyaimovie

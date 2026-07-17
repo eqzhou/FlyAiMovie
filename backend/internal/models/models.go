@@ -64,6 +64,24 @@ type Character struct {
 	DeletedAt       *string `json:"deleted_at,omitempty"`
 }
 
+type CharacterTemplate struct {
+	OrganizationID  uint    `gorm:"not null;default:0;index" json:"-"`
+	ID              uint    `gorm:"primaryKey" json:"id"`
+	Name            string  `gorm:"not null" json:"name"`
+	Role            string  `json:"role"`
+	Description     string  `json:"description"`
+	Appearance      string  `json:"appearance"`
+	Personality     string  `json:"personality"`
+	VoiceStyle      string  `json:"voice_style"`
+	VoiceProvider   string  `json:"voice_provider"`
+	ImageURL        string  `json:"image_url"`
+	ReferenceImages string  `json:"reference_images"`
+	LocalPath       string  `json:"local_path"`
+	CreatedAt       string  `gorm:"not null" json:"created_at"`
+	UpdatedAt       string  `gorm:"not null" json:"updated_at"`
+	DeletedAt       *string `json:"deleted_at,omitempty"`
+}
+
 type EpisodeCharacter struct {
 	OrganizationID uint   `gorm:"not null;default:0;index" json:"-"`
 	ID             uint   `gorm:"primaryKey" json:"id"`
@@ -180,7 +198,10 @@ type AIVoice struct {
 	Description    string `json:"description"`
 	Language       string `json:"language"`
 	Provider       string `gorm:"not null" json:"provider"`
+	Capabilities   string `json:"capabilities"`
+	IsActive       bool   `gorm:"not null;default:true" json:"is_active"`
 	CreatedAt      string `gorm:"not null" json:"created_at"`
+	UpdatedAt      string `gorm:"not null" json:"updated_at"`
 }
 
 type AgentConfig struct {
@@ -308,32 +329,39 @@ type Prop struct {
 }
 
 type Asset struct {
-	OrganizationID uint    `gorm:"not null;default:0;index" json:"-"`
-	ID             uint    `gorm:"primaryKey" json:"id"`
-	DramaID        *uint   `json:"drama_id"`
-	EpisodeID      *uint   `json:"episode_id"`
-	StoryboardID   *uint   `json:"storyboard_id"`
-	StoryboardNum  *int    `json:"storyboard_num"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	Type           string  `json:"type"`
-	Category       string  `json:"category"`
-	URL            string  `json:"url"`
-	ThumbnailURL   string  `json:"thumbnail_url"`
-	LocalPath      string  `json:"local_path"`
-	FileSize       int64   `json:"file_size"`
-	MimeType       string  `json:"mime_type"`
-	Width          int     `json:"width"`
-	Height         int     `json:"height"`
-	Duration       int     `json:"duration"`
-	Format         string  `json:"format"`
-	ImageGenID     *uint   `json:"image_gen_id"`
-	VideoGenID     *uint   `json:"video_gen_id"`
-	IsFavorite     bool    `gorm:"default:false" json:"is_favorite"`
-	ViewCount      int     `gorm:"default:0" json:"view_count"`
-	CreatedAt      string  `gorm:"not null" json:"created_at"`
-	UpdatedAt      string  `gorm:"not null" json:"updated_at"`
-	DeletedAt      *string `json:"deleted_at,omitempty"`
+	OrganizationID  uint    `gorm:"not null;default:0;index" json:"-"`
+	ID              uint    `gorm:"primaryKey" json:"id"`
+	DramaID         *uint   `json:"drama_id"`
+	EpisodeID       *uint   `json:"episode_id"`
+	StoryboardID    *uint   `json:"storyboard_id"`
+	StoryboardNum   *int    `json:"storyboard_num"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	Type            string  `json:"type"`
+	Category        string  `json:"category"`
+	URL             string  `json:"url"`
+	ThumbnailURL    string  `json:"thumbnail_url"`
+	LocalPath       string  `json:"local_path"`
+	FileSize        int64   `json:"file_size"`
+	MimeType        string  `json:"mime_type"`
+	Width           int     `json:"width"`
+	Height          int     `json:"height"`
+	Duration        int     `json:"duration"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	FrameRate       float64 `json:"frame_rate"`
+	Codec           string  `json:"codec"`
+	ProbeStatus     string  `gorm:"default:pending" json:"probe_status"`
+	ProbeError      string  `json:"probe_error"`
+	ContentHash     string  `gorm:"index" json:"content_hash"`
+	ReferenceCount  int     `gorm:"default:1" json:"reference_count"`
+	Format          string  `json:"format"`
+	ImageGenID      *uint   `json:"image_gen_id"`
+	VideoGenID      *uint   `json:"video_gen_id"`
+	IsFavorite      bool    `gorm:"default:false" json:"is_favorite"`
+	ViewCount       int     `gorm:"default:0" json:"view_count"`
+	CreatedAt       string  `gorm:"not null" json:"created_at"`
+	UpdatedAt       string  `gorm:"not null" json:"updated_at"`
+	DeletedAt       *string `json:"deleted_at,omitempty"`
 }
 
 // GridHistory stores grid generation jobs and split results for the workbench.
@@ -363,4 +391,19 @@ type WebhookReceipt struct {
 	EventID       string `gorm:"primaryKey;size:128" json:"event_id"`
 	SignatureHash string `gorm:"not null;size:64" json:"-"`
 	ReceivedAt    string `gorm:"not null" json:"received_at"`
+}
+
+type MediaMigration struct {
+	ID             uint    `gorm:"primaryKey" json:"id"`
+	OrganizationID uint    `gorm:"not null;default:0;index;uniqueIndex:idx_media_migration_target" json:"organization_id"`
+	TargetType     string  `gorm:"not null;uniqueIndex:idx_media_migration_target" json:"target_type"`
+	TargetID       uint    `gorm:"not null;uniqueIndex:idx_media_migration_target" json:"target_id"`
+	SourceURL      string  `gorm:"not null" json:"source_url"`
+	LocalPath      string  `json:"local_path"`
+	Status         string  `gorm:"not null;default:pending;index" json:"status"`
+	Attempts       int     `gorm:"not null;default:0" json:"attempts"`
+	LastError      string  `json:"last_error"`
+	CreatedAt      string  `gorm:"not null" json:"created_at"`
+	UpdatedAt      string  `gorm:"not null" json:"updated_at"`
+	CompletedAt    *string `json:"completed_at,omitempty"`
 }

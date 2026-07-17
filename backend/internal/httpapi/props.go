@@ -97,6 +97,12 @@ func (s *Server) updateProp(c *gin.Context) {
 					return
 				}
 			}
+			if (k == "image_url" || k == "local_path") && v != "" {
+				if err := validateLocalMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
 			updates[k] = v
 		}
 	}

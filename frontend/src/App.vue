@@ -26,6 +26,8 @@ async function switchOrganization(event: Event) {
       </router-link>
       <nav class="nav">
         <router-link to="/">项目</router-link>
+        <router-link to="/character-library">角色库</router-link>
+		<router-link to="/jobs">任务</router-link>
         <router-link to="/settings">设置</router-link>
         <router-link v-if="authStore.state.actor && ['owner', 'admin'].includes(authStore.state.actor.role)" to="/audit">审计</router-link>
         <select v-if="authStore.state.organizations.length > 1" class="organization-switch" :value="authStore.state.actor?.organization.id" aria-label="切换组织" @change="switchOrganization">

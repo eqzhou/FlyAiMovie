@@ -1,11 +1,43 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flyaimovie}
+      POSTGRES_USER: ${POSTGRES_USER:-flyaimovie}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flyaimovie} -d ${POSTGRES_DB:-flyaimovie}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   flyaimovie:
     build: .
     ports:
-      - "5679:5679"
+      - "${APP_PORT:-5679}:5679"
     volumes:
-      - ./data:/app/data
-      - ./configs/config.yaml:/app/configs/config.yaml
+      - media-data:/app/data
     environment:
-      - PORT=5679
+      PORT: "5679"
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_TYPE: postgres
+      DATABASE_DSN: host=postgres user=${POSTGRES_USER:-flyaimovie} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB:-flyaimovie} sslmode=disable
+      STORAGE_LOCAL_PATH: /app/data/storage
+      AUTH_SECURE_COOKIES: ${AUTH_SECURE_COOKIES:-false}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      AI_CONFIG_ENCRYPTION_KEY: ${AI_CONFIG_ENCRYPTION_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5679/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
+
+volumes:
+  postgres-data:
+  media-data:

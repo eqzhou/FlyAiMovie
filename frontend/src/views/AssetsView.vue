@@ -20,6 +20,7 @@ const applyFrameType = ref('first_frame')
 const editing = ref<any | null>(null)
 const editForm = ref({ name: '', description: '', category: '' })
 const showUpload = ref(false)
+const uploadKind = ref<'image' | 'media'>('image')
 const uploadFile = ref<File | null>(null)
 const uploadStoryboards = ref<any[]>([])
 const uploadForm = ref({ target: 'project', target_id: 0, episode_id: 0, name: '', category: 'reference' })
@@ -93,7 +94,8 @@ async function loadStoryboards() {
 	}
 }
 
-function openUpload() {
+function openUpload(kind: 'image' | 'media' = 'image') {
+  uploadKind.value = kind
   uploadFile.value = null
   uploadForm.value = {
     target: 'project',
@@ -153,9 +155,10 @@ async function uploadImage() {
       fields.episode_id = uploadForm.value.episode_id
       fields.storyboard_id = uploadForm.value.target_id
     }
-    await uploadAPI.image(file, fields)
+    if (uploadKind.value === 'image') await uploadAPI.image(file, fields)
+    else await uploadAPI.media(file, fields)
     showUpload.value = false
-    notify('图片已加入素材库')
+    notify('素材已加入素材库')
     await loadDrama()
     await loadAssets()
   } catch (error: any) {
@@ -263,7 +266,8 @@ onMounted(loadProject)
       </div>
       <div class="row">
         <button class="btn" @click="router.push(`/drama/${dramaId}`)">返回项目</button>
-        <button class="btn btn-primary" :disabled="!!busy" @click="openUpload">上传图片</button>
+        <button class="btn" :disabled="!!busy" @click="openUpload('media')">上传视频/音频</button>
+        <button class="btn btn-primary" :disabled="!!busy" @click="openUpload('image')">上传图片</button>
       </div>
     </div>
 
@@ -313,7 +317,9 @@ onMounted(loadProject)
           <div class="asset-title-row">
             <div>
               <h3>{{ asset.name }}</h3>
-              <span class="muted">{{ asset.type }} · {{ asset.category || '未分类' }}</span>
+              <span class="muted">{{ asset.type }} · {{ asset.category || '未分类' }}<template v-if="asset.duration_seconds"> · {{ asset.duration_seconds.toFixed(2) }} 秒</template></span>
+              <span v-if="asset.width && asset.height" class="muted">{{ asset.width }}×{{ asset.height }}<template v-if="asset.frame_rate"> · {{ asset.frame_rate.toFixed(2) }} fps</template><template v-if="asset.codec"> · {{ asset.codec }}</template></span>
+              <span v-if="asset.probe_status === 'failed'" class="muted">元数据解析失败</span>
             </div>
             <button class="icon-btn" :title="asset.is_favorite ? '取消收藏' : '收藏'" :aria-label="asset.is_favorite ? '取消收藏' : '收藏'" :disabled="!!busy" @click="toggleFavorite(asset)">
               {{ asset.is_favorite ? '★' : '☆' }}
@@ -346,7 +352,7 @@ onMounted(loadProject)
 
     <div v-if="showUpload" class="modal-mask" @click.self="showUpload = false">
       <div class="modal">
-        <h3>上传图片素材</h3>
+        <h3>{{ uploadKind === 'image' ? '上传图片素材' : '上传视频或音频素材' }}</h3>
         <div class="field">
           <label for="upload-target">绑定范围</label>
           <select id="upload-target" v-model="uploadForm.target">
@@ -379,8 +385,8 @@ onMounted(loadProject)
         <div class="field"><label for="upload-name">名称</label><input id="upload-name" v-model="uploadForm.name" maxlength="120" placeholder="默认使用文件名" /></div>
         <div class="field"><label for="upload-category">分类</label><input id="upload-category" v-model="uploadForm.category" maxlength="60" /></div>
         <div class="field">
-          <label for="upload-file">图片文件</label>
-          <input id="upload-file" type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" @change="chooseUploadFile" />
+          <label for="upload-file">素材文件</label>
+          <input id="upload-file" type="file" :accept="uploadKind === 'image' ? 'image/png,image/jpeg,image/webp' : 'video/*,audio/*'" :disabled="!!busy" @change="chooseUploadFile" />
         </div>
         <div class="modal-actions">
           <button class="btn" @click="showUpload = false">取消</button>

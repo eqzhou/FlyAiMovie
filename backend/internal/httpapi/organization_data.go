@@ -1,13 +1,15 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacleanup"
+	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -72,10 +74,14 @@ func loadExportRows(out gin.H, organizationID uint) error {
 		target any
 	}{
 		{"dramas", &[]models.Drama{}}, {"episodes", &[]models.Episode{}}, {"characters", &[]models.Character{}},
+		{"character_templates", &[]models.CharacterTemplate{}},
 		{"episode_characters", &[]models.EpisodeCharacter{}}, {"scenes", &[]models.Scene{}}, {"episode_scenes", &[]models.EpisodeScene{}},
 		{"storyboards", &[]models.Storyboard{}}, {"storyboard_characters", &[]models.StoryboardCharacter{}}, {"props", &[]models.Prop{}},
 		{"assets", &[]models.Asset{}}, {"grid_history", &[]models.GridHistory{}}, {"image_generations", &[]models.ImageGeneration{}},
 		{"video_generations", &[]models.VideoGeneration{}}, {"video_merges", &[]models.VideoMerge{}}, {"generation_jobs", &[]models.GenerationJob{}},
+		{"job_events", &[]models.JobEvent{}}, {"agent_runs", &[]models.AgentRun{}}, {"agent_run_events", &[]models.AgentRunEvent{}},
+		{"media_migrations", &[]models.MediaMigration{}},
+		{"media_deletion_tasks", &[]models.MediaDeletionTask{}},
 		{"agent_configs", &[]models.AgentConfig{}}, {"voices", &[]models.AIVoice{}}, {"audit_logs", &[]models.AuditLog{}}, {"quota", &[]models.OrganizationQuota{}},
 		{"invitations", &[]models.OrganizationInvitation{}},
 	}
@@ -119,33 +125,33 @@ func (s *Server) deleteOrganizationData(c *gin.Context) {
 		response.ServerError(c, "failed to prepare deletion")
 		return
 	}
-	if err := purgeOrganization(db.DB, actor.Organization.ID, userIDs); err != nil {
+	pathList := make([]string, 0, len(paths))
+	for path := range paths {
+		pathList = append(pathList, path)
+	}
+	if err := purgeOrganization(db.DB, s.Store, actor.Organization.ID, userIDs, pathList); err != nil {
+		log.Printf("organization deletion failed organization_id=%d: %v", actor.Organization.ID, err)
 		response.ServerError(c, "failed to delete organization")
 		return
 	}
-	deletedFiles := 0
-	var removeErrors int
-	for path := range paths {
-		if err := os.Remove(path); err == nil {
-			deletedFiles++
-		} else if !os.IsNotExist(err) {
-			removeErrors++
-		}
-	}
-	if removeErrors > 0 {
-		response.ServerError(c, "organization data deleted but some media files could not be removed")
-		return
+	cleanup, cleanupErr := mediacleanup.New(db.DB, s.Store).ProcessOrganization(actor.Organization.ID, 1000)
+	if cleanupErr != nil {
+		cleanup.Failed++
 	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: s.Cfg.Auth.CookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.Cfg.Auth.SecureCookies, SameSite: http.SameSiteLaxMode})
-	response.Success(c, gin.H{"deleted": true, "deleted_files": deletedFiles})
+	response.Success(c, gin.H{"deleted": true, "deleted_files": cleanup.Completed, "cleanup_pending": cleanup.Failed})
 }
 
-func purgeOrganization(database *gorm.DB, organizationID uint, userIDs []uint) error {
+func purgeOrganization(database *gorm.DB, store *storage.LocalStorage, organizationID uint, userIDs []uint, paths []string) error {
 	return database.Transaction(func(tx *gorm.DB) error {
+		if err := mediacleanup.New(tx, store).Queue(organizationID, paths); err != nil {
+			return err
+		}
 		resources := []any{
+			&models.AgentRunEvent{}, &models.AgentRun{}, &models.JobEvent{}, &models.MediaMigration{},
 			&models.StoryboardCharacter{}, &models.EpisodeCharacter{}, &models.EpisodeScene{}, &models.Asset{}, &models.GridHistory{},
 			&models.ImageGeneration{}, &models.VideoGeneration{}, &models.VideoMerge{}, &models.GenerationJob{}, &models.Storyboard{},
-			&models.Character{}, &models.Scene{}, &models.Prop{}, &models.Episode{}, &models.Drama{}, &models.AIServiceConfig{},
+			&models.CharacterTemplate{}, &models.Character{}, &models.Scene{}, &models.Prop{}, &models.Episode{}, &models.Drama{}, &models.AIServiceConfig{},
 			&models.AIVoice{}, &models.AgentConfig{}, &models.AuditLog{}, &models.OrganizationQuota{}, &models.Session{}, &models.Membership{},
 			&models.OrganizationInvitation{},
 		}

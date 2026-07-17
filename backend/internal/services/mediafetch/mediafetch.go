@@ -220,6 +220,9 @@ func allowedMIME(kind, mime string) bool {
 	if kind == "image" {
 		return mime == "image/png" || mime == "image/jpeg" || mime == "image/gif" || mime == "image/webp"
 	}
+	if kind == "audio" {
+		return strings.HasPrefix(mime, "audio/") || mime == "application/octet-stream"
+	}
 	return strings.HasPrefix(mime, "video/") || mime == "application/octet-stream"
 }
 
@@ -235,6 +238,12 @@ func canonicalExtension(kind, mime string) string {
 		return ".webp"
 	case "video/webm":
 		return ".webm"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
 	default:
 		if kind == "video" && (strings.HasPrefix(mime, "video/") || mime == "application/octet-stream") {
 			return ".mp4"

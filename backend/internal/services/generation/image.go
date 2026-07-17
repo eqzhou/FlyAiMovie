@@ -18,14 +18,16 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
+	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 type ImageService struct {
-	Store *storage.LocalStorage
-	Jobs  *jobs.Service
+	Store      *storage.LocalStorage
+	Jobs       *jobs.Service
+	References *mediaref.Resolver
 }
 
 func (s *ImageService) Finalize(ctx context.Context, rec *models.ImageGeneration, sourceURL string) error {
@@ -94,6 +96,13 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 			if part != "" {
 				refs = append(refs, part)
 			}
+		}
+	}
+	if s.References != nil {
+		refs, err = s.References.ResolveImages(ctx, cfg.Provider, refs)
+		if err != nil {
+			s.failJob(rec.OrganizationID, rec.ID, err)
+			return err
 		}
 	}
 	adapter := adapters.GetImageAdapter(cfg.Provider)

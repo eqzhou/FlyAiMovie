@@ -124,6 +124,12 @@ func (s *Server) updateCharacter(c *gin.Context) {
 					return
 				}
 			}
+			if (col == "image_url" || col == "local_path") && v != "" {
+				if err := validateLocalMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
 			updates[col] = v
 			if col == "voice_style" {
 				updates["voice_sample_url"] = ""
@@ -263,6 +269,8 @@ func (s *Server) registerScenes(api *gin.RouterGroup) {
 	g.POST("", s.createScene)
 	g.PUT("/:id", s.updateScene)
 	g.POST("/:id/generate-image", s.sceneGenerateImage)
+	g.POST("/:id/copy", s.copyScene)
+	g.POST("/:id/move", s.moveScene)
 	g.DELETE("/:id", s.deleteScene)
 }
 

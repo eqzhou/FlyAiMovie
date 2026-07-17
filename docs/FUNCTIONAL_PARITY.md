@@ -35,7 +35,11 @@
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
 | P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI/Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
 | P-20 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
-| P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收主路径：导出内容按组织隔离且排除密码、会话、CSRF 和 API Key；导出查询失败会报错；删除会清理组织数据、会话和本地媒体，同时保留仍属于其他组织的共享用户；媒体删除异常会显式失败。删除后的外部文件补偿/重试待补 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser` |
+| P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
+| P-22 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库页面已接入 | `TestCharacterTemplateImportCreatesIndependentCharacter` |
+| P-23 | 场景复制与迁移 | 复制到目标集；迁移时事务更新场景、剧集关联与可选关联分镜 | 已验收后端事务和前端操作；跨项目必须显式确认 | `TestSceneMoveAcrossDramaRequiresExplicitOptions`、`frontend/tests/e2e/workbench.spec.ts` |
+| P-24 | 媒体元数据与迁移 | 上传视频/音频后读取真实时长；历史外链可 dry-run 和断点迁移 | 已实现：FFprobe 失败保存错误而非错误的 0；迁移仅在验证成功后替换 URL | `mediainfo/probe_test.go`、`mediamigrate/service_test.go` |
+| P-25 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；Agent 取消在上下文/工具边界生效，服务重启遗留运行标记为中断失败 | jobs service/API tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
 
 ## 非功能验收
 
@@ -48,15 +52,15 @@
 | N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
 | N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；AI 自定义 `base_url` 拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；`TestValidateAIConfigRejectsNonPublicBaseURLs`、`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
-| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：当前全包约 53.2%，仍有 agents、generation 等核心包低于 80% | `go test ./... -coverprofile=...` |
-| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 部分验收：工作台桌面端覆盖五阶段切换与剧本保存，390px 移动端覆盖阶段导航、导出入口和页面横向溢出；首屏加载失败提供明确错误和重试恢复。登录、设置、素材管理等关键流程仍待补齐 | `frontend/tests/e2e/workbench.spec.ts`（desktop/mobile） |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：2026-07-17 全包实测 52.7%，HTTP 56.8%、jobs 70.5%，agents、generation、adapters 和迁移服务仍低于目标 | `go test ./... -coverprofile=...` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 部分验收：Chrome 桌面 6 条通过，覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；本机缺少 Playwright WebKit，2 条移动端用例本轮未执行 | `frontend/tests/e2e/*.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
 | N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务和活跃任务上限，幂等请求不重复计额，超限返回 429 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestOrganizationQuotaIsScopedAndAdminManaged` |
 | N-13 | 多用户组织具备成员管理与组织切换 | 已验收主路径：owner/admin 角色边界、owner 保护、移除成员会话撤销、切换组织旋转 Session；已有账号必须通过邮箱绑定的一次性邀请接受，新账号在接受时设置密码；邀请支持状态查询、撤销和重发，旧 token 立即失效 | `TestMemberManagementAndOrganizationSwitch`、`TestAdminCannotManageOwnerOrGrantAdmin`、`TestOrganizationInvitationAcceptsNewUserOnce`、`TestOrganizationInvitationRequiresExistingUserPassword`、`TestOrganizationInvitationExpires`、`TestOrganizationInvitationCanBeRevokedAndResent` |
 | N-14 | 密码变更具备身份校验与会话撤销 | 已验收：校验当前密码、旋转自助会话、旧密码和旧 Session 失效；组织管理员不得修改成员的全局账号凭据 | `TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`TestOrganizationAdminCannotResetGlobalMemberPassword` |
 | N-16 | 忘记密码具备安全恢复流程 | 已验收核心及 SMTP 投递实现：请求响应不枚举账号；SMTP 支持 587 STARTTLS/465 隐式 TLS；token 只存哈希、30 分钟过期、一次性消费；成功后更新密码并撤销所有 Session；主动改密和组织删除会清理未消费 token。真实 SMTP 账号 smoke test 待部署 | `TestPasswordResetRequestDoesNotEnumerateAccounts`、`TestPasswordResetConsumesTokenAndRevokesSessions`、`TestPasswordResetExpiredTokenRejected`、`TestSMTPPasswordResetSenderRequiresHTTPSAndCredentials` |
-| N-15 | 敏感组织操作具备 owner 权限与二次确认 | 主路径已验收：组织导出仅 owner 可用且查询错误会失败；组织删除要求当前密码及组织 slug，并在事务内撤销会话和删除租户数据；媒体删除异常会显式返回失败。外部媒体删除补偿机制待补 | 组织导出与删除集成测试 |
+| N-15 | 敏感组织操作具备 owner 权限与二次确认 | 已验收：组织导出仅 owner 可用；组织删除要求当前密码及组织 slug，在事务内撤销会话、删除租户数据并写入媒体补偿任务；失败任务可审计和重试 | 组织导出、删除与媒体补偿测试 |
 
 ## 独立表达红线
 

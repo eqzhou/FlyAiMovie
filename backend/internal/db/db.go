@@ -68,6 +68,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.Drama{},
 		&models.Episode{},
 		&models.Character{},
+		&models.CharacterTemplate{},
 		&models.EpisodeCharacter{},
 		&models.EpisodeScene{},
 		&models.Scene{},
@@ -77,6 +78,8 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.AIServiceProvider{},
 		&models.AIVoice{},
 		&models.AgentConfig{},
+		&models.AgentRun{},
+		&models.AgentRunEvent{},
 		&models.ImageGeneration{},
 		&models.VideoGeneration{},
 		&models.VideoMerge{},
@@ -85,6 +88,9 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.GridHistory{},
 		&models.WebhookReceipt{},
 		&models.GenerationJob{},
+		&models.JobEvent{},
+		&models.MediaMigration{},
+		&models.MediaDeletionTask{},
 	); err != nil {
 		return err
 	}

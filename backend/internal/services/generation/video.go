@@ -11,12 +11,14 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
+	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
 
 type VideoService struct {
-	Store *storage.LocalStorage
-	Jobs  *jobs.Service
+	Store      *storage.LocalStorage
+	Jobs       *jobs.Service
+	References *mediaref.Resolver
 }
 
 func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration, configID *uint) error {
@@ -53,6 +55,19 @@ func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration
 		}
 	}
 
+	imageURL, firstFrameURL, lastFrameURL := rec.ImageURL, rec.FirstFrameURL, rec.LastFrameURL
+	if s.References != nil {
+		for source, target := range map[*string]*string{&rec.ImageURL: &imageURL, &rec.FirstFrameURL: &firstFrameURL, &rec.LastFrameURL: &lastFrameURL} {
+			if *source == "" {
+				continue
+			}
+			*target, err = s.References.ResolveImage(ctx, cfg.Provider, *source)
+			if err != nil {
+				s.failJob(rec.OrganizationID, rec.ID, err)
+				return err
+			}
+		}
+	}
 	adapter := adapters.GetVideoAdapter(cfg.Provider)
 	result, err := adapter.Generate(ctx, adapters.AIConfig{
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
@@ -61,9 +76,9 @@ func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration
 		Duration:      rec.Duration,
 		AspectRatio:   rec.AspectRatio,
 		ReferenceMode: rec.ReferenceMode,
-		ImageURL:      rec.ImageURL,
-		FirstFrameURL: rec.FirstFrameURL,
-		LastFrameURL:  rec.LastFrameURL,
+		ImageURL:      imageURL,
+		FirstFrameURL: firstFrameURL,
+		LastFrameURL:  lastFrameURL,
 	})
 	if err != nil {
 		rec.Status = "failed"

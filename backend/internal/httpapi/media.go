@@ -225,6 +225,7 @@ func (s *Server) registerUpload(api *gin.RouterGroup) {
 		}
 		response.Success(c, gin.H{"url": url, "path": rel, "width": info.Width, "height": info.Height})
 	})
+	api.POST("/upload/media", s.uploadMedia)
 }
 
 func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {

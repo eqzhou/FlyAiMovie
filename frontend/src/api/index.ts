@@ -36,6 +36,18 @@ export const uploadAPI = {
     if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `${resp.status}`)
     return json.data ?? json
   },
+  media: async (file: File, fields: Record<string, string | number>) => {
+    const form = new FormData()
+    form.append('file', file)
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
+    const headers: Record<string, string> = {}
+    if (authStore.state.csrfToken) headers['X-CSRF-Token'] = authStore.state.csrfToken
+    const resp = await fetch(`${BASE}/upload/media`, { method: 'POST', credentials: 'include', headers, body: form })
+    const json = await resp.json()
+    if (resp.status === 401) handleUnauthorized()
+    if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `${resp.status}`)
+    return json.data ?? json
+  },
 }
 
 export const dramaAPI = {
@@ -79,12 +91,25 @@ export const characterAPI = {
   del: (id: number) => api.del(`/characters/${id}`),
 }
 
+export const characterLibraryAPI = {
+  list: () => api.get<any[]>('/character-library'),
+  create: (data: any) => api.post('/character-library', data),
+  update: (id: number, data: any) => api.put(`/character-library/${id}`, data),
+  del: (id: number) => api.del(`/character-library/${id}`),
+  import: (id: number, dramaId: number, episodeId?: number) =>
+    api.post(`/character-library/${id}/import`, { drama_id: dramaId, episode_id: episodeId }),
+}
+
 export const sceneAPI = {
   create: (data: any) => api.post('/scenes', data),
   generateImage: (id: number, episodeId: number) =>
     api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
   update: (id: number, data: any) => api.put(`/scenes/${id}`, data),
   del: (id: number) => api.del(`/scenes/${id}`),
+  copy: (id: number, episodeId: number, allowCrossDrama = false) =>
+    api.post(`/scenes/${id}/copy`, { episode_id: episodeId, allow_cross_drama: allowCrossDrama }),
+  move: (id: number, episodeId: number, options?: { allow_cross_drama?: boolean; move_storyboards?: boolean }) =>
+    api.post(`/scenes/${id}/move`, { episode_id: episodeId, ...options }),
 }
 
 export const imageAPI = {
@@ -144,12 +169,23 @@ export const jobsAPI = {
     return api.get(`/jobs${q.size ? `?${q}` : ''}`)
   },
   get: (id: number) => api.get(`/jobs/${id}`),
+	 events: (id: number) => api.get<any[]>(`/jobs/${id}/events`),
   cancel: (id: number) => api.post(`/jobs/${id}/cancel`),
   retry: (id: number) => api.post(`/jobs/${id}/retry`),
+	 batchCancel: (jobIds: number[]) => api.post('/jobs/batch-cancel', { job_ids: jobIds }),
 }
 
 export const agentAPI = {
   chat: (type: string, data: any) => api.post(`/agent/${type}/chat`, data),
+	 runs: (params?: { episode_id?: number; status?: string; agent_type?: string }) => {
+		 const q = new URLSearchParams()
+		 if (params?.episode_id) q.set('episode_id', String(params.episode_id))
+		 if (params?.status) q.set('status', params.status)
+		 if (params?.agent_type) q.set('agent_type', params.agent_type)
+		 return api.get<any[]>(`/agent-runs${q.size ? `?${q}` : ''}`)
+	 },
+	 run: (id: number) => api.get(`/agent-runs/${id}`),
+	 cancelRun: (id: number) => api.post(`/agent-runs/${id}/cancel`),
 }
 
 export const settingsAPI = {

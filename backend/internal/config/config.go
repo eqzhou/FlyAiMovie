@@ -98,6 +98,21 @@ func Load(path string) (*Config, error) {
 	if enabled := os.Getenv("AUTH_ENABLED"); enabled != "" {
 		cfg.Auth.Enabled = enabled == "1" || strings.EqualFold(enabled, "true")
 	}
+	if value := os.Getenv("AUTH_SECURE_COOKIES"); value != "" {
+		cfg.Auth.SecureCookies = value == "1" || strings.EqualFold(value, "true")
+	}
+	if value := os.Getenv("DATABASE_TYPE"); value != "" {
+		cfg.Database.Type = value
+	}
+	if value := os.Getenv("DATABASE_DSN"); value != "" {
+		cfg.Database.DSN = value
+	}
+	if value := os.Getenv("DATABASE_PATH"); value != "" {
+		cfg.Database.Path = value
+	}
+	if value := os.Getenv("STORAGE_LOCAL_PATH"); value != "" {
+		cfg.Storage.LocalPath = value
+	}
 	if secret := os.Getenv("WEBHOOK_SECRET"); secret != "" {
 		cfg.Server.WebhookSecret = secret
 	}

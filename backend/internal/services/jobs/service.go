@@ -86,13 +86,16 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 		job = models.GenerationJob{
 			OrganizationID: organizationID, Kind: kind, Status: initialStatus, TargetType: targetType, TargetID: targetID,
 			ConfigID: configID, Provider: provider, Attempt: 1, MaxAttempts: 3,
-			Progress: 1, AvailableAt: timestamp, LeaseExpiresAt: &leaseExpiry, PayloadJSON: payload,
+			Progress: 1, Stage: initialStatus, StatusMessage: "job created", Currency: "CNY", AvailableAt: timestamp, LeaseExpiresAt: &leaseExpiry, PayloadJSON: payload,
 			CreatedAt: timestamp, UpdatedAt: timestamp,
 		}
 		if initialStatus == StatusRunning {
 			job.StartedAt = &timestamp
 		}
-		return tx.Create(&job).Error
+		if err := tx.Create(&job).Error; err != nil {
+			return err
+		}
+		return tx.Create(&models.JobEvent{OrganizationID: organizationID, JobID: job.ID, Stage: initialStatus, Progress: 1, Level: "info", Message: "job created", CreatedAt: timestamp}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -145,6 +148,12 @@ func (s *Service) RenewLease(id uint, owner string) error {
 }
 
 func (s *Service) transitionOwned(id uint, owner, target string, extra map[string]any) error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		return New(tx).transitionOwnedNoTx(id, owner, target, extra)
+	})
+}
+
+func (s *Service) transitionOwnedNoTx(id uint, owner, target string, extra map[string]any) error {
 	if owner == "" {
 		return fmt.Errorf("worker owner is required")
 	}
@@ -167,6 +176,7 @@ func (s *Service) transitionOwned(id uint, owner, target string, extra map[strin
 		updates["lease_owner"] = ""
 		updates["lease_expires_at"] = nil
 	}
+	applyStageFields(updates, target)
 	result := s.DB.Model(&models.GenerationJob{}).
 		Where("id = ? AND status = ? AND lease_owner = ?", id, StatusRunning, owner).Updates(updates)
 	if result.Error != nil {
@@ -175,7 +185,7 @@ func (s *Service) transitionOwned(id uint, owner, target string, extra map[strin
 	if result.RowsAffected != 1 {
 		return ErrTerminalJob
 	}
-	return nil
+	return s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra))
 }
 
 func (s *Service) SetSucceededOwned(id uint, owner, resultJSON string) error {
@@ -370,6 +380,7 @@ func (s *Service) Retry(id uint) error {
 		}
 		result := tx.Model(&models.GenerationJob{}).Where("id = ? AND status = ?", id, job.Status).Updates(map[string]any{
 			"status": nextStatus, "attempt": job.Attempt + 1, "progress": 1,
+			"stage": nextStatus, "status_message": "job retry scheduled",
 			"provider_task_id": "", "last_error": "", "result_json": "",
 			"available_at": availableAt, "started_at": timestamp, "completed_at": nil,
 			"cancel_requested_at": nil, "updated_at": timestamp,
@@ -380,6 +391,9 @@ func (s *Service) Retry(id uint) error {
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("job changed concurrently")
 		}
+		if err := tx.Create(&models.JobEvent{OrganizationID: job.OrganizationID, JobID: job.ID, Stage: nextStatus, Progress: 1, Level: "info", Message: "job retry scheduled", CreatedAt: timestamp}).Error; err != nil {
+			return err
+		}
 		switch job.TargetType {
 		case "image_generation":
 			return tx.Model(&models.ImageGeneration{}).Where("id = ?", job.TargetID).Updates(map[string]any{"status": "pending", "task_id": "", "error_msg": "", "completed_at": nil, "updated_at": timestamp}).Error
@@ -389,6 +403,44 @@ func (s *Service) Retry(id uint) error {
 			return nil
 		}
 	})
+}
+
+func (s *Service) EventsOrganization(organizationID, jobID uint) ([]models.JobEvent, error) {
+	if _, err := s.GetOrganization(organizationID, jobID); err != nil {
+		return nil, err
+	}
+	var events []models.JobEvent
+	err := s.DB.Where("organization_id = ? AND job_id = ?", organizationID, jobID).Order("id asc").Find(&events).Error
+	return events, err
+}
+
+func (s *Service) BatchCancelOrganization(organizationID uint, ids []uint) ([]uint, map[uint]string, error) {
+	if len(ids) > 100 {
+		return nil, nil, fmt.Errorf("at most 100 jobs can be canceled at once")
+	}
+	canceled := make([]uint, 0, len(ids))
+	failures := make(map[uint]string)
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			failures[id] = "invalid job id"
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, err := s.GetOrganization(organizationID, id); err != nil {
+			failures[id] = ErrJobNotFound.Error()
+			continue
+		}
+		if err := s.Cancel(id); err != nil {
+			failures[id] = err.Error()
+			continue
+		}
+		canceled = append(canceled, id)
+	}
+	return canceled, failures, nil
 }
 
 // retryBackoff spaces repeated provider submissions while keeping the delay
@@ -482,6 +534,12 @@ func (s *Service) byTargetOrganization(organizationID uint, targetType string, t
 }
 
 func (s *Service) transition(id uint, target string, extra map[string]any) error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		return New(tx).transitionNoTx(id, target, extra)
+	})
+}
+
+func (s *Service) transitionNoTx(id uint, target string, extra map[string]any) error {
 	var job models.GenerationJob
 	if err := s.DB.First(&job, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -505,6 +563,7 @@ func (s *Service) transition(id uint, target string, extra map[string]any) error
 		updates["lease_owner"] = ""
 		updates["lease_expires_at"] = nil
 	}
+	applyStageFields(updates, target)
 	result := s.DB.Model(&models.GenerationJob{}).
 		Where("id = ? AND status = ?", id, job.Status).
 		Updates(updates)
@@ -514,7 +573,48 @@ func (s *Service) transition(id uint, target string, extra map[string]any) error
 	if result.RowsAffected != 1 {
 		return fmt.Errorf("job changed concurrently")
 	}
-	return nil
+	return s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra))
+}
+
+func applyStageFields(updates map[string]any, target string) {
+	updates["stage"] = target
+	updates["status_message"] = eventMessage(target, updates)
+}
+
+func eventProgress(target string, extra map[string]any) int {
+	if value, ok := extra["progress"].(int); ok {
+		return value
+	}
+	if target == StatusSucceeded {
+		return 100
+	}
+	return 0
+}
+
+func eventMessage(target string, extra map[string]any) string {
+	if value, ok := extra["last_error"].(string); ok && value != "" {
+		return value
+	}
+	switch target {
+	case StatusWaitingProvider:
+		return "waiting for provider"
+	case StatusSucceeded:
+		return "job completed"
+	case StatusFailed:
+		return "job failed"
+	case StatusCanceled:
+		return "job canceled"
+	default:
+		return target
+	}
+}
+
+func (s *Service) appendEvent(organizationID, jobID uint, stage string, progress int, message string) error {
+	level := "info"
+	if stage == StatusFailed {
+		level = "error"
+	}
+	return s.DB.Create(&models.JobEvent{OrganizationID: organizationID, JobID: jobID, Stage: stage, Progress: progress, Level: level, Message: message, CreatedAt: now()}).Error
 }
 
 func allowedTransition(from, to string) bool {

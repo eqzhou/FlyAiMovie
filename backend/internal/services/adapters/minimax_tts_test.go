@@ -117,3 +117,20 @@ func TestMiniMaxTTSEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestListMiniMaxVoicesContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/get_voice" || r.URL.Query().Get("voice_type") != "all" {
+			t.Fatalf("url=%s", r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer key" {
+			t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"system_voice":[{"voice_id":"voice-1","voice_name":"Narrator","language":"zh"}],"base_resp":{"status_code":0}}`))
+	}))
+	defer server.Close()
+	voices, err := ListMiniMaxVoices(context.Background(), AIConfig{BaseURL: server.URL, APIKey: "key"})
+	if err != nil || len(voices) != 1 || voices[0].ID != "voice-1" || voices[0].Name != "Narrator" {
+		t.Fatalf("voices=%+v err=%v", voices, err)
+	}
+}

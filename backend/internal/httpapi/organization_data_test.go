@@ -83,6 +83,27 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	if err := db.DB.Create(&asset).Error; err != nil {
 		t.Fatal(err)
 	}
+	template := models.CharacterTemplate{OrganizationID: organization.ID, Name: "private template", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := models.GenerationJob{OrganizationID: organization.ID, Kind: "test", Status: "failed", TargetType: "test", TargetID: 99, Attempt: 1, MaxAttempts: 3, AvailableAt: now, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.JobEvent{OrganizationID: organization.ID, JobID: job.ID, Stage: "failed", Message: "private event", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	agentRun := models.AgentRun{OrganizationID: organization.ID, AgentType: "extractor", DramaID: drama.ID, EpisodeID: 1, Status: "failed", StartedAt: now, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&agentRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.AgentRunEvent{OrganizationID: organization.ID, AgentRunID: agentRun.ID, Sequence: 1, EventType: "failed", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.MediaMigration{OrganizationID: organization.ID, TargetType: "asset", TargetID: asset.ID, SourceURL: "https://cdn.example/private", Status: "completed", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	wrong := performAuthRequest(router, http.MethodDelete, "/api/v1/organization", `{"password":"test actor password","confirmation":"wrong"}`, cookie, csrf)
 	if wrong.Code != http.StatusBadRequest {
@@ -95,7 +116,15 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
 		t.Fatalf("media still exists: %v", err)
 	}
-	for model, name := range map[any]string{&models.Organization{}: "organization", &models.Drama{}: "drama", &models.Asset{}: "asset", &models.Membership{}: "membership", &models.Session{}: "session"} {
+	var deletionTask models.MediaDeletionTask
+	if err := db.DB.Where("organization_id = ?", organization.ID).First(&deletionTask).Error; err != nil || deletionTask.Status != "completed" {
+		t.Fatalf("media deletion task=%+v err=%v", deletionTask, err)
+	}
+	for model, name := range map[any]string{
+		&models.Organization{}: "organization", &models.Drama{}: "drama", &models.Asset{}: "asset", &models.Membership{}: "membership", &models.Session{}: "session",
+		&models.CharacterTemplate{}: "character template", &models.GenerationJob{}: "job", &models.JobEvent{}: "job event",
+		&models.AgentRun{}: "agent run", &models.AgentRunEvent{}: "agent event", &models.MediaMigration{}: "media migration",
+	} {
 		var count int64
 		query := db.DB.Model(model).Where("organization_id = ?", organization.ID)
 		if name == "organization" {

@@ -14,6 +14,19 @@
 
 打开：http://127.0.0.1:8088
 
+### Docker 两种模式
+
+```bash
+# PostgreSQL：先创建 .env 并设置 POSTGRES_PASSWORD
+cp .env.example .env
+docker compose up --build
+
+# 单机 SQLite + 本地 data 目录
+docker compose -f docker-compose.sqlite.yml up --build
+```
+
+两个模式都会检查 HTTP 健康状态，应用启动时自动迁移数据库，并要求镜像内存在 FFmpeg/FFprobe。生产环境必须设置 `APP_ENV=production`、`AUTH_SECURE_COOKIES=true`，并通过 Secret Manager 或部署环境注入 `WEBHOOK_SECRET` 与 `AI_CONFIG_ENCRYPTION_KEY`。
+
 ### 本地正式使用
 
 首次打开会进入“初始化制作空间”，创建 owner 账号后再登录。默认本地配置会启用认证、PostgreSQL 持久化和本地素材存储；已有数据库和 `data/storage/` 会继续使用，不会在重启时清空。
@@ -38,6 +51,8 @@
 - Agent：`script_rewriter` / `extractor` / `storyboard_breaker` / `voice_assigner` / `grid_prompt_generator`
 - 媒体：图片 / 视频异步轮询 + webhook（`/api/v1/webhooks/vidu`、`/api/v1/webhooks/generic`）
 - 宫格历史、任务查询/取消、统一素材库 API、批量帧/视频/配音、道具管理、本地存储 `/static`
+- 跨项目角色模板库、项目内场景复制/迁移、视频/音频上传与 FFprobe 元数据
+- 任务中心：阶段日志、筛选、单任务重试/取消与批量取消；Agent 运行历史和工具调用审计
 - **Mock 厂商**（`provider=mock`）：无外网密钥时也可跑通演示链路
 
 功能对等范围、自动验收状态和 clean-room 红线见 [`docs/FUNCTIONAL_PARITY.md`](docs/FUNCTIONAL_PARITY.md)。
@@ -56,6 +71,18 @@
 - 密码恢复生产配置：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`EMAIL_FROM`、`PASSWORD_RESET_URL_BASE`；默认支持 SMTP 587 STARTTLS 与 465 隐式 TLS。
 
 本地 PostgreSQL 配置位于被 git 忽略的 `configs/config.yaml`，服务启动时会自动执行 GORM 迁移并补齐厂商、Agent、Mock 默认数据。切换数据库前请先备份数据；当前不会自动把旧 SQLite 业务数据复制到 PostgreSQL。
+
+## 外部媒体本地化
+
+迁移命令默认只扫描，不写数据库：
+
+```bash
+cd backend
+go run ./cmd/migrate-media
+go run ./cmd/migrate-media --apply --backup-confirmed
+```
+
+SQLite apply 前会生成 `.pre-media-migration` 备份；PostgreSQL 必须先由运维完成备份并显式传入 `--backup-confirmed`。迁移记录可重复执行，原外链保存在 `media_migrations` 中，只有本地副本校验并落盘后才更新业务 URL。
 
 ## 健康检查
 

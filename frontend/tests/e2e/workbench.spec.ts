@@ -12,7 +12,7 @@ const episode = {
 const drama = {
   id: 2,
   title: '验收短剧',
-  episodes: [episode],
+  episodes: [episode, { id: 21, episode_number: 2, title: '第二集', content: '' }],
 }
 
 const storyboard = {
@@ -33,6 +33,7 @@ async function mockWorkbenchAPI(
   options: {
     onEpisodeUpdate?: (request: Request) => void
     onStoryboardCreate?: (request: Request) => void
+	onSceneCopy?: (request: Request) => void
     failDramaRequests?: number
   } = {},
 ) {
@@ -70,6 +71,9 @@ async function mockWorkbenchAPI(
     } else if (path === '/api/v1/storyboards' && request.method() === 'POST') {
       options.onStoryboardCreate?.(request)
       data = { ...storyboard, id: 41, storyboard_number: 2 }
+	} else if (path === '/api/v1/scenes/31/copy' && request.method() === 'POST') {
+	  options.onSceneCopy?.(request)
+	  data = { id: 32, location: '旧车站', episode_id: 21 }
     }
 
     await route.fulfill({
@@ -133,6 +137,19 @@ test('desktop: failed initial load is actionable and can be retried', async ({ p
   await expect(page.getByRole('alert')).toContainText('服务暂时不可用')
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '验收短剧 · 第一集' })).toBeVisible()
+})
+
+test('desktop: scene can be copied to another episode', async ({ page }) => {
+  let copyRequest: Request | undefined
+  await mockWorkbenchAPI(page, { onSceneCopy: request => { copyRequest = request } })
+  await page.goto('/drama/2/episode/1')
+  await page.getByRole('button', { name: '2. 角色 / 场景' }).click()
+  await page.getByRole('button', { name: '复制' }).click()
+  await expect(page.getByRole('dialog')).toContainText('复制场景')
+  await page.getByLabel('目标剧集').selectOption('21')
+  await page.getByRole('button', { name: '确认' }).click()
+  await expect(page.getByText('场景已复制')).toBeVisible()
+  expect(copyRequest?.postDataJSON()).toEqual({ episode_id: 21, allow_cross_drama: false })
 })
 
 test('mobile: workbench navigation and export fit a 390px viewport', async ({ page }) => {

@@ -7,6 +7,8 @@ import AssetsView from '../views/AssetsView.vue'
 import AuthView from '../views/AuthView.vue'
 import AuditView from '../views/AuditView.vue'
 import InvitationView from '../views/InvitationView.vue'
+import CharacterLibraryView from '../views/CharacterLibraryView.vue'
+import JobsView from '../views/JobsView.vue'
 import { authStore } from '../auth'
 
 const router = createRouter({
@@ -17,6 +19,8 @@ const router = createRouter({
     { path: '/drama/:id/assets', name: 'assets', component: AssetsView },
     { path: '/drama/:id/episode/:episodeNumber', name: 'workbench', component: WorkbenchView },
     { path: '/settings', name: 'settings', component: SettingsView },
+    { path: '/character-library', name: 'character-library', component: CharacterLibraryView },
+	{ path: '/jobs', name: 'jobs', component: JobsView },
     { path: '/audit', name: 'audit', component: AuditView },
     { path: '/login', name: 'login', component: AuthView },
     { path: '/setup', name: 'setup', component: AuthView },

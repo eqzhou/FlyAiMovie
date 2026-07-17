@@ -228,6 +228,50 @@ func TestCreateDramaRejectsUnboundedEpisodeCount(t *testing.T) {
 	}
 }
 
+func TestJobEventsAndBatchCancelAPI(t *testing.T) {
+	server, router := testServerRouter(t)
+	first, err := server.Jobs.CreateQueued("tts.generate", "storyboard_tts", 801, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := server.Jobs.CreateQueued("tts.generate", "storyboard_tts", 802, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := performRequest(router, http.MethodGet, "/api/v1/jobs/"+itoa(first.ID)+"/events", "", nil)
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"stage":"queued"`) {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+
+	batch := performRequest(router, http.MethodPost, "/api/v1/jobs/batch-cancel", `{"job_ids":[`+itoa(first.ID)+`,`+itoa(second.ID)+`,99999]}`, nil)
+	if batch.Code != http.StatusOK {
+		t.Fatalf("batch status=%d body=%s", batch.Code, batch.Body.String())
+	}
+	payload := decodeResponse(t, batch)["data"].(map[string]any)
+	if len(payload["canceled"].([]any)) != 2 {
+		t.Fatalf("unexpected canceled response: %#v", payload)
+	}
+	for _, id := range []uint{first.ID, second.ID} {
+		job, err := server.Jobs.Get(id)
+		if err != nil || job.Status != jobs.StatusCanceled {
+			t.Fatalf("job %d status=%v err=%v", id, job, err)
+		}
+	}
+}
+
+func TestAssetCannotClaimUnownedPrivateStaticPath(t *testing.T) {
+	server, router := testServerRouter(t)
+	rel, _, err := server.Store.SaveBytes("uploads", "private.mp4", []byte("not public"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := performRequest(router, http.MethodPost, "/api/v1/assets", `{"name":"claim","type":"video","url":"`+server.Store.PublicURL(rel)+`","local_path":"`+rel+`"}`, nil)
+	if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "not owned") {
+		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
+	}
+}
+
 func TestEpisodeRejectsMismatchedAIConfigTypes(t *testing.T) {
 	router := testRouter(t)
 	now := response.Now()
@@ -796,6 +840,10 @@ func TestAssetLibraryWorkflow(t *testing.T) {
 	}
 	storyboard := models.Storyboard{EpisodeID: episode.ID, StoryboardNumber: 1, Title: "shot", Status: "pending", CreatedAt: now, UpdatedAt: now}
 	if err := db.DB.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	ownedImage := models.ImageGeneration{ImageURL: "/static/reference.png", LocalPath: "reference.png", Status: "completed", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&ownedImage).Error; err != nil {
 		t.Fatal(err)
 	}
 

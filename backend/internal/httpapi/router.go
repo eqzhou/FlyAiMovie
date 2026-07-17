@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/config"
@@ -13,34 +17,51 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/agents"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacleanup"
+	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/gin-gonic/gin"
 )
 
 type Server struct {
-	Cfg         *config.Config
-	Store       *storage.LocalStorage
-	Agents      *agents.Runner
-	Images      *generation.ImageService
-	Videos      *generation.VideoService
-	TTS         *generation.TTSService
-	Jobs        *jobs.Service
-	Frontend    string // dist path optional
-	ResetSender PasswordResetSender
+	Cfg          *config.Config
+	Store        *storage.LocalStorage
+	Agents       *agents.Runner
+	Images       *generation.ImageService
+	Videos       *generation.VideoService
+	TTS          *generation.TTSService
+	Jobs         *jobs.Service
+	Frontend     string // dist path optional
+	ResetSender  PasswordResetSender
+	agentRunMu   sync.Mutex
+	agentCancels map[uint]context.CancelFunc
 }
 
 func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, frontendDist string) *Server {
 	jobService := jobs.New(db.DB)
+	references := &mediaref.Resolver{Store: store}
 	server := &Server{
-		Cfg:         cfg,
-		Store:       store,
-		Agents:      agents.NewRunner(skillsDir),
-		Images:      &generation.ImageService{Store: store, Jobs: jobService},
-		Videos:      &generation.VideoService{Store: store, Jobs: jobService},
-		TTS:         &generation.TTSService{Store: store},
-		Jobs:        jobService,
-		Frontend:    frontendDist,
-		ResetSender: NoopPasswordResetSender{},
+		Cfg:          cfg,
+		Store:        store,
+		Agents:       agents.NewRunner(skillsDir),
+		Images:       &generation.ImageService{Store: store, Jobs: jobService, References: references},
+		Videos:       &generation.VideoService{Store: store, Jobs: jobService, References: references},
+		TTS:          &generation.TTSService{Store: store},
+		Jobs:         jobService,
+		Frontend:     frontendDist,
+		ResetSender:  NoopPasswordResetSender{},
+		agentCancels: make(map[uint]context.CancelFunc),
+	}
+	timestamp := response.Now()
+	if err := db.DB.Model(&models.AgentRun{}).Where("status = ?", "running").Updates(map[string]any{
+		"status": "failed", "last_error": "server restarted during agent execution", "completed_at": timestamp, "updated_at": timestamp,
+	}).Error; err != nil {
+		log.Printf("recover interrupted agent runs: %v", err)
+	}
+	if cleanup, err := mediacleanup.New(db.DB, store).ProcessOrganization(0, 100); err != nil {
+		log.Printf("retry media cleanup tasks: %v", err)
+	} else if cleanup.Failed > 0 {
+		log.Printf("media cleanup retry left %d failed tasks", cleanup.Failed)
 	}
 	if cfg != nil && cfg.Email.SMTPHost != "" && cfg.Email.SMTPPort > 0 && cfg.Email.SMTPUsername != "" && cfg.Email.SMTPPassword != "" && cfg.Email.From != "" && cfg.Email.ResetURLBase != "" {
 		server.ResetSender = NewSMTPPasswordResetSender(cfg.Email)
@@ -71,6 +92,7 @@ func (s *Server) Router() *gin.Engine {
 		s.registerDramas(api)
 		s.registerEpisodes(api)
 		s.registerCharacters(api)
+		s.registerCharacterLibrary(api)
 		s.registerScenes(api)
 		s.registerStoryboards(api)
 		s.registerImages(api)
@@ -144,6 +166,7 @@ func mediaOwnedByOrganization(c *gin.Context, publicURL, relativePath string) bo
 		{&models.Drama{}, "thumbnail = ?", []any{publicURL}},
 		{&models.Episode{}, "video_url = ? OR thumbnail = ?", []any{publicURL, publicURL}},
 		{&models.Character{}, "image_url = ? OR local_path = ? OR voice_sample_url = ?", []any{publicURL, relativePath, publicURL}},
+		{&models.CharacterTemplate{}, "image_url = ? OR local_path = ?", []any{publicURL, relativePath}},
 		{&models.Scene{}, "image_url = ? OR local_path = ?", []any{publicURL, relativePath}},
 		{&models.Prop{}, "image_url = ? OR local_path = ?", []any{publicURL, relativePath}},
 		{&models.Storyboard{}, "composed_image = ? OR first_frame_image = ? OR last_frame_image = ? OR video_url = ? OR tts_audio_url = ? OR subtitle_url = ? OR composed_video_url = ?", []any{publicURL, publicURL, publicURL, publicURL, publicURL, publicURL, publicURL}},
@@ -156,6 +179,34 @@ func mediaOwnedByOrganization(c *gin.Context, publicURL, relativePath string) bo
 		}
 	}
 	return false
+}
+
+func validateLocalMediaOwnership(c *gin.Context, values ...string) error {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "data:") || strings.HasPrefix(value, "mock://") {
+			continue
+		}
+		relativePath := strings.TrimPrefix(value, "/")
+		relativePath = strings.TrimPrefix(relativePath, "static/")
+		publicURL := "/static/" + relativePath
+		if !mediaOwnedByOrganization(c, publicURL, relativePath) {
+			return fmt.Errorf("local media is not owned by the current organization")
+		}
+	}
+	return nil
+}
+
+func validateReferenceMediaOwnership(c *gin.Context, value string) error {
+	for _, item := range strings.Split(value, ",") {
+		if err := validateLocalMediaOwnership(c, item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) securityHeaders() gin.HandlerFunc {

@@ -44,6 +44,7 @@ const assetTargetFrame = ref<Record<number, string>>({})
 const assignCharId = ref<number | null>(null)
 const characterForm = ref<any | null>(null)
 const sceneForm = ref<any | null>(null)
+const sceneTransfer = ref<any | null>(null)
 const storyboardForm = ref<any | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
@@ -273,6 +274,31 @@ async function removeScene(scene: any) {
     show('场景已删除')
     await refreshAssets()
   } catch (e: any) { show(e.message) }
+}
+
+function transferScene(scene: any, mode: 'copy' | 'move') {
+  const target = (drama.value?.episodes || []).find((item: any) => item.id !== episode.value.id)
+  sceneTransfer.value = { scene, mode, target_episode_id: target?.id || 0, move_storyboards: true }
+}
+
+async function confirmSceneTransfer() {
+  const transfer = sceneTransfer.value
+  if (!transfer?.target_episode_id) {
+    show('请选择目标剧集')
+    return
+  }
+  busy.value = `scene-${transfer.mode}`
+  try {
+    if (transfer.mode === 'copy') await sceneAPI.copy(transfer.scene.id, transfer.target_episode_id)
+    else await sceneAPI.move(transfer.scene.id, transfer.target_episode_id, { move_storyboards: transfer.move_storyboards })
+    show(transfer.mode === 'copy' ? '场景已复制' : '场景已迁移')
+    sceneTransfer.value = null
+    await refreshAssets()
+  } catch (e: any) {
+    show(e.message)
+  } finally {
+    busy.value = ''
+  }
 }
 
 async function voiceSample(c: any) {
@@ -788,12 +814,24 @@ onUnmounted(stopPoll)
                     <button class="btn" :disabled="!!busy" @click="genSceneImage(sc)">生成场景</button>
                     <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('scene', sc, $event)" /></label>
                     <button class="btn" :disabled="!!busy" @click="editScene(sc)">编辑</button>
+					<button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
+					<button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
                     <button class="btn btn-danger" :disabled="!!busy" @click="removeScene(sc)">删除</button>
                   </div>
                 </div>
               </div>
               <div v-if="!scenes.length" class="empty">尚未提取场景</div>
             </div>
+			<div v-if="sceneTransfer" class="modal-mask" @click.self="sceneTransfer=null">
+			  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scene-transfer-title">
+				<h3 id="scene-transfer-title">{{ sceneTransfer.mode === 'copy' ? '复制场景' : '迁移场景' }}</h3>
+				<div class="field"><label for="scene-target-episode">目标剧集</label><select id="scene-target-episode" v-model.number="sceneTransfer.target_episode_id">
+				  <option :value="0">请选择</option><option v-for="item in (drama?.episodes || []).filter((row:any) => row.id !== episode.id)" :key="item.id" :value="item.id">第 {{ item.episode_number }} 集 · {{ item.title }}</option>
+				</select></div>
+				<label v-if="sceneTransfer.mode === 'move'" class="row" style="align-items:center"><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
+				<div class="modal-actions"><button class="btn" @click="sceneTransfer=null">取消</button><button class="btn btn-primary" :disabled="!!busy" @click="confirmSceneTransfer">确认</button></div>
+			  </div>
+			</div>
           </div>
         </div>
 

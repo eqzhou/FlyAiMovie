@@ -20,6 +20,8 @@ func (s *Server) registerAssets(api *gin.RouterGroup) {
 	group.PUT("/:id", s.updateAsset)
 	group.DELETE("/:id", s.deleteAsset)
 	group.POST("/:id/apply", s.applyAsset)
+	group.POST("/:id/probe", s.probeAsset)
+	group.POST("/metadata/repair", s.repairAssetMetadata)
 }
 
 func (s *Server) listAssets(c *gin.Context) {
@@ -62,6 +64,10 @@ func (s *Server) createAsset(c *gin.Context) {
 		return
 	}
 	if err := validateAssetOwnership(c, body.DramaID, body.EpisodeID, body.StoryboardID); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if err := validateLocalMediaOwnership(c, body.URL, body.ThumbnailURL, body.LocalPath); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}

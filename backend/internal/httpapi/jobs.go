@@ -14,9 +14,45 @@ import (
 func (s *Server) registerJobs(api *gin.RouterGroup) {
 	group := api.Group("/jobs")
 	group.GET("", s.listJobs)
+	group.POST("/batch-cancel", s.batchCancelJobs)
 	group.GET("/:id", s.getJob)
+	group.GET("/:id/events", s.getJobEvents)
 	group.POST("/:id/cancel", s.cancelJob)
 	group.POST("/:id/retry", s.retryJob)
+}
+
+func (s *Server) getJobEvents(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid job id")
+		return
+	}
+	events, err := s.Jobs.EventsOrganization(currentOrganizationID(c), uint(id))
+	if errors.Is(err, jobs.ErrJobNotFound) {
+		response.NotFound(c, "job not found")
+		return
+	}
+	if err != nil {
+		response.ServerError(c, "failed to load job events")
+		return
+	}
+	response.Success(c, events)
+}
+
+func (s *Server) batchCancelJobs(c *gin.Context) {
+	var body struct {
+		JobIDs []uint `json:"job_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.JobIDs) == 0 {
+		response.BadRequest(c, "job_ids is required")
+		return
+	}
+	canceled, failures, err := s.Jobs.BatchCancelOrganization(currentOrganizationID(c), body.JobIDs)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, gin.H{"canceled": canceled, "failures": failures})
 }
 
 func (s *Server) retryJob(c *gin.Context) {

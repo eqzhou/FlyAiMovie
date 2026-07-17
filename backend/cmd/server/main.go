@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,11 @@ import (
 )
 
 func main() {
+	for _, binary := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(binary); err != nil {
+			log.Fatalf("required media tool %s was not found in PATH", binary)
+		}
+	}
 	root := findProjectRoot()
 	cfgPath := envOr("CONFIG_PATH", filepath.Join(root, "configs", "config.yaml"))
 	cfg, err := config.Load(cfgPath)
