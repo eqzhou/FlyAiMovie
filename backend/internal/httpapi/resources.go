@@ -474,7 +474,7 @@ func (s *Server) createStoryboard(c *gin.Context) {
 	}
 	stringFields := map[string]string{}
 	for _, key := range []string{"title", "location", "time", "shot_type", "angle", "movement", "action", "result",
-		"atmosphere", "image_prompt", "video_prompt", "bgm_prompt", "sound_effect", "dialogue", "description"} {
+		"atmosphere", "image_prompt", "video_prompt", "bgm_prompt", "sound_effect", "dialogue", "description", "reference_images"} {
 		value, exists, fieldErr := stringUpdate(body, key, maxTextRunes)
 		if fieldErr != nil {
 			response.BadRequest(c, fieldErr.Error())
@@ -482,6 +482,12 @@ func (s *Server) createStoryboard(c *gin.Context) {
 		}
 		if exists {
 			stringFields[key] = value
+		}
+	}
+	if references := stringFields["reference_images"]; references != "" {
+		if err := validateReferenceMediaOwnership(c, references); err != nil {
+			response.BadRequest(c, err.Error())
+			return
 		}
 	}
 	var sb models.Storyboard
@@ -506,7 +512,8 @@ func (s *Server) createStoryboard(c *gin.Context) {
 			ImagePrompt: stringFields["image_prompt"], VideoPrompt: stringFields["video_prompt"],
 			BGMPrompt: stringFields["bgm_prompt"], SoundEffect: stringFields["sound_effect"],
 			Dialogue: stringFields["dialogue"], Description: stringFields["description"],
-			Duration: duration, Status: "pending", CreatedAt: ts, UpdatedAt: ts,
+			ReferenceImages: stringFields["reference_images"],
+			Duration:        duration, Status: "pending", CreatedAt: ts, UpdatedAt: ts,
 		}
 		if sceneID > 0 {
 			sb.SceneID = &sceneID
@@ -559,6 +566,12 @@ func (s *Server) updateStoryboard(c *gin.Context) {
 			return
 		}
 		if ok {
+			if k == "reference_images" {
+				if err := validateReferenceMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
 			updates[k] = v
 		}
 	}

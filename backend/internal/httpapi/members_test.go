@@ -25,6 +25,26 @@ func TestMemberManagementAndOrganizationSwitch(t *testing.T) {
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
 	}
 	userID := uint(decodeResponse(t, created)["data"].(map[string]any)["user_id"].(float64))
+	invalidMemberID := performAuthRequest(router, http.MethodPut, "/api/v1/organization/members/bad", `{"role":"viewer"}`, ownerACookie, ownerACSRF)
+	if invalidMemberID.Code != http.StatusBadRequest {
+		t.Fatalf("invalid member id status=%d body=%s", invalidMemberID.Code, invalidMemberID.Body.String())
+	}
+	invalidMemberBody := performAuthRequest(router, http.MethodPut, "/api/v1/organization/members/"+strconv.Itoa(int(userID)), `{`, ownerACookie, ownerACSRF)
+	if invalidMemberBody.Code != http.StatusBadRequest {
+		t.Fatalf("invalid member body status=%d body=%s", invalidMemberBody.Code, invalidMemberBody.Body.String())
+	}
+	invalidRole := performAuthRequest(router, http.MethodPut, "/api/v1/organization/members/"+strconv.Itoa(int(userID)), `{"role":"owner"}`, ownerACookie, ownerACSRF)
+	if invalidRole.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role status=%d body=%s", invalidRole.Code, invalidRole.Body.String())
+	}
+	missingMember := performAuthRequest(router, http.MethodPut, "/api/v1/organization/members/99999", `{"role":"viewer"}`, ownerACookie, ownerACSRF)
+	if missingMember.Code != http.StatusNotFound {
+		t.Fatalf("missing member status=%d body=%s", missingMember.Code, missingMember.Body.String())
+	}
+	updated := performAuthRequest(router, http.MethodPut, "/api/v1/organization/members/"+strconv.Itoa(int(userID)), `{"role":"viewer"}`, ownerACookie, ownerACSRF)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"role":"viewer"`) {
+		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
+	}
 	listed := performAuthRequest(router, http.MethodGet, "/api/v1/organization/members", "", ownerACookie, "")
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "editor@example.com") || strings.Contains(listed.Body.String(), "password") {
 		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
@@ -45,6 +65,10 @@ func TestMemberManagementAndOrganizationSwitch(t *testing.T) {
 	organizations := performAuthRequest(router, http.MethodGet, "/api/v1/auth/organizations", "", loginCookie, "")
 	if organizations.Code != http.StatusOK || !strings.Contains(organizations.Body.String(), organizationA.Slug) || !strings.Contains(organizations.Body.String(), organizationB.Slug) {
 		t.Fatalf("organizations status=%d body=%s", organizations.Code, organizations.Body.String())
+	}
+	invalidSwitch := performAuthRequest(router, http.MethodPost, "/api/v1/auth/switch-organization", `{"organization_id":99999}`, loginCookie, loginCSRF)
+	if invalidSwitch.Code != http.StatusNotFound {
+		t.Fatalf("invalid switch status=%d body=%s", invalidSwitch.Code, invalidSwitch.Body.String())
 	}
 
 	switched := performAuthRequest(router, http.MethodPost, "/api/v1/auth/switch-organization", `{"organization_id":`+strconv.Itoa(int(organizationB.ID))+`}`, loginCookie, loginCSRF)

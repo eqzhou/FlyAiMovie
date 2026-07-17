@@ -126,7 +126,10 @@ func createInitialAccount(body setupInput, email, passwordHash string) (models.U
 		if err := tx.Create(&membership).Error; err != nil {
 			return err
 		}
-		return claimLegacyResources(tx, organization.ID)
+		if err := claimLegacyResources(tx, organization.ID); err != nil {
+			return err
+		}
+		return db.SeedOrganizationDefaults(tx, organization.ID)
 	})
 	return user, organization, err
 }

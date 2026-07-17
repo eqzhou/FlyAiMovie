@@ -1,9 +1,10 @@
-import { expect, test } from '@playwright/test'
+import { expect, request, test } from '@playwright/test'
 
 const ownerEmail = 'live-owner@flyaimovie.test'
 const invitedEmail = 'live-editor@flyaimovie.test'
 const ownerPassword = process.env.E2E_PASSWORD || ''
 const invitedPassword = process.env.E2E_INVITED_PASSWORD || ownerPassword
+let organizationCreated = false
 
 test.beforeAll(() => {
   if (process.env.E2E_DISPOSABLE !== '1') {
@@ -14,10 +15,25 @@ test.beforeAll(() => {
   }
 })
 
-test('live backend: account, settings, invitation and asset workflows', async ({ page }) => {
-  test.setTimeout(90_000)
-  let organizationCreated = false
+test.afterAll(async () => {
+  if (!organizationCreated) return
+  const api = await request.newContext({ baseURL: process.env.LIVE_BASE_URL || 'http://127.0.0.1:8088' })
   try {
+    const login = await api.post('/api/v1/auth/login', { data: { email: ownerEmail, password: ownerPassword } })
+    expect(login.ok()).toBeTruthy()
+    const actor = await login.json()
+    const deleted = await api.delete('/api/v1/organization', {
+      headers: { 'X-CSRF-Token': actor.data.csrf_token },
+      data: { password: ownerPassword, confirmation: 'live-browser' },
+    })
+    expect(deleted.status()).toBe(200)
+  } finally {
+    await api.dispose()
+  }
+})
+
+test('live backend: account, settings, invitation and asset workflows', async ({ page }) => {
+	 test.setTimeout(120_000)
     await page.goto('/setup')
     await expect(page.getByRole('heading', { name: '初始化制作空间' })).toBeVisible()
     await page.getByLabel('空间名称').fill('Live Browser')
@@ -66,7 +82,7 @@ test('live backend: account, settings, invitation and asset workflows', async ({
     await expect(page.getByRole('heading', { name: 'Live UI 项目 · 素材库' })).toBeVisible()
 
     await page.getByRole('button', { name: '上传图片' }).click()
-    await page.getByLabel('图片文件').setInputFiles({
+		await page.getByLabel('素材文件').setInputFiles({
       name: 'live-pixel.png',
       mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
@@ -88,24 +104,5 @@ test('live backend: account, settings, invitation and asset workflows', async ({
     await page.getByLabel('邮箱').fill(ownerEmail)
     await page.getByLabel('密码').fill(ownerPassword)
     await page.getByRole('button', { name: '登录' }).click()
-    await expect(page.getByText('Live UI 项目')).toBeVisible()
-  } finally {
-    if (organizationCreated) {
-      const cleanup = await page.evaluate(async ({ email, password }) => {
-        const login = await fetch('/api/v1/auth/login', {
-          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
-        })
-        const actor = await login.json()
-        if (!login.ok) return { ok: false, status: login.status }
-        const deleted = await fetch('/api/v1/organization', {
-          method: 'DELETE', credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': actor.data.csrf_token },
-          body: JSON.stringify({ password, confirmation: 'live-browser' }),
-        })
-        return { ok: deleted.ok, status: deleted.status }
-      }, { email: ownerEmail, password: ownerPassword })
-      expect(cleanup).toEqual({ ok: true, status: 200 })
-    }
-  }
+		await expect(page.getByText('Live UI 项目')).toBeVisible()
 })

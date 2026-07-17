@@ -22,6 +22,8 @@ export default defineConfig({
       grep: /mobile:/,
       use: {
         ...devices['iPhone 13'],
+        browserName: 'chromium',
+        channel: 'chrome',
         viewport: { width: 390, height: 844 },
         deviceScaleFactor: 2,
         hasTouch: true,

@@ -31,6 +31,9 @@ ai:
   default_text_provider: "openai"
   default_image_provider: "openai"
   default_video_provider: "volcengine"
+  # Local OpenAI-compatible text endpoints are denied unless their exact host
+  # is listed here. Production mode requires this list to stay empty.
+  allowed_private_base_url_hosts: []
 
 auth:
   # Required for any public or commercial deployment.

@@ -104,26 +104,47 @@ func (s *Server) registerVideos(api *gin.RouterGroup) {
 
 func (s *Server) createVideo(c *gin.Context) {
 	var body struct {
-		StoryboardID  *uint  `json:"storyboard_id"`
-		DramaID       *uint  `json:"drama_id"`
-		Prompt        string `json:"prompt"`
-		ImageURL      string `json:"image_url"`
-		FirstFrameURL string `json:"first_frame_url"`
-		LastFrameURL  string `json:"last_frame_url"`
-		ReferenceMode string `json:"reference_mode"`
-		Duration      int    `json:"duration"`
-		AspectRatio   string `json:"aspect_ratio"`
-		ConfigID      *uint  `json:"config_id"`
-		EpisodeID     *uint  `json:"episode_id"`
+		StoryboardID       *uint    `json:"storyboard_id"`
+		DramaID            *uint    `json:"drama_id"`
+		Prompt             string   `json:"prompt"`
+		ImageURL           string   `json:"image_url"`
+		FirstFrameURL      string   `json:"first_frame_url"`
+		LastFrameURL       string   `json:"last_frame_url"`
+		ReferenceImageURLs []string `json:"reference_image_urls"`
+		ReferenceMode      string   `json:"reference_mode"`
+		Duration           int      `json:"duration"`
+		AspectRatio        string   `json:"aspect_ratio"`
+		ConfigID           *uint    `json:"config_id"`
+		EpisodeID          *uint    `json:"episode_id"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid body")
 		return
 	}
+	if len(body.ReferenceImageURLs) > 8 {
+		response.BadRequest(c, "at most 8 reference_image_urls are allowed")
+		return
+	}
+	if err := validateLocalMediaOwnership(c, body.ReferenceImageURLs...); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	referenceImageURLs := ""
+	if len(body.ReferenceImageURLs) > 0 {
+		encodedReferences, err := json.Marshal(body.ReferenceImageURLs)
+		if err != nil {
+			response.BadRequest(c, "invalid reference_image_urls")
+			return
+		}
+		referenceImageURLs = string(encodedReferences)
+	}
 	// auto-fill from storyboard
 	if body.StoryboardID != nil {
 		var sb models.Storyboard
 		if err := organizationDB(c).First(&sb, *body.StoryboardID).Error; err == nil {
+			if referenceImageURLs == "" {
+				referenceImageURLs = sb.ReferenceImages
+			}
 			if body.Prompt == "" {
 				body.Prompt = firstNonEmpty(sb.VideoPrompt, sb.ImagePrompt, sb.Description)
 			}
@@ -167,6 +188,7 @@ func (s *Server) createVideo(c *gin.Context) {
 		StoryboardID:   body.StoryboardID, DramaID: body.DramaID, Prompt: body.Prompt,
 		ImageURL: body.ImageURL, FirstFrameURL: body.FirstFrameURL, LastFrameURL: body.LastFrameURL,
 		ReferenceMode: body.ReferenceMode, Duration: body.Duration, AspectRatio: body.AspectRatio,
+		ReferenceImageURLs: referenceImageURLs,
 	}
 	if err := s.Videos.Generate(c.Request.Context(), rec, configID); err != nil {
 		respondGenerationError(c, err)

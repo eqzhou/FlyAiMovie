@@ -9,6 +9,7 @@
 | 图片 | MiniMax | `POST /v1/image_generation` | 同步 | `TestMiniMaxImageContract` |
 | 图片 | Volcengine | `POST /api/v3/images/generations` | `GET /api/v3/images/generations/:id` | `TestVolcengineImageContractAndPoll` |
 | 图片 | Aliyun | DashScope async image synthesis | `GET /api/v1/tasks/:id` | `TestDashScopeImageContractAndPoll` |
+| 视频 | OpenAI | `POST /v1/videos`，本地参考图使用 multipart `input_reference` | `GET /v1/videos/:id` + authenticated content download | `TestOpenAIVideoSubmitPollAndAuthenticatedContent`、`TestOpenAIVideoUploadsLocalDataReferenceAndRejectsLastFrame` |
 | 视频 | MiniMax | `POST /v1/video_generation` | query task + files retrieve | `TestMiniMaxVideoSubmitPollAndFileRetrieve` |
 | 视频 | Volcengine | Ark `content[]` generation task | `GET /api/v3/contents/generations/tasks/:id` | `TestVolcengineVideoUsesContentContract` |
 | 视频 | Vidu | Enterprise v2 `img2video`，Token auth | task creations | `TestViduVideoUsesTokenAndCreationsContract` |
@@ -17,7 +18,8 @@
 
 ## 官方文档入口
 
-- OpenAI: <https://platform.openai.com/docs/guides/image-generation>
+- OpenAI images: <https://platform.openai.com/docs/guides/image-generation>
+- OpenAI video generation: <https://developers.openai.com/api/docs/guides/video-generation>
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/image-generation>
 - MiniMax: <https://platform.minimax.io/docs>
 - Volcengine Ark: <https://www.volcengine.com/docs/82379>
@@ -29,3 +31,5 @@
 `httptest` 契约测试证明本项目会生成预期的 URL、鉴权头、JSON 字段并解析公开响应形状，但不能证明厂商账号、模型白名单、额度、区域或未公告变更仍然有效。商业发布前应使用各厂商测试账号执行非 Mock smoke test，并归档日期、区域、模型、request ID 与脱敏响应。
 
 未知厂商或不支持的服务/厂商组合必须明确报错，不得静默落到其他厂商 adapter。API 配置入口和设置页均执行同一支持矩阵。
+
+OpenAI 视频当前支持创建、轮询和鉴权下载，并支持一个首帧参考图。官方协议不提供尾帧或多参考图契约，因此这两种输入会明确失败；真实账号、模型权限和额度仍需单独 smoke test。

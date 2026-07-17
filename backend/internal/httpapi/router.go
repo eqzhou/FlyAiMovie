@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -201,12 +202,44 @@ func validateLocalMediaOwnership(c *gin.Context, values ...string) error {
 }
 
 func validateReferenceMediaOwnership(c *gin.Context, value string) error {
-	for _, item := range strings.Split(value, ",") {
+	items, err := parseReferenceMediaValues(value)
+	if err != nil {
+		return err
+	}
+	if len(items) > 8 {
+		return fmt.Errorf("at most 8 reference images are allowed")
+	}
+	for _, item := range items {
 		if err := validateLocalMediaOwnership(c, item); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func parseReferenceMediaValues(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{}, nil
+	}
+	if strings.HasPrefix(value, "data:") {
+		return []string{value}, nil
+	}
+	items := []string(nil)
+	if strings.HasPrefix(value, "[") {
+		if err := json.Unmarshal([]byte(value), &items); err != nil {
+			return nil, fmt.Errorf("invalid reference images: %w", err)
+		}
+	} else {
+		items = strings.Split(value, ",")
+	}
+	clean := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			clean = append(clean, item)
+		}
+	}
+	return clean, nil
 }
 
 func (s *Server) securityHeaders() gin.HandlerFunc {

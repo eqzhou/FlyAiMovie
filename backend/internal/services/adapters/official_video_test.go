@@ -1,14 +1,111 @@
 package adapters
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestOpenAIVideoSubmitPollAndAuthenticatedContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/videos":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			reference, _ := body["input_reference"].(map[string]any)
+			if body["model"] != "sora-2" || body["prompt"] != "tracking shot" || body["size"] != "1280x720" || body["seconds"] != "8" {
+				t.Errorf("unexpected OpenAI submit body: %#v", body)
+			}
+			if reference["image_url"] != "https://cdn.example/first.png" {
+				t.Errorf("unexpected input_reference: %#v", reference)
+			}
+			writeJSON(w, `{"id":"video-openai","status":"queued"}`)
+		case "GET /v1/videos/video-openai":
+			writeJSON(w, `{"id":"video-openai","status":"completed"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIVideoAdapter{}
+	cfg := AIConfig{BaseURL: server.URL, APIKey: "secret", Model: "sora-2"}
+	submitted, err := adapter.Generate(context.Background(), cfg, VideoGenInput{
+		Prompt: "tracking shot", Duration: 8, AspectRatio: "16:9", ImageURL: "https://cdn.example/first.png",
+	})
+	if err != nil || !submitted.IsAsync || submitted.TaskID != "video-openai" {
+		t.Fatalf("submitted=%+v err=%v", submitted, err)
+	}
+	polled, err := adapter.Poll(context.Background(), cfg, submitted.TaskID)
+	if err != nil || polled.Status != "completed" || polled.VideoURL != server.URL+"/v1/videos/video-openai/content" || polled.BearerToken != "secret" {
+		t.Fatalf("polled=%+v err=%v", polled, err)
+	}
+}
+
+func TestOpenAIVideoUploadsLocalDataReferenceAndRejectsLastFrame(t *testing.T) {
+	var pngBuffer bytes.Buffer
+	inputImage := image.NewRGBA(image.Rect(0, 0, 32, 18))
+	inputImage.Set(0, 0, color.White)
+	if err := png.Encode(&pngBuffer, inputImage); err != nil {
+		t.Fatal(err)
+	}
+	pngData := base64.StdEncoding.EncodeToString(pngBuffer.Bytes())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/videos" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse multipart: %v", err)
+		}
+		file, header, err := r.FormFile("input_reference")
+		if err != nil {
+			t.Errorf("input_reference: %v", err)
+		} else {
+			config, _, configErr := image.DecodeConfig(file)
+			_ = file.Close()
+			if header.Header.Get("Content-Type") != "image/png" {
+				t.Errorf("content type=%q", header.Header.Get("Content-Type"))
+			}
+			if configErr != nil || config.Width != 1280 || config.Height != 720 {
+				t.Errorf("reference dimensions=%+v err=%v", config, configErr)
+			}
+		}
+		if r.FormValue("model") != "sora-2-pro" || r.FormValue("prompt") != "local frame" || r.FormValue("seconds") != "12" {
+			t.Errorf("unexpected multipart fields: %#v", r.MultipartForm.Value)
+		}
+		writeJSON(w, `{"id":"video-local","status":"queued"}`)
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIVideoAdapter{}
+	cfg := AIConfig{BaseURL: server.URL, APIKey: "secret", Model: "sora-2-pro"}
+	result, err := adapter.Generate(context.Background(), cfg, VideoGenInput{Prompt: "local frame", Duration: 12, FirstFrameURL: "data:image/png;base64," + pngData})
+	if err != nil || result.TaskID != "video-local" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := adapter.Generate(context.Background(), cfg, VideoGenInput{Prompt: "unsupported", LastFrameURL: "https://cdn.example/last.png"}); err == nil || !strings.Contains(err.Error(), "last frame") {
+		t.Fatalf("expected last-frame rejection, got %v", err)
+	}
+	if _, err := adapter.Generate(context.Background(), cfg, VideoGenInput{Prompt: "unsupported", ReferenceImageURLs: []string{"https://cdn.example/a.png", "https://cdn.example/b.png"}}); err == nil || !strings.Contains(err.Error(), "one input reference") {
+		t.Fatalf("expected multi-reference rejection, got %v", err)
+	}
+	if _, err := adapter.Generate(context.Background(), cfg, VideoGenInput{Prompt: "unsupported", FirstFrameURL: "data:image/webp;base64,AAAA"}); err == nil || !strings.Contains(err.Error(), "WebP") {
+		t.Fatalf("expected WebP rejection, got %v", err)
+	}
+}
 
 func TestMiniMaxVideoSubmitPollAndFileRetrieve(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

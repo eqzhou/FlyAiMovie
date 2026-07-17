@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
@@ -120,6 +121,9 @@ func mapConfig(row models.AIServiceConfig) *ServiceConfig {
 
 func NewOpenAIClient(cfg *ServiceConfig) *openai.Client {
 	c := openai.DefaultConfig(cfg.APIKey)
+	if cfg.Provider == "openai_local" {
+		c.HTTPClient = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	}
 	if cfg.BaseURL != "" {
 		// support both .../v1 and bare base
 		base := cfg.BaseURL

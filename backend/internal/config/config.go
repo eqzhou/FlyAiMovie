@@ -50,9 +50,10 @@ type StorageConfig struct {
 }
 
 type AIConfig struct {
-	DefaultTextProvider  string `yaml:"default_text_provider"`
-	DefaultImageProvider string `yaml:"default_image_provider"`
-	DefaultVideoProvider string `yaml:"default_video_provider"`
+	DefaultTextProvider        string   `yaml:"default_text_provider"`
+	DefaultImageProvider       string   `yaml:"default_image_provider"`
+	DefaultVideoProvider       string   `yaml:"default_video_provider"`
+	AllowedPrivateBaseURLHosts []string `yaml:"allowed_private_base_url_hosts"`
 }
 
 type AuthConfig struct {
@@ -136,6 +137,9 @@ func Load(path string) (*Config, error) {
 	if value := os.Getenv("PASSWORD_RESET_URL_BASE"); value != "" {
 		cfg.Email.ResetURLBase = value
 	}
+	if value := os.Getenv("AI_ALLOWED_PRIVATE_BASE_URL_HOSTS"); value != "" {
+		cfg.AI.AllowedPrivateBaseURLHosts = splitCSV(value)
+	}
 	if cfg.Database.Path == "" {
 		cfg.Database.Path = "./data/flyaimovie.db"
 	}
@@ -172,10 +176,23 @@ func (c *Config) ValidateProduction() error {
 	if strings.TrimSpace(os.Getenv("AI_CONFIG_ENCRYPTION_KEY")) == "" {
 		return fmt.Errorf("AI_CONFIG_ENCRYPTION_KEY is required in production")
 	}
+	if len(c.AI.AllowedPrivateBaseURLHosts) > 0 {
+		return fmt.Errorf("ai.allowed_private_base_url_hosts must be empty in production")
+	}
 	if err := c.Email.ValidateProduction(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func splitCSV(value string) []string {
+	items := make([]string, 0)
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func (e EmailConfig) ValidateProduction() error {

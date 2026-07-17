@@ -1,15 +1,13 @@
 package generation
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
@@ -20,7 +18,6 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -87,16 +84,10 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 		}
 	}
 
-	refs := []string{}
-	if rec.ReferenceImages != "" {
-		// comma or JSON-ish simple split
-		for _, part := range strings.Split(rec.ReferenceImages, ",") {
-			part = strings.TrimSpace(part)
-			part = strings.Trim(part, `"'[] `)
-			if part != "" {
-				refs = append(refs, part)
-			}
-		}
+	refs, err := parseImageReferenceURLs(rec.ReferenceImages)
+	if err != nil {
+		s.failJob(rec.OrganizationID, rec.ID, err)
+		return err
 	}
 	if s.References != nil {
 		refs, err = s.References.ResolveImages(ctx, cfg.Provider, refs)
@@ -158,6 +149,34 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 	return nil
 }
 
+func parseImageReferenceURLs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}, nil
+	}
+	if strings.HasPrefix(raw, "data:image/") {
+		return []string{raw}, nil
+	}
+	var values []string
+	if strings.HasPrefix(raw, "[") {
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			return nil, fmt.Errorf("invalid reference images: %w", err)
+		}
+	} else {
+		values = strings.Split(raw, ",")
+	}
+	clean := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			clean = append(clean, value)
+		}
+	}
+	if len(clean) > 8 {
+		return nil, fmt.Errorf("at most 8 image references are allowed")
+	}
+	return clean, nil
+}
+
 func (s *ImageService) failJob(organizationID, resourceID uint, err error) {
 	if s.Jobs != nil && err != nil {
 		_ = s.Jobs.SetFailedByTargetOrganization(organizationID, "image_generation", resourceID, err.Error())
@@ -205,7 +224,7 @@ func (s *ImageService) Download(ctx context.Context, url, subdir string) (string
 	return mediafetch.Download(ctx, s.Store, url, subdir, "image")
 }
 
-func (s *ImageService) saveBase64(b64, mime, subdir string) (string, error) {
+func (s *ImageService) saveBase64(b64, _ string, subdir string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		// try raw
@@ -214,18 +233,11 @@ func (s *ImageService) saveBase64(b64, mime, subdir string) (string, error) {
 			return "", err
 		}
 	}
-	ext := ".png"
-	if mime == "image/jpeg" {
-		ext = ".jpg"
+	info, err := mediafetch.ValidateImageUpload(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("validate generated image: %w", err)
 	}
-	name := fmt.Sprintf("%s_%s%s", time.Now().Format("20060102150405"), uuid.NewString()[:8], ext)
-	absDir := filepath.Join(s.Store.Root, subdir)
-	_ = os.MkdirAll(absDir, 0o755)
-	rel := filepath.ToSlash(filepath.Join(subdir, name))
-	abs := filepath.Join(s.Store.Root, filepath.FromSlash(rel))
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
-		return "", err
-	}
+	rel, _, err := s.Store.Save(subdir, "generated"+info.Extension, bytes.NewReader(data))
 	return rel, nil
 }
 

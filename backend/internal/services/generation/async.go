@@ -86,13 +86,23 @@ func (r *AsyncRunner) pollClaimed() {
 	for _, job := range claimed {
 		switch job.TargetType {
 		case "image_generation":
+			if r.Images == nil {
+				_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "image worker unavailable")
+				continue
+			}
 			r.pollImageJob(job)
 		case "video_generation":
+			if r.Videos == nil {
+				_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "video worker unavailable")
+				continue
+			}
 			r.pollVideoJob(job)
 		case "storyboard_tts":
 			r.runTTSJob(job)
 		case "storyboard_compose", "episode_compose", "episode_merge":
 			r.runComposeJob(job, owner)
+		default:
+			_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "unsupported job target")
 		}
 	}
 }
@@ -383,6 +393,9 @@ func (r *AsyncRunner) runTTSJob(job models.GenerationJob) {
 func (r *AsyncRunner) pollImageJob(job models.GenerationJob) {
 	var rec models.ImageGeneration
 	if err := scopedDB(db.DB, job.OrganizationID).Where("id = ?", job.TargetID).First(&rec).Error; err != nil {
+		if job.ID != 0 && job.LeaseOwner != "" {
+			_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "image generation target not found")
+		}
 		return
 	}
 	if rec.TaskID == "" {
@@ -421,6 +434,9 @@ func (r *AsyncRunner) pollImageJob(job models.GenerationJob) {
 func (r *AsyncRunner) pollVideoJob(job models.GenerationJob) {
 	var rec models.VideoGeneration
 	if err := scopedDB(db.DB, job.OrganizationID).Where("id = ?", job.TargetID).First(&rec).Error; err != nil {
+		if job.ID != 0 && job.LeaseOwner != "" {
+			_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "video generation target not found")
+		}
 		return
 	}
 	if rec.TaskID == "" {
@@ -438,7 +454,7 @@ func (r *AsyncRunner) pollVideoJob(job models.GenerationJob) {
 		return
 	}
 	if res.Status == "completed" && res.VideoURL != "" {
-		_ = r.Videos.Finalize(context.Background(), &rec, res.VideoURL)
+		_ = r.Videos.FinalizeAuthorized(context.Background(), &rec, res.VideoURL, res.BearerToken)
 		return
 	}
 	if res.Status == "failed" {
@@ -463,56 +479,8 @@ func (r *AsyncRunner) pollImages() {
 	var rows []models.ImageGeneration
 	db.DB.Where("status = ? AND task_id != '' AND task_id IS NOT NULL AND organization_id > 0", "processing").
 		Order("id asc").Limit(20).Find(&rows)
-	for _, rec := range rows {
-		cfg, err := ai.GetTaskConfigOrganization(rec.OrganizationID, "image", rec.ConfigID)
-		if err != nil {
-			continue
-		}
-		// Prefer provider from record if possible
-		if rec.ConfigID == nil && rec.Provider != "" {
-			var row models.AIServiceConfig
-			if err := db.DB.Where("organization_id = ? AND provider = ? AND service_type = ? AND is_active = ?", rec.OrganizationID, rec.Provider, "image", true).
-				Order("is_default desc, priority desc").First(&row).Error; err == nil {
-				cfg = &ai.ServiceConfig{ID: row.ID, Provider: row.Provider, BaseURL: row.BaseURL, APIKey: row.APIKey, Model: row.Model}
-			}
-		}
-		adapter := adapters.GetImageAdapter(cfg.Provider)
-		res, err := adapter.Poll(context.Background(), adapters.AIConfig{
-			Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
-		}, rec.TaskID)
-		if err != nil {
-			continue
-		}
-		if res.Status == "completed" && res.ImageURL != "" {
-			local, err := r.Images.Download(context.Background(), res.ImageURL, "images")
-			if err != nil {
-				rec.Status = "failed"
-				rec.ErrorMsg = err.Error()
-				rec.UpdatedAt = response.Now()
-				scopedDB(db.DB, rec.OrganizationID).Save(&rec)
-				r.Images.failJob(rec.OrganizationID, rec.ID, err)
-				continue
-			}
-			rec.LocalPath = local
-			rec.ImageURL = r.Images.Store.PublicURL(local)
-			rec.Status = "completed"
-			now := response.Now()
-			rec.CompletedAt = &now
-			rec.UpdatedAt = now
-			scopedDB(db.DB, rec.OrganizationID).Save(&rec)
-			r.Images.ApplySideEffects(&rec)
-			updateGridHistory(rec.OrganizationID, rec.ID, rec.ImageURL, "completed", "")
-			if rec.JobID != nil {
-				_ = r.Images.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "image_generation", rec.ID, fmt.Sprintf(`{"image_url":%q}`, rec.ImageURL))
-			}
-		} else if res.Status == "failed" {
-			rec.Status = "failed"
-			rec.ErrorMsg = res.Error
-			rec.UpdatedAt = response.Now()
-			scopedDB(db.DB, rec.OrganizationID).Save(&rec)
-			r.Images.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("%s", res.Error))
-			updateGridHistory(rec.OrganizationID, rec.ID, "", "failed", res.Error)
-		}
+	for _, record := range rows {
+		r.pollImageJob(models.GenerationJob{OrganizationID: record.OrganizationID, TargetID: record.ID})
 	}
 }
 
@@ -539,38 +507,7 @@ func (r *AsyncRunner) pollVideos() {
 	var rows []models.VideoGeneration
 	db.DB.Where("status IN ? AND task_id != '' AND task_id IS NOT NULL AND organization_id > 0", []string{"processing", "pending"}).
 		Order("id asc").Limit(20).Find(&rows)
-	for _, rec := range rows {
-		cfg, err := ai.GetTaskConfigOrganization(rec.OrganizationID, "video", rec.ConfigID)
-		if err != nil {
-			continue
-		}
-		if rec.ConfigID == nil && rec.Provider != "" {
-			var row models.AIServiceConfig
-			if err := db.DB.Where("organization_id = ? AND provider = ? AND service_type = ? AND is_active = ?", rec.OrganizationID, rec.Provider, "video", true).
-				Order("is_default desc, priority desc").First(&row).Error; err == nil {
-				cfg = &ai.ServiceConfig{ID: row.ID, Provider: row.Provider, BaseURL: row.BaseURL, APIKey: row.APIKey, Model: row.Model}
-			}
-		}
-		adapter := adapters.GetVideoAdapter(cfg.Provider)
-		res, err := adapter.Poll(context.Background(), adapters.AIConfig{
-			Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
-		}, rec.TaskID)
-		if err != nil {
-			log.Printf("video poll %d: %v", rec.ID, err)
-			continue
-		}
-		if res.Status == "completed" && res.VideoURL != "" {
-			_ = r.Videos.Finalize(context.Background(), &rec, res.VideoURL)
-		} else if res.Status == "failed" {
-			rec.Status = "failed"
-			rec.ErrorMsg = res.Error
-			rec.UpdatedAt = response.Now()
-			scopedDB(db.DB, rec.OrganizationID).Save(&rec)
-			r.Videos.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("%s", res.Error))
-		} else {
-			rec.Status = res.Status
-			rec.UpdatedAt = response.Now()
-			scopedDB(db.DB, rec.OrganizationID).Save(&rec)
-		}
+	for _, record := range rows {
+		r.pollVideoJob(models.GenerationJob{OrganizationID: record.OrganizationID, TargetID: record.ID})
 	}
 }

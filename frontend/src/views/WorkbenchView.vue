@@ -639,6 +639,7 @@ function addStoryboard() {
     dialogue: '',
     image_prompt: '',
     video_prompt: '',
+    reference_images: '',
   }
 }
 
@@ -650,6 +651,7 @@ async function saveStoryboard() {
     await storyboardAPI.create({
       ...form,
       title: form.title.trim(),
+      reference_images: JSON.stringify(form.reference_images.split(/\r?\n/).map((value: string) => value.trim()).filter(Boolean)),
       episode_id: episode.value.id,
     })
     storyboardForm.value = null
@@ -975,6 +977,10 @@ onUnmounted(stopPoll)
             <div class="field">
               <label for="storyboard-video-prompt">视频提示词</label>
               <textarea id="storyboard-video-prompt" v-model="storyboardForm.video_prompt" rows="3" maxlength="10000" />
+            </div>
+            <div class="field" style="grid-column:1/-1">
+              <label for="storyboard-reference-images">多参考图 URL（每行一个，最多 8 张）</label>
+              <textarea id="storyboard-reference-images" v-model="storyboardForm.reference_images" rows="3" maxlength="10000" />
             </div>
             <div class="toolbar" style="grid-column:1/-1">
               <button class="btn btn-primary" :disabled="!!busy" @click="saveStoryboard">保存分镜</button>

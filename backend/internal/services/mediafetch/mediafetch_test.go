@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,51 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
+
+func TestDownloadAuthorizedSendsBearerAndStoresVideo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p'}, bytes.Repeat([]byte{1}, 600)...))
+	}))
+	defer server.Close()
+
+	store := storage.NewLocal(t.TempDir())
+	client := server.Client()
+	rel, err := downloadAuthorizedWithClient(context.Background(), client, store, server.URL+"/content", "videos", "video", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Ext(rel) != ".mp4" {
+		t.Fatalf("extension=%q", filepath.Ext(rel))
+	}
+}
+
+func TestDownloadRejectsStatusTypeAndDeclaredSize(t *testing.T) {
+	store := storage.NewLocal(t.TempDir())
+	for name, handler := range map[string]http.HandlerFunc{
+		"status": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "no", http.StatusBadGateway) },
+		"mime":   func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("plain text")) },
+		"size": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Length", "40000000")
+			w.WriteHeader(http.StatusOK)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			if _, err := downloadAuthorizedWithClient(context.Background(), server.Client(), store, server.URL, "images", "image", ""); err == nil {
+				t.Fatal("invalid download accepted")
+			}
+		})
+	}
+	if _, err := DownloadAuthorized(context.Background(), store, "http://127.0.0.1/media", "videos", "video", "token"); err == nil {
+		t.Fatal("private authorized download accepted")
+	}
+}
 
 func TestMediaHTTPClientDoesNotUseEnvironmentProxy(t *testing.T) {
 	client := mediaHTTPClient()
@@ -65,6 +111,12 @@ func TestValidateImageUpload(t *testing.T) {
 	}
 	if _, err := ValidateImageUpload(bytes.NewReader(valid.Bytes()), MaxImageUploadBytes+1); err == nil {
 		t.Fatal("oversized upload accepted")
+	}
+	if _, err := ValidateImageUpload(bytes.NewReader(valid.Bytes()), 0); err == nil {
+		t.Fatal("empty upload accepted")
+	}
+	if _, err := ValidateImageUpload(bytes.NewReader([]byte("\x89PNG\r\n\x1a\ninvalid")), 15); err == nil {
+		t.Fatal("malformed PNG accepted")
 	}
 }
 
@@ -119,7 +171,9 @@ func TestMediaHelpersAndLimitReader(t *testing.T) {
 		ok              bool
 	}{
 		{"image", "image/png", ".png", true}, {"image", "text/plain", ".bin", false},
-		{"video", "video/mp4", ".mp4", true}, {"video", "application/octet-stream", ".mp4", true},
+		{"image", "image/jpeg", ".jpg", true}, {"image", "image/gif", ".gif", true}, {"image", "image/webp", ".webp", true},
+		{"video", "video/mp4", ".mp4", true}, {"video", "video/webm", ".webm", true}, {"video", "application/octet-stream", ".mp4", true},
+		{"audio", "audio/mpeg", ".mp3", true}, {"audio", "audio/wav", ".wav", true}, {"audio", "audio/ogg", ".ogg", true},
 	} {
 		if allowedMIME(tc.kind, tc.mime) != tc.ok {
 			t.Errorf("allowedMIME(%q,%q)", tc.kind, tc.mime)
@@ -136,5 +190,17 @@ func TestMediaHelpersAndLimitReader(t *testing.T) {
 	}
 	if _, err = reader.Read(b); err != errSizeLimit {
 		t.Fatalf("overflow err=%v", err)
+	}
+}
+
+func TestSafeDialAndInvalidLocalMockInputs(t *testing.T) {
+	if _, err := safeDialContext(context.Background(), "tcp", "127.0.0.1:80"); err == nil {
+		t.Fatal("safe dial accepted loopback")
+	}
+	store := storage.NewLocal(t.TempDir())
+	for _, raw := range []string{"https://example.test/file", "file://host/tmp/file", "not-a-url"} {
+		if _, err := ImportLocalMockFile(store, raw, "images", ".png", 10); err == nil {
+			t.Fatalf("invalid local mock URL %q accepted", raw)
+		}
 	}
 }

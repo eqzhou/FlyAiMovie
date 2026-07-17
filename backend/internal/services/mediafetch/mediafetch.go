@@ -81,11 +81,21 @@ func Download(ctx context.Context, store *storage.LocalStorage, rawURL, subdir, 
 	if err := ValidateRemoteURL(ctx, rawURL); err != nil {
 		return "", err
 	}
+	return downloadAuthorizedWithClient(ctx, mediaHTTPClient(), store, rawURL, subdir, kind, "")
+}
+
+func DownloadAuthorized(ctx context.Context, store *storage.LocalStorage, rawURL, subdir, kind, bearerToken string) (string, error) {
+	if err := ValidateRemoteURL(ctx, rawURL); err != nil {
+		return "", err
+	}
+	return downloadAuthorizedWithClient(ctx, mediaHTTPClient(), store, rawURL, subdir, kind, bearerToken)
+}
+
+func downloadAuthorizedWithClient(ctx context.Context, client *http.Client, store *storage.LocalStorage, rawURL, subdir, kind, bearerToken string) (string, error) {
 	limit := MaxVideoDownloadBytes
 	if kind == "image" {
 		limit = MaxImageDownloadBytes
 	}
-	client := mediaHTTPClient()
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many redirects")
@@ -95,6 +105,9 @@ func Download(ctx context.Context, store *storage.LocalStorage, rawURL, subdir, 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("create media request: %w", err)
+	}
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(bearerToken, "Bearer "))
 	}
 	resp, err := client.Do(req)
 	if err != nil {

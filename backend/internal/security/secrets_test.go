@@ -89,3 +89,68 @@ func TestMigrateAIConfigSecrets(t *testing.T) {
 		t.Fatalf("migration is not idempotent: %v", err)
 	}
 }
+
+func TestSecretBoundaryCases(t *testing.T) {
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "boundary-key")
+	if got, err := EncryptSecret(""); err != nil || got != "" {
+		t.Fatalf("empty encryption=%q err=%v", got, err)
+	}
+	already := encryptedPrefix + "already"
+	if got, err := EncryptSecret(already); err != nil || got != already {
+		t.Fatalf("already encrypted=%q err=%v", got, err)
+	}
+	for _, value := range []string{encryptedPrefix + "%%%", encryptedPrefix + "AA", encryptedPrefix + "AAAAAAAAAAAAAAAAAAAAAA"} {
+		if _, err := DecryptSecret(value); err == nil {
+			t.Fatalf("malformed ciphertext %q accepted", value)
+		}
+	}
+	ciphertext, err := EncryptSecret("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := ciphertext[:len(ciphertext)-1] + "A"
+	if _, err := DecryptSecret(tampered); err == nil {
+		t.Fatal("tampered ciphertext accepted")
+	}
+}
+
+func TestMigrateSecretsWithoutKeyRejectsEncryptedRows(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(t.TempDir()+"/missing-key.db"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(&models.AIServiceConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "temporary-key")
+	protected, err := EncryptSecret("provider-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := models.AIServiceConfig{ServiceType: "image", Name: "provider", BaseURL: "https://example.test", APIKey: protected, CreatedAt: "now", UpdatedAt: "now"}
+	if err := database.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "")
+	if err := MigrateAIConfigSecrets(database); err == nil {
+		t.Fatal("encrypted row accepted without key")
+	}
+}
+
+func TestMigratePlaintextWithoutKeyIsNoop(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(t.TempDir()+"/plaintext.db"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(&models.AIServiceConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	row := models.AIServiceConfig{ServiceType: "image", Name: "provider", BaseURL: "https://example.test", APIKey: "plain", CreatedAt: "now", UpdatedAt: "now"}
+	if err := database.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "")
+	if err := MigrateAIConfigSecrets(database); err != nil {
+		t.Fatal(err)
+	}
+}

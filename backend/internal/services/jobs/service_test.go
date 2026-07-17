@@ -74,6 +74,31 @@ func TestCancelJobAlsoCancelsTarget(t *testing.T) {
 	}
 }
 
+func TestCancelJobAlsoCancelsImageTarget(t *testing.T) {
+	service := testService(t)
+	nowText := now()
+	image := models.ImageGeneration{Status: "processing", CreatedAt: nowText, UpdatedAt: nowText}
+	if err := service.DB.Create(&image).Error; err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateForTarget("image.generate", "image_generation", image.ID, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cancel(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DB.First(&image, image.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if image.Status != "canceled" {
+		t.Fatalf("image status=%q", image.Status)
+	}
+	if err := service.Cancel(9999); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing cancel error=%v", err)
+	}
+}
+
 func TestJobEventsTrackLifecycle(t *testing.T) {
 	service := testService(t)
 	job, err := service.CreateForTargetOrganization(7, "video.generate", "video_generation", 43, "vidu", nil)
@@ -358,6 +383,62 @@ func TestOrganizationQuotaLimitsActiveAndDailyJobs(t *testing.T) {
 	}
 	if _, err := service.CreateForTargetOrganization(10, "audio.generate", "storyboard_tts", 3, "mock", nil); err != nil {
 		t.Fatalf("other organization was limited: %v", err)
+	}
+}
+
+func TestJobWrappersListsAndOwnedFailure(t *testing.T) {
+	service := testService(t)
+	payloadJob, err := service.CreateQueuedPayloadOrganization(30, "episode.merge", "episode_merge", 1, "ffmpeg", nil, `{"episode_id":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := service.CreateForTargetOrganization(31, "image.generate", "image_generation", 2, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := service.List("", "", 0)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("all=%v err=%v", all, err)
+	}
+	owned, err := service.ListOrganization(30, StatusQueued, "episode.merge", 500)
+	if err != nil || len(owned) != 1 || owned[0].ID != payloadJob.ID {
+		t.Fatalf("owned=%v err=%v", owned, err)
+	}
+	claimed, err := service.ClaimWaiting("worker-owned", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed=%v err=%v", claimed, err)
+	}
+	if !service.IsOwned(payloadJob.ID, "worker-owned") || service.IsOwned(payloadJob.ID, "other") {
+		t.Fatal("owned lease check failed")
+	}
+	if err := service.SetFailedOwned(payloadJob.ID, "worker-owned", "provider failed"); err != nil {
+		t.Fatal(err)
+	}
+	if service.IsOwned(payloadJob.ID, "worker-owned") {
+		t.Fatal("terminal job remained owned")
+	}
+	if err := service.SetSucceeded(other.ID, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(9999); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing get error=%v", err)
+	}
+	if err := service.SetFailedByTargetOrganization(99, "missing", 1, "missing"); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing target error=%v", err)
+	}
+	successByTarget, err := service.CreateForTarget("image.generate", "image_generation", 41, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetSucceededByTarget(successByTarget.TargetType, successByTarget.TargetID, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	failureByTarget, err := service.CreateForTarget("video.generate", "video_generation", 42, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetFailedByTarget(failureByTarget.TargetType, failureByTarget.TargetID, "failed"); err != nil {
+		t.Fatal(err)
 	}
 }
 

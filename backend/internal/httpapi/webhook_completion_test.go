@@ -101,3 +101,41 @@ func TestGenericWebhookIgnoresAmbiguousProviderTask(t *testing.T) {
 		t.Fatalf("ambiguous task changed %d records", changed)
 	}
 }
+
+func TestViduWebhookMapsNestedStatusAndRejectsReplay(t *testing.T) {
+	_, router := testServerRouter(t)
+	now := response.Now()
+	record := models.VideoGeneration{TaskID: "vidu-task-1", Status: "processing", Provider: "vidu", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	processingBody := `{"data":{"task_id":"vidu-task-1"},"status":"running"}`
+	headers := signedWebhookHeaders(processingBody, "vidu-processing-1", time.Now())
+	processing := performRequest(router, http.MethodPost, "/api/v1/webhooks/vidu", processingBody, headers)
+	if processing.Code != http.StatusOK {
+		t.Fatalf("processing status=%d body=%s", processing.Code, processing.Body.String())
+	}
+	replay := performRequest(router, http.MethodPost, "/api/v1/webhooks/vidu", processingBody, headers)
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"duplicate":true`) {
+		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+
+	failedBody := `{"id":"vidu-task-1","state":"failed","err_code":"E_PROVIDER","err_msg":"generation failed"}`
+	failed := performRequest(router, http.MethodPost, "/api/v1/webhooks/vidu", failedBody, signedWebhookHeaders(failedBody, "vidu-failed-1", time.Now()))
+	if failed.Code != http.StatusOK {
+		t.Fatalf("failed status=%d body=%s", failed.Code, failed.Body.String())
+	}
+	if err := db.DB.First(&record, record.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "failed" || !strings.Contains(record.ErrorMsg, "E_PROVIDER") {
+		t.Fatalf("record=%+v", record)
+	}
+
+	missingTask := `{"status":"completed"}`
+	bad := performRequest(router, http.MethodPost, "/api/v1/webhooks/vidu", missingTask, signedWebhookHeaders(missingTask, "vidu-missing-1", time.Now()))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("missing task status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}

@@ -252,7 +252,7 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 			StoryboardID:   &sid, DramaID: &did, Prompt: prompt,
 			ImageURL:      firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
 			FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage,
-			ReferenceMode: body.ReferenceMode, Duration: sb.Duration,
+			ReferenceMode: body.ReferenceMode, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration,
 		}
 		if err := s.Videos.Generate(c.Request.Context(), rec, body.ConfigID); err == nil {
 			out = append(out, rec.ID)
@@ -342,7 +342,7 @@ func (s *Server) storyboardGenerateVideo(c *gin.Context) {
 		StoryboardID:   &sid, DramaID: &did, Prompt: prompt,
 		ImageURL:      firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
 		FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage,
-		ReferenceMode: body.ReferenceMode, Duration: sb.Duration,
+		ReferenceMode: body.ReferenceMode, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration,
 	}
 	cfg := body.ConfigID
 	if cfg == nil {

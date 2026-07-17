@@ -48,6 +48,10 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
   await expect(page.getByText('Mock Image')).toBeVisible()
   await expect(page.getByText('生成配额')).toBeVisible()
+  await page.getByRole('combobox').nth(0).selectOption('video')
+  await expect(page.getByRole('combobox').nth(1)).toContainText('OpenAI Sora')
+  await page.getByRole('combobox').nth(0).selectOption('text')
+  await expect(page.getByRole('combobox').nth(1)).toContainText('本地 OpenAI Compatible')
 
   await page.goto('/drama/2/assets')
   await expect(page.getByRole('heading', { name: '素材项目 · 素材库' })).toBeVisible()

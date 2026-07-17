@@ -40,6 +40,7 @@ type ImagePollResult struct {
 type VideoGenInput struct {
 	Prompt             string
 	Duration           int
+	Size               string
 	AspectRatio        string
 	ReferenceMode      string
 	ImageURL           string
@@ -55,9 +56,10 @@ type VideoGenResult struct {
 }
 
 type VideoPollResult struct {
-	Status   string
-	VideoURL string
-	Error    string
+	Status      string
+	VideoURL    string
+	BearerToken string
+	Error       string
 }
 
 type TTSInput struct {

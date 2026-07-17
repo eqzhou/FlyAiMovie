@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/security"
 )
 
 func TestChatWithMaxTokensForwardsLimit(t *testing.T) {
@@ -93,5 +95,104 @@ func TestOrganizationConfigCannotCrossTenant(t *testing.T) {
 	}
 	if _, err := GetOrganizationConfig(1, "image", &row.ID); err == nil {
 		t.Fatal("tenant A selected tenant B config")
+	}
+}
+
+func TestConfigSelectionPriorityTaskFallbackAndDecryption(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/selection.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "selection-key")
+	protected, err := security.EncryptSecret("provider-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := response.Now()
+	rows := []models.AIServiceConfig{
+		{ServiceType: "text", Provider: "openai", Name: "priority", BaseURL: "https://priority.test", APIKey: "plain", Model: "priority-model", Priority: 100, IsActive: true, CreatedAt: now, UpdatedAt: now},
+		{ServiceType: "text", Provider: "openai", Name: "default", BaseURL: "https://default.test", APIKey: protected, Model: "default-model", IsDefault: true, IsActive: true, CreatedAt: now, UpdatedAt: now},
+		{OrganizationID: 7, ServiceType: "image", Provider: "mock", Name: "low", APIKey: "mock", Priority: 1, IsActive: true, CreatedAt: now, UpdatedAt: now},
+		{OrganizationID: 7, ServiceType: "image", Provider: "mock", Name: "high", APIKey: "mock", Priority: 9, IsActive: true, CreatedAt: now, UpdatedAt: now},
+	}
+	for i := range rows {
+		if err := database.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, err := GetActiveConfig("text", nil)
+	if err != nil || active.ID != rows[1].ID || active.APIKey != "provider-secret" {
+		t.Fatalf("active=%+v err=%v", active, err)
+	}
+	preferred, err := GetActiveConfig("text", &rows[0].ID)
+	if err != nil || preferred.ID != rows[0].ID {
+		t.Fatalf("preferred=%+v err=%v", preferred, err)
+	}
+	organization, err := GetOrganizationConfig(7, "image", nil)
+	if err != nil || organization.ID != rows[3].ID {
+		t.Fatalf("organization=%+v err=%v", organization, err)
+	}
+	if _, err := GetOrganizationConfig(0, "image", nil); err == nil {
+		t.Fatal("zero organization accepted")
+	}
+	task, err := GetTaskConfigOrganization(7, "image", nil)
+	if err != nil || task.ID != rows[3].ID {
+		t.Fatalf("task=%+v err=%v", task, err)
+	}
+	if _, err := GetActiveConfig("audio", nil); err == nil {
+		t.Fatal("missing active config accepted")
+	}
+	byID, err := GetByID(rows[1].ID)
+	if err != nil || byID.APIKey != "provider-secret" {
+		t.Fatalf("byID=%+v err=%v", byID, err)
+	}
+	if _, err := GetByID(9999); err == nil {
+		t.Fatal("missing config ID accepted")
+	}
+}
+
+func TestChatDefaultModelWrapperAndEmptyResponse(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			t.Errorf("path=%q", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] != "gpt-4o-mini" {
+			t.Errorf("model=%v", body["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"wrapper ok"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer server.Close()
+	cfg := &ServiceConfig{Provider: "openai_local", BaseURL: server.URL + "/", APIKey: ""}
+	result, err := Chat(context.Background(), cfg, "system", "user", 0)
+	if err != nil || result != "wrapper ok" {
+		t.Fatalf("result=%q err=%v", result, err)
+	}
+	if _, err := ChatWithMaxTokens(context.Background(), cfg, "system", "user", 0, 0); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("empty response error=%v", err)
+	}
+}
+
+func TestMapConfigDropsUnreadableEncryptedCredential(t *testing.T) {
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "temporary")
+	protected, err := security.EncryptSecret("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "")
+	mapped := mapConfig(models.AIServiceConfig{ID: 1, Provider: "openai", APIKey: protected})
+	if mapped.APIKey != "" {
+		t.Fatalf("unreadable credential leaked through: %+v", mapped)
 	}
 }

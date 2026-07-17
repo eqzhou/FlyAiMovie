@@ -127,12 +127,14 @@ test('desktop: complete workbench stages remain usable and script can be saved',
   await page.getByRole('button', { name: '添加分镜' }).click()
   await page.getByLabel('分镜标题').fill('新的镜头')
   await page.getByLabel('镜头描述').fill('人物走向站台出口')
+  await page.getByLabel('多参考图 URL（每行一个，最多 8 张）').fill('https://cdn.example/one.png\nhttps://cdn.example/two.png')
   await page.getByRole('button', { name: '保存分镜' }).click()
   await expect(page.getByText('分镜已添加')).toBeVisible()
   expect(storyboardCreateRequest?.postDataJSON()).toMatchObject({
     episode_id: 20,
     title: '新的镜头',
     description: '人物走向站台出口',
+    reference_images: '["https://cdn.example/one.png","https://cdn.example/two.png"]',
   })
 
   await page.getByRole('button', { name: '5. 合成导出' }).click()

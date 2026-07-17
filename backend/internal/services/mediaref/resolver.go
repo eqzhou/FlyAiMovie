@@ -118,6 +118,12 @@ func fit(source image.Image, max int) image.Image {
 		width = width * max / height
 		height = max
 	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
 	target := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {

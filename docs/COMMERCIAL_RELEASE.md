@@ -49,8 +49,8 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - AI provider 出站请求已统一使用连接级 DNS/IP 校验 Transport，并禁用环境代理绕过；正式发布仍需在实际网络、IPv6 和企业 DNS 环境中进行渗透 smoke test。
 - 已实现组织级写操作审计日志、组织 JSON 导出、双重确认删除及本地媒体补偿重试；正式发布仍需定义审计/补偿记录留存周期、可恢复备份流程和隐私政策；
 - Mock 全链路 E2E、厂商契约测试和关键包 80% 以上覆盖率；
-- 当前覆盖率为 52.7%，且没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test；不得在发布说明中标记为已完成。
-- OpenAI/Sora 视频 Adapter 尚未依据可访问的官方文档完成，本轮官方文档服务不可用；在正式契约和真实账号验收前不得把 Sora 标记为可用。
+- 当前覆盖率为 54.4%，且没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test；不得在发布说明中标记为已完成。
+- OpenAI/Sora 视频 Adapter 已依据官方 Videos API 完成创建、轮询、鉴权下载和本地首帧契约测试；尾帧与多参考输入会明确拒绝。真实账号 smoke test 通过前不得标记为生产可用。
 - Docker CLI 在当前验收机不可用，Compose 冷启动、PostgreSQL 干净环境初始化和数据卷恢复仍须在发布 CI/候选机执行。
 - 依赖漏洞扫描、SBOM、许可证归档和法务复核；
 - 生产密钥管理、TLS、反向代理、监控和告警。

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func TestAuthSetupLoginCSRFAndLogout(t *testing.T) {
@@ -77,6 +79,78 @@ func TestAuthSetupLoginCSRFAndLogout(t *testing.T) {
 	}`, nil)
 	if login.Code != http.StatusOK || responseCookie(t, login, "fly_session") == "" {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+}
+
+func TestAuthSetupSeedsOrganizationDefaultsWithoutLegacyRows(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AIServiceConfig{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AgentConfig{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	setup := performRequest(server.Router(), http.MethodPost, "/api/v1/auth/setup", `{
+		"organization_name":"Fresh Studio","email":"fresh@example.com",
+		"display_name":"Fresh Owner","password":"correct horse battery staple"
+	}`, nil)
+	if setup.Code != http.StatusCreated {
+		t.Fatalf("setup status=%d body=%s", setup.Code, setup.Body.String())
+	}
+	var organization models.Organization
+	if err := db.DB.Where("slug = ?", "fresh-studio").First(&organization).Error; err != nil {
+		t.Fatal(err)
+	}
+	var mockCount, agentCount int64
+	if err := db.DB.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND provider = ?", organization.ID, "mock").Count(&mockCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Model(&models.AgentConfig{}).Where("organization_id = ?", organization.ID).Count(&agentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if mockCount != 4 || agentCount != 5 {
+		t.Fatalf("organization defaults: mock=%d agents=%d", mockCount, agentCount)
+	}
+}
+
+func TestAuthSetupRollsBackWhenOrganizationDefaultsFail(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AIServiceConfig{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AgentConfig{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	callbackName := "test:fail-organization-defaults"
+	if err := db.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if _, ok := tx.Statement.Dest.(*models.AgentConfig); ok {
+			tx.AddError(errors.New("forced organization defaults failure"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.DB.Callback().Create().Remove(callbackName) })
+
+	setup := performRequest(server.Router(), http.MethodPost, "/api/v1/auth/setup", `{
+		"organization_name":"Rollback Studio","email":"rollback@example.com",
+		"display_name":"Rollback Owner","password":"correct horse battery staple"
+	}`, nil)
+	if setup.Code != http.StatusInternalServerError {
+		t.Fatalf("setup status=%d body=%s", setup.Code, setup.Body.String())
+	}
+	for name, model := range map[string]any{
+		"organizations": &models.Organization{}, "users": &models.User{}, "memberships": &models.Membership{},
+	} {
+		var count int64
+		if err := db.DB.Model(model).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count=%d after rollback", name, count)
+		}
 	}
 }
 

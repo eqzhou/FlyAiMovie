@@ -65,7 +65,7 @@ func (s *Server) createAIConfig(c *gin.Context) {
 	body.Provider = strings.ToLower(strings.TrimSpace(body.Provider))
 	body.Name = strings.TrimSpace(body.Name)
 	body.BaseURL = strings.TrimSpace(body.BaseURL)
-	if err := validateAIConfigInput(body.ServiceType, body.Provider, body.Name, body.BaseURL, body.APIKey); err != nil {
+	if err := s.validateAIConfigInput(body.ServiceType, body.Provider, body.Name, body.BaseURL, body.APIKey); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -174,7 +174,7 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 	if value, ok := body["api_key"].(string); ok && value != "" && !strings.Contains(value, "***") {
 		candidateAPIKey = value
 	}
-	if err := validateAIConfigInput(candidateType, candidateProvider, candidateName, candidateBaseURL, candidateAPIKey); err != nil {
+	if err := s.validateAIConfigInput(candidateType, candidateProvider, candidateName, candidateBaseURL, candidateAPIKey); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -212,6 +212,18 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 }
 
 func validateAIConfigInput(serviceType, provider, name, baseURL, apiKey string) error {
+	return validateAIConfigInputWithPrivateHosts(serviceType, provider, name, baseURL, apiKey, nil)
+}
+
+func (s *Server) validateAIConfigInput(serviceType, provider, name, baseURL, apiKey string) error {
+	allowedHosts := []string(nil)
+	if s != nil && s.Cfg != nil {
+		allowedHosts = s.Cfg.AI.AllowedPrivateBaseURLHosts
+	}
+	return validateAIConfigInputWithPrivateHosts(serviceType, provider, name, baseURL, apiKey, allowedHosts)
+}
+
+func validateAIConfigInputWithPrivateHosts(serviceType, provider, name, baseURL, apiKey string, allowedPrivateHosts []string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -229,16 +241,33 @@ func validateAIConfigInput(serviceType, provider, name, baseURL, apiKey string) 
 		return fmt.Errorf("base_url must not contain credentials, query, or fragment")
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal" || host == "metadata" {
+	if host == "metadata.google.internal" || host == "metadata" || host == "169.254.169.254" {
 		return fmt.Errorf("base_url host is not allowed")
 	}
-	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || !ip.IsGlobalUnicast()) {
+	privateHost := host == "localhost" || strings.HasSuffix(host, ".localhost")
+	if ip := net.ParseIP(host); ip != nil {
+		privateHost = ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || !ip.IsGlobalUnicast()
+	}
+	if provider == "openai_local" {
+		if serviceType != "text" || !containsHost(allowedPrivateHosts, host) {
+			return fmt.Errorf("local text base_url host must be explicitly allowed")
+		}
+	} else if privateHost {
 		return fmt.Errorf("base_url must use a public host")
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	if strings.TrimSpace(apiKey) == "" && provider != "openai_local" {
 		return fmt.Errorf("api_key is required")
 	}
 	return nil
+}
+
+func containsHost(allowed []string, host string) bool {
+	for _, candidate := range allowed {
+		if strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate)), ".") == host {
+			return true
+		}
+	}
+	return false
 }
 
 func aiConfigResponse(row models.AIServiceConfig) gin.H {
@@ -542,7 +571,13 @@ func (s *Server) registerVoices(api *gin.RouterGroup) {
 	api.POST("/ai-voices/sync", func(c *gin.Context) {
 		ts := response.Now()
 		organizationID := currentOrganizationID(c)
-		cfg, err := ai.GetOrganizationConfig(organizationID, "audio", nil)
+		var cfg *ai.ServiceConfig
+		var err error
+		if organizationID == 0 {
+			cfg, err = ai.GetActiveConfig("audio", nil)
+		} else {
+			cfg, err = ai.GetOrganizationConfig(organizationID, "audio", nil)
+		}
 		if err != nil {
 			response.BadRequest(c, err.Error())
 			return

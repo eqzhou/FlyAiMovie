@@ -515,46 +515,59 @@ func saveDedupCharacters(organizationID, dramaID, episodeID uint, args map[strin
 	}
 	ts := response.Now()
 	saved := 0
-	for _, it := range items {
-		if strings.TrimSpace(it.Name) == "" {
-			continue
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		for _, it := range items {
+			if strings.TrimSpace(it.Name) == "" {
+				continue
+			}
+			var existing models.Character
+			err := tx.Where("organization_id = ? AND drama_id = ? AND name = ? AND deleted_at IS NULL", organizationID, dramaID, it.Name).First(&existing).Error
+			var cid uint
+			if err == gorm.ErrRecordNotFound {
+				ch := models.Character{
+					OrganizationID: organizationID, DramaID: dramaID, Name: it.Name, Role: it.Role, Appearance: it.Appearance,
+					Personality: it.Personality, Description: it.Description, CreatedAt: ts, UpdatedAt: ts,
+				}
+				if err := tx.Create(&ch).Error; err != nil {
+					return err
+				}
+				cid = ch.ID
+			} else if err != nil {
+				return err
+			} else {
+				cid = existing.ID
+				updates := map[string]any{"updated_at": ts}
+				if it.Appearance != "" {
+					updates["appearance"] = it.Appearance
+				}
+				if it.Personality != "" {
+					updates["personality"] = it.Personality
+				}
+				if it.Description != "" {
+					updates["description"] = it.Description
+				}
+				if it.Role != "" {
+					updates["role"] = it.Role
+				}
+				if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+			var link models.EpisodeCharacter
+			err = tx.Where("organization_id = ? AND episode_id = ? AND character_id = ?", organizationID, episodeID, cid).First(&link).Error
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.Create(&models.EpisodeCharacter{OrganizationID: organizationID, EpisodeID: episodeID, CharacterID: cid, CreatedAt: ts}).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
+			saved++
 		}
-		var existing models.Character
-		err := db.DB.Where("organization_id = ? AND drama_id = ? AND name = ? AND deleted_at IS NULL", organizationID, dramaID, it.Name).First(&existing).Error
-		var cid uint
-		if err == gorm.ErrRecordNotFound {
-			ch := models.Character{
-				OrganizationID: organizationID, DramaID: dramaID, Name: it.Name, Role: it.Role, Appearance: it.Appearance,
-				Personality: it.Personality, Description: it.Description, CreatedAt: ts, UpdatedAt: ts,
-			}
-			if err := db.DB.Create(&ch).Error; err != nil {
-				return nil, err
-			}
-			cid = ch.ID
-		} else if err != nil {
-			return nil, err
-		} else {
-			cid = existing.ID
-			updates := map[string]any{"updated_at": ts}
-			if it.Appearance != "" {
-				updates["appearance"] = it.Appearance
-			}
-			if it.Personality != "" {
-				updates["personality"] = it.Personality
-			}
-			if it.Description != "" {
-				updates["description"] = it.Description
-			}
-			if it.Role != "" {
-				updates["role"] = it.Role
-			}
-			db.DB.Model(&existing).Updates(updates)
-		}
-		var link models.EpisodeCharacter
-		if err := db.DB.Where("organization_id = ? AND episode_id = ? AND character_id = ?", organizationID, episodeID, cid).First(&link).Error; err == gorm.ErrRecordNotFound {
-			db.DB.Create(&models.EpisodeCharacter{OrganizationID: organizationID, EpisodeID: episodeID, CharacterID: cid, CreatedAt: ts})
-		}
-		saved++
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return map[string]any{"saved": saved}, nil
 }
@@ -571,36 +584,52 @@ func saveDedupScenes(organizationID, dramaID, episodeID uint, args map[string]an
 	}
 	ts := response.Now()
 	saved := 0
-	for _, it := range items {
-		if strings.TrimSpace(it.Location) == "" {
-			continue
-		}
-		var existing models.Scene
-		err := db.DB.Where("organization_id = ? AND drama_id = ? AND location = ? AND time = ? AND deleted_at IS NULL", organizationID, dramaID, it.Location, it.Time).First(&existing).Error
-		var sid uint
-		if err == gorm.ErrRecordNotFound {
-			prompt := it.Prompt
-			if prompt == "" {
-				prompt = it.Location + ", " + it.Time
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		for _, it := range items {
+			if strings.TrimSpace(it.Location) == "" {
+				continue
 			}
-			sc := models.Scene{
-				OrganizationID: organizationID, DramaID: dramaID, EpisodeID: &episodeID, Location: it.Location, Time: it.Time,
-				Prompt: prompt, Status: "pending", CreatedAt: ts, UpdatedAt: ts,
+			var existing models.Scene
+			err := tx.Where("organization_id = ? AND drama_id = ? AND location = ? AND time = ? AND deleted_at IS NULL", organizationID, dramaID, it.Location, it.Time).First(&existing).Error
+			var sid uint
+			if err == gorm.ErrRecordNotFound {
+				prompt := it.Prompt
+				if prompt == "" {
+					prompt = it.Location + ", " + it.Time
+				}
+				sc := models.Scene{
+					OrganizationID: organizationID, DramaID: dramaID, EpisodeID: &episodeID, Location: it.Location, Time: it.Time,
+					Prompt: prompt, Status: "pending", CreatedAt: ts, UpdatedAt: ts,
+				}
+				if err := tx.Create(&sc).Error; err != nil {
+					return err
+				}
+				sid = sc.ID
+			} else if err != nil {
+				return err
+			} else {
+				sid = existing.ID
+				if strings.TrimSpace(it.Prompt) != "" {
+					if err := tx.Model(&existing).Updates(map[string]any{"prompt": it.Prompt, "updated_at": ts}).Error; err != nil {
+						return err
+					}
+				}
 			}
-			if err := db.DB.Create(&sc).Error; err != nil {
-				return nil, err
+			var link models.EpisodeScene
+			err = tx.Where("organization_id = ? AND episode_id = ? AND scene_id = ?", organizationID, episodeID, sid).First(&link).Error
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.Create(&models.EpisodeScene{OrganizationID: organizationID, EpisodeID: episodeID, SceneID: sid, CreatedAt: ts}).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
 			}
-			sid = sc.ID
-		} else if err != nil {
-			return nil, err
-		} else {
-			sid = existing.ID
+			saved++
 		}
-		var link models.EpisodeScene
-		if err := db.DB.Where("organization_id = ? AND episode_id = ? AND scene_id = ?", organizationID, episodeID, sid).First(&link).Error; err == gorm.ErrRecordNotFound {
-			db.DB.Create(&models.EpisodeScene{OrganizationID: organizationID, EpisodeID: episodeID, SceneID: sid, CreatedAt: ts})
-		}
-		saved++
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return map[string]any{"saved": saved}, nil
 }

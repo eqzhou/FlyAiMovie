@@ -47,6 +47,15 @@ ORG_SLUG="$(jq -er '.data.organization.slug' <<<"$setup")"
 CREATED_ORG=1
 
 configs="$(json_request GET /ai-configs | data)"
+agents="$(json_request GET /agent-configs | data)"
+if [[ "$(jq '[.[] | select(.provider == "mock")] | length' <<<"$configs")" != "4" ]]; then
+  echo "expected exactly 4 organization-scoped Mock service configurations" >&2
+  exit 1
+fi
+if [[ "$(jq 'length' <<<"$agents")" != "5" ]]; then
+  echo "expected exactly 5 organization-scoped Agent configurations" >&2
+  exit 1
+fi
 config_id() { jq -er --arg type "$1" '.[] | select(.provider=="mock" and .service_type==$type) | .id' <<<"$configs" | head -1; }
 IMAGE_CONFIG="$(config_id image)"
 VIDEO_CONFIG="$(config_id video)"
@@ -90,5 +99,5 @@ merge="$(json_request POST "/merge/episodes/$EPISODE_ID/merge" '{}')"
 wait_job "$(field job_id <<<"$merge")"
 
 final="$(json_request GET "/dramas/$DRAMA_ID")"
-jq -e '.data.episodes[0].video_url | length > 0' <<<"$final" >/dev/null
+jq -e --argjson episode_id "$EPISODE_ID" '.data.episodes[] | select(.id == $episode_id) | .video_url | length > 0' <<<"$final" >/dev/null
 echo "live E2E passed: drama=$DRAMA_ID episode=$EPISODE_ID storyboard=$STORYBOARD_ID"

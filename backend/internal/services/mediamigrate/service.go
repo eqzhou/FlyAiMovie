@@ -3,6 +3,7 @@ package mediamigrate
 import (
 	"context"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
@@ -111,11 +112,14 @@ func (s *Service) migrateOne(ctx context.Context, candidate Candidate) error {
 		case "video_generation":
 			update = tx.Model(&models.VideoGeneration{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"video_url": publicURL, "local_path": rel, "updated_at": response.Now()})
 		}
-		if update == nil || update.Error != nil {
-			if update != nil {
-				return update.Error
-			}
+		if update == nil {
 			return gorm.ErrInvalidData
+		}
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
 		}
 		if err := replaceMediaReferences(tx, candidate, publicURL); err != nil {
 			return err
@@ -124,6 +128,7 @@ func (s *Service) migrateOne(ctx context.Context, candidate Candidate) error {
 		return tx.Model(&record).Updates(map[string]any{"status": "completed", "local_path": rel, "last_error": "", "updated_at": completed, "completed_at": completed}).Error
 	})
 	if err != nil {
+		_ = os.Remove(s.Store.Abs(rel))
 		s.DB.Model(&record).Updates(map[string]any{"status": "failed", "last_error": err.Error(), "updated_at": response.Now()})
 	}
 	return err

@@ -33,7 +33,7 @@
 | P-16 | 本地离线演示 | 无外部密钥时通过 mock 走完整流程 | 已验收 | `TestMockPipelineEndToEnd` |
 | P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已实现：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
-| P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI/Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
+| P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI 图片与 Sora 视频、Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；Sora 尾帧/多参考输入会明确拒绝；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
 | P-20 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
 | P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
 | P-22 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库页面已接入 | `TestCharacterTemplateImportCreatesIndependentCharacter` |
@@ -50,9 +50,9 @@
 | N-03 | 未列入配置的跨域来源不获得 CORS 授权 | 已验收 | `TestCORSRejectsUntrustedOrigin` |
 | N-04 | 写入操作具备 schema 校验、事务和明确错误码 | 主要路径已加固：所有 JSON 解析错误均返回 400；主要更新接口拒绝空对象、未知字段、错误类型和越界值；严格未知字段/枚举审计仍待补 | `write_contracts_test.go`、`write_validation.go`、jobs/assets/AI config 测试 |
 | N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
-| N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；AI 自定义 `base_url` 拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；`TestValidateAIConfigRejectsNonPublicBaseURLs`、`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
+| N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；公共 AI 配置拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；仅开发环境可为 `openai_local` 精确放行本地文本主机，生产模式拒绝该白名单；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；AI 配置私网白名单与生产配置测试；`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
-| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：2026-07-17 全包实测 52.7%，HTTP 56.8%、jobs 70.5%，agents、generation、adapters 和迁移服务仍低于目标 | `go test ./... -coverprofile=...` |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：2026-07-18 全包实测 54.4%，HTTP 57.3%、adapters 52.2%、generation 35.3%、jobs 70.9%，agents、AI、generation 和迁移服务仍低于目标 | `go test ./... -coverprofile=...` |
 | N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 部分验收：Chrome 桌面 6 条通过，覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；本机缺少 Playwright WebKit，2 条移动端用例本轮未执行 | `frontend/tests/e2e/*.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
@@ -72,9 +72,9 @@
 
 ## 下一阶段完成标准
 
-- 补齐 P-01 至 P-10 的 Mock 集成/E2E 验收，并增加桌面和移动端 Playwright 关键流程。
-- 为组织邀请增加邮件发送适配；当前接口返回一次性 token，需由部署方接入邮件服务。撤销、重发和写操作审计已实现。
+- 扩展 Mock 集成/E2E 到异常恢复、服务重启和移动端关键流程。
+- 使用真实 SMTP 账号验收组织邀请和密码恢复投递；撤销、重发和写操作审计已实现。
 - 将核心 Go 包与前端关键业务逻辑覆盖率提升至 80% 以上。
 - 执行真实厂商账号 smoke test，并归档供应商协议版本与测试证据。
-- 为生成任务补金额预算和指数退避，为组织导出/删除补错误传播、可观测性和失败补偿。
+- 为生成任务补按厂商价格计算的金额预算；继续验证组织导出/删除的备份恢复流程。
 - 建立 Git 发布基线、生产部署配置、回滚流程、SBOM、漏洞扫描及许可证归档。

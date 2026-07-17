@@ -3,6 +3,8 @@ package generation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
@@ -56,6 +58,11 @@ func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration
 	}
 
 	imageURL, firstFrameURL, lastFrameURL := rec.ImageURL, rec.FirstFrameURL, rec.LastFrameURL
+	referenceImageURLs, err := parseVideoReferenceURLs(rec.ReferenceImageURLs)
+	if err != nil {
+		s.failJob(rec.OrganizationID, rec.ID, err)
+		return err
+	}
 	if s.References != nil {
 		for source, target := range map[*string]*string{&rec.ImageURL: &imageURL, &rec.FirstFrameURL: &firstFrameURL, &rec.LastFrameURL: &lastFrameURL} {
 			if *source == "" {
@@ -67,18 +74,25 @@ func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration
 				return err
 			}
 		}
+		referenceImageURLs, err = s.References.ResolveImages(ctx, cfg.Provider, referenceImageURLs)
+		if err != nil {
+			s.failJob(rec.OrganizationID, rec.ID, err)
+			return err
+		}
 	}
 	adapter := adapters.GetVideoAdapter(cfg.Provider)
 	result, err := adapter.Generate(ctx, adapters.AIConfig{
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
 	}, adapters.VideoGenInput{
-		Prompt:        rec.Prompt,
-		Duration:      rec.Duration,
-		AspectRatio:   rec.AspectRatio,
-		ReferenceMode: rec.ReferenceMode,
-		ImageURL:      imageURL,
-		FirstFrameURL: firstFrameURL,
-		LastFrameURL:  lastFrameURL,
+		Prompt:             rec.Prompt,
+		Duration:           rec.Duration,
+		Size:               rec.Resolution,
+		AspectRatio:        rec.AspectRatio,
+		ReferenceMode:      rec.ReferenceMode,
+		ImageURL:           imageURL,
+		FirstFrameURL:      firstFrameURL,
+		LastFrameURL:       lastFrameURL,
+		ReferenceImageURLs: referenceImageURLs,
 	})
 	if err != nil {
 		rec.Status = "failed"
@@ -100,8 +114,46 @@ func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration
 	return s.Finalize(ctx, rec, result.VideoURL)
 }
 
+func parseVideoReferenceURLs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}, nil
+	}
+	if strings.HasPrefix(raw, "data:") {
+		return []string{raw}, nil
+	}
+	values := []string(nil)
+	if strings.HasPrefix(raw, "[") {
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			return nil, fmt.Errorf("invalid reference image URLs: %w", err)
+		}
+	} else {
+		values = strings.Split(raw, ",")
+	}
+	clean := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			clean = append(clean, value)
+		}
+	}
+	if len(clean) > 8 {
+		return nil, fmt.Errorf("at most 8 video reference images are allowed")
+	}
+	return clean, nil
+}
+
 func (s *VideoService) Finalize(ctx context.Context, rec *models.VideoGeneration, videoURL string) error {
-	rel, err := mediafetch.Download(ctx, s.Store, videoURL, "videos", "video")
+	return s.FinalizeAuthorized(ctx, rec, videoURL, "")
+}
+
+func (s *VideoService) FinalizeAuthorized(ctx context.Context, rec *models.VideoGeneration, videoURL, bearerToken string) error {
+	var rel string
+	var err error
+	if bearerToken == "" {
+		rel, err = mediafetch.Download(ctx, s.Store, videoURL, "videos", "video")
+	} else {
+		rel, err = mediafetch.DownloadAuthorized(ctx, s.Store, videoURL, "videos", "video", bearerToken)
+	}
 	if err != nil {
 		rec.Status = "failed"
 		rec.ErrorMsg = err.Error()

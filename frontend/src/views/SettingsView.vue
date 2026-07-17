@@ -23,6 +23,7 @@ const agentForm = ref<any | null>(null)
 const providerChoices: Record<string, Array<{ value: string; label: string; base: string }>> = {
   text: [
     { value: 'openai', label: 'OpenAI / Compatible', base: 'https://api.openai.com' },
+    { value: 'openai_local', label: '本地 OpenAI Compatible', base: 'http://host.docker.internal:11434' },
     { value: 'chatfire', label: 'Chatfire Gateway', base: '' },
     { value: 'mock', label: 'Mock (离线演示)', base: 'http://localhost' },
   ],
@@ -36,6 +37,7 @@ const providerChoices: Record<string, Array<{ value: string; label: string; base
     { value: 'mock', label: 'Mock (离线演示)', base: 'http://localhost' },
   ],
   video: [
+    { value: 'openai', label: 'OpenAI Sora', base: 'https://api.openai.com' },
     { value: 'minimax', label: 'MiniMax Video', base: 'https://api.minimax.chat' },
     { value: 'volcengine', label: 'Volcengine Seedance', base: 'https://ark.cn-beijing.volces.com' },
     { value: 'vidu', label: 'Vidu', base: 'https://api.vidu.com' },
@@ -146,8 +148,9 @@ async function saveQuota() {
 }
 
 async function create() {
-  if (!form.value.name || (form.value.provider !== 'mock' && !form.value.api_key)) {
-    show(form.value.provider === 'mock' ? '名称必填' : '名称和 API Key 必填')
+  const keyOptional = ['mock', 'openai_local'].includes(form.value.provider)
+  if (!form.value.name || (!keyOptional && !form.value.api_key)) {
+    show(keyOptional ? '名称必填' : '名称和 API Key 必填')
     return
   }
   await settingsAPI.createAIConfig(form.value)

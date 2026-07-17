@@ -30,6 +30,54 @@ func testRouter(t *testing.T) http.Handler {
 	return router
 }
 
+func TestParseReferenceMediaValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		want      []string
+		wantError bool
+	}{
+		{name: "empty", value: "  ", want: []string{}},
+		{name: "data uri", value: "data:image/png;base64,AAAA", want: []string{"data:image/png;base64,AAAA"}},
+		{name: "json array", value: `["https://example.com/a.png", " /static/b.png "]`, want: []string{"https://example.com/a.png", "/static/b.png"}},
+		{name: "comma separated", value: "https://example.com/a.png, /static/b.png", want: []string{"https://example.com/a.png", "/static/b.png"}},
+		{name: "malformed json", value: `["https://example.com/a.png"`, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseReferenceMediaValues(tt.value)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for index := range tt.want {
+				if got[index] != tt.want[index] {
+					t.Fatalf("got %v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateReferenceMediaOwnershipRejectsMoreThanEightImages(t *testing.T) {
+	items := make([]string, 9)
+	for index := range items {
+		items[index] = "https://example.com/reference-" + strconv.Itoa(index) + ".png"
+	}
+	if err := validateReferenceMediaOwnership(nil, strings.Join(items, ",")); err == nil {
+		t.Fatal("expected more than eight reference images to be rejected")
+	}
+}
+
 func testServerRouter(t *testing.T) (*Server, http.Handler) {
 	t.Helper()
 	gdb, err := db.Open(t.TempDir() + "/test.db")

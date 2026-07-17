@@ -18,6 +18,7 @@ var imageAdapters = map[string]ImageProvider{
 
 var videoAdapters = map[string]VideoProvider{
 	"mock":       &MockVideoAdapter{},
+	"openai":     &OpenAIVideoAdapter{},
 	"minimax":    &MiniMaxVideoAdapter{},
 	"volcengine": &VolcengineVideoAdapter{},
 	"vidu":       &ViduVideoAdapter{},
@@ -57,7 +58,7 @@ func IsSupportedProvider(serviceType, provider string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	switch strings.ToLower(strings.TrimSpace(serviceType)) {
 	case "text":
-		return provider == "openai" || provider == "chatfire" || provider == "mock"
+		return provider == "openai" || provider == "openai_local" || provider == "chatfire" || provider == "mock"
 	case "image":
 		_, ok := imageAdapters[provider]
 		return ok

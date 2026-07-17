@@ -3,6 +3,8 @@ package generation
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
@@ -20,6 +23,106 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"gorm.io/gorm"
 )
+
+func TestVideoServiceForwardsStructuredReferenceImages(t *testing.T) {
+	database := generationDatabase(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		images, _ := body["images"].([]any)
+		if len(images) != 2 || images[0] != "https://cdn.example/a.png" || images[1] != "https://cdn.example/b.png" {
+			t.Errorf("images=%#v", images)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task_id":"vidu-multi-ref"}`))
+	}))
+	defer server.Close()
+	now := response.Now()
+	config := models.AIServiceConfig{OrganizationID: 1, ServiceType: "video", Provider: "vidu", Name: "vidu", BaseURL: server.URL, APIKey: "secret", Model: "vidu2.0", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&config).Error; err != nil {
+		t.Fatal(err)
+	}
+	references, _ := json.Marshal([]string{"https://cdn.example/a.png", "https://cdn.example/b.png"})
+	record := &models.VideoGeneration{OrganizationID: 1, Prompt: "consistent subject", ReferenceMode: "multi_ref", ReferenceImageURLs: string(references)}
+	service := &VideoService{Store: storage.NewLocal(t.TempDir()), Jobs: jobs.New(database)}
+	if err := service.Generate(context.Background(), record, &config.ID); err != nil {
+		t.Fatal(err)
+	}
+	if record.TaskID != "vidu-multi-ref" || record.Status != "processing" {
+		t.Fatalf("record=%+v", record)
+	}
+}
+
+func TestParseVideoReferenceURLsRejectsInvalidOrExcessiveInput(t *testing.T) {
+	dataURI := "data:image/png;base64,AAAA"
+	parsed, err := parseVideoReferenceURLs(dataURI)
+	if err != nil || len(parsed) != 1 || parsed[0] != dataURI {
+		t.Fatalf("data URI parsed as %#v with error %v", parsed, err)
+	}
+	if _, err := parseVideoReferenceURLs(`["https://cdn.example/a.png",3]`); err == nil {
+		t.Fatal("mixed JSON reference array accepted")
+	}
+	values := make([]string, 9)
+	for i := range values {
+		values[i] = "https://cdn.example/reference.png"
+	}
+	raw, _ := json.Marshal(values)
+	if _, err := parseVideoReferenceURLs(string(raw)); err == nil {
+		t.Fatal("excessive reference array accepted")
+	}
+}
+
+func TestParseImageReferenceURLsSupportsDataJSONAndLegacyLists(t *testing.T) {
+	dataURI := "data:image/png;base64,AAAA"
+	for _, tc := range []struct {
+		raw  string
+		want []string
+	}{
+		{"", []string{}},
+		{dataURI, []string{dataURI}},
+		{`["https://cdn.example/a.png", "https://cdn.example/b.png"]`, []string{"https://cdn.example/a.png", "https://cdn.example/b.png"}},
+		{" https://cdn.example/a.png, https://cdn.example/b.png ", []string{"https://cdn.example/a.png", "https://cdn.example/b.png"}},
+	} {
+		got, err := parseImageReferenceURLs(tc.raw)
+		if err != nil || len(got) != len(tc.want) {
+			t.Fatalf("parse %q = %#v, %v", tc.raw, got, err)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("parse %q = %#v", tc.raw, got)
+			}
+		}
+	}
+	if _, err := parseImageReferenceURLs(`["https://cdn.example/a.png", 3]`); err == nil {
+		t.Fatal("mixed reference array accepted")
+	}
+	if _, err := parseImageReferenceURLs(strings.Repeat("https://cdn.example/a.png,", 8) + "https://cdn.example/a.png"); err == nil {
+		t.Fatal("excessive reference list accepted")
+	}
+}
+
+func TestImageBase64ValidationUsesDetectedContentType(t *testing.T) {
+	service := &ImageService{Store: storage.NewLocal(t.TempDir())}
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := service.saveBase64(base64.StdEncoding.EncodeToString(imageData.Bytes()), "image/jpeg", "images")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Ext(rel) != ".png" {
+		t.Fatalf("extension=%q", filepath.Ext(rel))
+	}
+	if _, err := service.saveBase64(base64.StdEncoding.EncodeToString([]byte("<script>alert(1)</script>")), "image/png", "images"); err == nil {
+		t.Fatal("non-image provider payload accepted")
+	}
+	if _, err := service.saveBase64("not-base64", "image/png", "images"); err == nil {
+		t.Fatal("invalid base64 accepted")
+	}
+}
 
 func generationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -92,6 +195,40 @@ func TestImageSideEffectsRejectForeignOrganizationTarget(t *testing.T) {
 	}
 	if foreign.ImageURL != "original" {
 		t.Fatalf("foreign character was modified: %+v", foreign)
+	}
+}
+
+func TestImageSideEffectsUpdateScenePropAndStoryboardFrames(t *testing.T) {
+	database := generationDatabase(t)
+	now := response.Now()
+	scene := models.Scene{OrganizationID: 1, DramaID: 1, Location: "scene", CreatedAt: now, UpdatedAt: now}
+	prop := models.Prop{OrganizationID: 1, DramaID: 1, Name: "prop", CreatedAt: now, UpdatedAt: now}
+	storyboard := models.Storyboard{OrganizationID: 1, EpisodeID: 1, StoryboardNumber: 1, CreatedAt: now, UpdatedAt: now}
+	for _, row := range []any{&scene, &prop, &storyboard} {
+		if err := database.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &ImageService{}
+	service.ApplySideEffects(&models.ImageGeneration{OrganizationID: 1, SceneID: &scene.ID, PropID: &prop.ID, StoryboardID: &storyboard.ID, FrameType: "last_frame", ImageURL: "/static/last.png", LocalPath: "last.png"})
+	if err := database.First(&scene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.First(&prop, prop.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.First(&storyboard, storyboard.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scene.ImageURL != "/static/last.png" || scene.Status != "completed" || prop.ImageURL != "/static/last.png" || storyboard.LastFrameImage != "/static/last.png" {
+		t.Fatalf("scene=%+v prop=%+v storyboard=%+v", scene, prop, storyboard)
+	}
+	service.ApplySideEffects(&models.ImageGeneration{OrganizationID: 1, StoryboardID: &storyboard.ID, FrameType: "composed", ImageURL: "/static/composed.png"})
+	if err := database.First(&storyboard, storyboard.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storyboard.ComposedImage != "/static/composed.png" {
+		t.Fatalf("composed image=%q", storyboard.ComposedImage)
 	}
 }
 
@@ -218,6 +355,154 @@ func TestTTSServiceMockGenerationPersistsAudioAndAsset(t *testing.T) {
 	}
 	if asset.URL != url {
 		t.Fatalf("asset=%+v", asset)
+	}
+	legacyURL, err := service.GenerateForStoryboard(context.Background(), storyboard.ID, &config.ID)
+	if err != nil || legacyURL == "" {
+		t.Fatalf("legacy storyboard TTS=%q err=%v", legacyURL, err)
+	}
+}
+
+func TestTTSVoiceSampleAndLocalFileHelpers(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is required for mock tts")
+	}
+	database := generationDatabase(t)
+	now := response.Now()
+	config := models.AIServiceConfig{OrganizationID: 6, ServiceType: "audio", Provider: "mock", Name: "mock-audio", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, IsDefault: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&config).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyConfig := config
+	legacyConfig.ID = 0
+	legacyConfig.OrganizationID = 0
+	legacyConfig.Name = "legacy-mock-audio"
+	if err := database.Create(&legacyConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	store := storage.NewLocal(t.TempDir())
+	service := &TTSService{Store: store}
+	url, err := service.GenerateVoiceSampleOrganization(context.Background(), 6, "林岚", "mock-voice", &config.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs, err := EnsureLocalFile(store, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatal(err)
+	}
+	if !HasTTSContent("林岚：出发") || HasTTSContent("环境音：风声") {
+		t.Fatal("unexpected TTS content classification")
+	}
+	if _, err := EnsureLocalFile(store, ""); err == nil {
+		t.Fatal("empty local path accepted")
+	}
+	if _, err := service.generateForStoryboard(context.Background(), nil, &config.ID, 6); err == nil {
+		t.Fatal("nil storyboard accepted")
+	}
+	if _, err := service.GenerateForStoryboardOrganization(context.Background(), 6, 999, &config.ID); err == nil {
+		t.Fatal("missing storyboard accepted")
+	}
+	if _, err := service.GenerateForStoryboard(context.Background(), 999, &config.ID); err == nil {
+		t.Fatal("legacy entrypoint accepted missing storyboard")
+	}
+	legacyURL, err := service.GenerateVoiceSample(context.Background(), "旧角色", "mock-voice", &legacyConfig.ID)
+	if err != nil || legacyURL == "" {
+		t.Fatalf("legacy voice sample=%q err=%v", legacyURL, err)
+	}
+}
+
+func TestImageSaveUpload(t *testing.T) {
+	service := &ImageService{Store: storage.NewLocal(t.TempDir())}
+	rel, err := service.SaveUpload(strings.NewReader("upload"), "reference.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rel, "uploads/") {
+		t.Fatalf("relative path=%q", rel)
+	}
+}
+
+func TestGenerationRejectsMalformedReferenceArraysAndFailsJobs(t *testing.T) {
+	database := generationDatabase(t)
+	now := response.Now()
+	imageConfig := models.AIServiceConfig{OrganizationID: 14, ServiceType: "image", Provider: "mock", Name: "mock-image", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	videoConfig := models.AIServiceConfig{OrganizationID: 14, ServiceType: "video", Provider: "mock", Name: "mock-video", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&imageConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&videoConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	jobService := jobs.New(database)
+	imageRecord := &models.ImageGeneration{OrganizationID: 14, Prompt: "image", ReferenceImages: `["valid", 3]`}
+	imageService := &ImageService{Store: storage.NewLocal(t.TempDir()), Jobs: jobService}
+	if err := imageService.Generate(context.Background(), imageRecord, &imageConfig.ID); err == nil {
+		t.Fatal("malformed image references accepted")
+	}
+	videoRecord := &models.VideoGeneration{OrganizationID: 14, Prompt: "video", ReferenceImageURLs: `["valid", 3]`}
+	videoService := &VideoService{Store: storage.NewLocal(t.TempDir()), Jobs: jobService}
+	if err := videoService.Generate(context.Background(), videoRecord, &videoConfig.ID); err == nil {
+		t.Fatal("malformed video references accepted")
+	}
+	for _, jobID := range []*uint{imageRecord.JobID, videoRecord.JobID} {
+		if jobID == nil {
+			t.Fatal("failed generation did not create a job")
+		}
+		job, err := jobService.Get(*jobID)
+		if err != nil || job.Status != jobs.StatusFailed || job.LastError == "" {
+			t.Fatalf("job=%+v err=%v", job, err)
+		}
+	}
+}
+
+func TestFinalizeRejectsUnsafeProviderFilesAndFailsJobs(t *testing.T) {
+	database := generationDatabase(t)
+	jobService := jobs.New(database)
+	now := response.Now()
+	imageRecord := &models.ImageGeneration{OrganizationID: 15, Status: "processing", CreatedAt: now, UpdatedAt: now}
+	videoRecord := &models.VideoGeneration{OrganizationID: 15, Status: "processing", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(imageRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(videoRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	imageJob, err := jobService.CreateForTargetOrganization(15, "image.generate", "image_generation", imageRecord.ID, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	videoJob, err := jobService.CreateForTargetOrganization(15, "video.generate", "video_generation", videoRecord.ID, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageRecord.JobID = &imageJob.ID
+	videoRecord.JobID = &videoJob.ID
+	if err := (&ImageService{Store: storage.NewLocal(t.TempDir()), Jobs: jobService}).Finalize(context.Background(), imageRecord, "file:///etc/hosts"); err == nil {
+		t.Fatal("unsafe image file accepted")
+	}
+	if err := (&VideoService{Store: storage.NewLocal(t.TempDir()), Jobs: jobService}).Finalize(context.Background(), videoRecord, "file:///etc/hosts"); err == nil {
+		t.Fatal("unsafe video file accepted")
+	}
+	for _, id := range []uint{imageJob.ID, videoJob.ID} {
+		job, err := jobService.Get(id)
+		if err != nil || job.Status != jobs.StatusFailed {
+			t.Fatalf("job=%+v err=%v", job, err)
+		}
+	}
+}
+
+func TestGenerationRequiresExistingOrganizationConfig(t *testing.T) {
+	generationDatabase(t)
+	missing := uint(999)
+	imageRecord := &models.ImageGeneration{OrganizationID: 20, Prompt: "image"}
+	if err := (&ImageService{Store: storage.NewLocal(t.TempDir())}).Generate(context.Background(), imageRecord, &missing); err == nil {
+		t.Fatal("image generation accepted a missing config")
+	}
+	videoRecord := &models.VideoGeneration{OrganizationID: 20, Prompt: "video"}
+	if err := (&VideoService{Store: storage.NewLocal(t.TempDir())}).Generate(context.Background(), videoRecord, &missing); err == nil {
+		t.Fatal("video generation accepted a missing config")
 	}
 }
 

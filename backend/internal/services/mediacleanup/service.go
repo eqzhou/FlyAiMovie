@@ -118,7 +118,12 @@ func (s *Service) normalize(path string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("empty cleanup path")
 	}
-	if filepath.IsAbs(value) {
+	if strings.HasPrefix(filepath.ToSlash(value), "/static/") {
+		value = strings.TrimPrefix(filepath.ToSlash(value), "/static/")
+	} else if filepath.IsAbs(value) {
+		if resolvedValue, resolveErr := filepath.EvalSymlinks(value); resolveErr == nil {
+			value = resolvedValue
+		}
 		value, err = filepath.Rel(root, value)
 		if err != nil {
 			return "", err

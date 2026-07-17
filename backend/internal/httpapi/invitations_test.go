@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,35 @@ func TestOrganizationInvitationAcceptsNewUserOnce(t *testing.T) {
 	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
 	router := server.Router()
 	ownerCookie, ownerCSRF, organization := createTestActorSession(t, server, "invite-owner@example.com", "invite-owner", "owner")
+	for _, body := range []string{
+		`{"email":"bad","role":"viewer"}`,
+		`{"email":"invalid-role@example.com","role":"owner"}`,
+		`{"email":"invalid-ttl@example.com","role":"viewer","ttl_hours":999}`,
+	} {
+		invalid := performAuthRequest(router, http.MethodPost, "/api/v1/organization/members/invitations", body, ownerCookie, ownerCSRF)
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("invalid invitation status=%d body=%s", invalid.Code, invalid.Body.String())
+		}
+	}
 	created := performAuthRequest(router, http.MethodPost, "/api/v1/organization/members/invitations", `{"email":"invite-new@example.com","role":"editor","ttl_hours":24}`, ownerCookie, ownerCSRF)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create invitation status=%d body=%s", created.Code, created.Body.String())
+	}
+	missingRevoke := performAuthRequest(router, http.MethodDelete, "/api/v1/organization/members/invitations/99999", "", ownerCookie, ownerCSRF)
+	if missingRevoke.Code != http.StatusNotFound {
+		t.Fatalf("missing revoke status=%d body=%s", missingRevoke.Code, missingRevoke.Body.String())
+	}
+	invalidRevoke := performAuthRequest(router, http.MethodDelete, "/api/v1/organization/members/invitations/bad", "", ownerCookie, ownerCSRF)
+	if invalidRevoke.Code != http.StatusBadRequest {
+		t.Fatalf("invalid revoke status=%d body=%s", invalidRevoke.Code, invalidRevoke.Body.String())
+	}
+	invalidResend := performAuthRequest(router, http.MethodPost, "/api/v1/organization/members/invitations/bad/resend", "", ownerCookie, ownerCSRF)
+	if invalidResend.Code != http.StatusBadRequest {
+		t.Fatalf("invalid resend status=%d body=%s", invalidResend.Code, invalidResend.Body.String())
+	}
+	listed := performAuthRequest(router, http.MethodGet, "/api/v1/organization/members/invitations", "", ownerCookie, "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "invite-new@example.com") || strings.Contains(listed.Body.String(), "token_hash") {
+		t.Fatalf("list invitations status=%d body=%s", listed.Code, listed.Body.String())
 	}
 	token, ok := decodeResponse(t, created)["data"].(map[string]any)["token"].(string)
 	if !ok || token == "" {
