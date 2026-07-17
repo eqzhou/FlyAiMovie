@@ -15,10 +15,7 @@ backend/flyaimovie
 backend/server
 *.exe
 *.test
-.run/*.log
-.run/*.out
-.run/*.pid
-.run/flyaimovie-server*
+.run/
 logs/*.log
 .DS_Store
 .idea/
