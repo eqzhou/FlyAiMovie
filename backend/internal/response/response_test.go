@@ -1,6 +1,7 @@
 package response
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -36,5 +37,24 @@ func TestResponseHelpers(t *testing.T) {
 	}
 	if Now() == "" {
 		t.Fatal("Now returned empty string")
+	}
+}
+
+func TestSuccessSerializesNilSliceAsEmptyArray(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	var rows []string
+	Success(context, rows)
+
+	var payload struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if string(payload.Data) != "[]" {
+		t.Fatalf("data=%s want []", payload.Data)
 	}
 }

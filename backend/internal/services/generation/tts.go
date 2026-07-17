@@ -183,6 +183,11 @@ func parseDialogue(dialogue string) (speaker, pure string, ignorable bool) {
 	return speaker, pure, false
 }
 
+func HasTTSContent(dialogue string) bool {
+	_, _, ignorable := parseDialogue(dialogue)
+	return !ignorable
+}
+
 // EnsureLocalFile resolves a public /static URL or relative path to an absolute local path.
 func EnsureLocalFile(store *storage.LocalStorage, publicOrRel string) (string, error) {
 	if publicOrRel == "" {

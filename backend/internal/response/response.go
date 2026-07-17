@@ -2,17 +2,29 @@ package response
 
 import (
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 func Success(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": data, "message": "success"})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": normalizeData(data), "message": "success"})
 }
 
 func Created(c *gin.Context, data any) {
-	c.JSON(http.StatusCreated, gin.H{"code": 201, "data": data, "message": "created"})
+	c.JSON(http.StatusCreated, gin.H{"code": 201, "data": normalizeData(data), "message": "created"})
+}
+
+func normalizeData(data any) any {
+	if data == nil {
+		return nil
+	}
+	value := reflect.ValueOf(data)
+	if value.Kind() == reflect.Slice && value.IsNil() {
+		return reflect.MakeSlice(value.Type(), 0, 0).Interface()
+	}
+	return data
 }
 
 func BadRequest(c *gin.Context, message string) {

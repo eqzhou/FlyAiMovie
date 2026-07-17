@@ -15,6 +15,12 @@ const drama = {
   episodes: [episode, { id: 21, episode_number: 2, title: '第二集', content: '' }],
 }
 
+const aiConfigs = [
+  { id: 51, name: '图片 Mock', service_type: 'image', provider: 'mock' },
+  { id: 52, name: '视频 Mock', service_type: 'video', provider: 'mock' },
+  { id: 53, name: '音频 Mock', service_type: 'audio', provider: 'mock' },
+]
+
 const storyboard = {
   id: 40,
   storyboard_number: 1,
@@ -33,11 +39,14 @@ async function mockWorkbenchAPI(
   options: {
     onEpisodeUpdate?: (request: Request) => void
     onStoryboardCreate?: (request: Request) => void
-	onSceneCopy?: (request: Request) => void
+    onSceneCopy?: (request: Request) => void
     failDramaRequests?: number
+    failDramaCalls?: number[]
+    nullCollections?: boolean
   } = {},
 ) {
   let remainingDramaFailures = options.failDramaRequests ?? 0
+  let dramaCall = 0
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -45,7 +54,7 @@ async function mockWorkbenchAPI(
     let data: unknown = {}
 
     if (path === '/api/v1/auth/status') data = { enabled: false, setup_required: false }
-    else if (path === '/api/v1/dramas/2' && remainingDramaFailures > 0) {
+    else if (path === '/api/v1/dramas/2' && (++dramaCall, remainingDramaFailures > 0 || options.failDramaCalls?.includes(dramaCall))) {
       remainingDramaFailures -= 1
       await route.fulfill({
         status: 503,
@@ -55,13 +64,14 @@ async function mockWorkbenchAPI(
       return
     } else if (path === '/api/v1/dramas/2') data = drama
     else if (path === '/api/v1/episodes/20/characters') {
-      data = [{ id: 30, name: '林夏', role: '主角', appearance: '短发，蓝色外套', voice_style: '' }]
+      data = options.nullCollections ? null : [{ id: 30, name: '林夏', role: '主角', appearance: '短发，蓝色外套', voice_style: '' }]
     } else if (path === '/api/v1/episodes/20/scenes') {
-      data = [{ id: 31, location: '旧车站', time: '黄昏', prompt: '雨后的站台' }]
-    } else if (path === '/api/v1/episodes/20/storyboards') data = [storyboard]
+      data = options.nullCollections ? null : [{ id: 31, location: '旧车站', time: '黄昏', prompt: '雨后的站台' }]
+    } else if (path === '/api/v1/episodes/20/storyboards') data = options.nullCollections ? null : [storyboard]
     else if (path === '/api/v1/episodes/20/pipeline-status') {
       data = { has_script: true, characters: 1, scenes: 1, storyboards: 1, with_video: 0, with_tts: 0, composed: 0 }
-    } else if (path === '/api/v1/grid/history') data = []
+    } else if (path === '/api/v1/ai-configs') data = aiConfigs
+    else if (path === '/api/v1/grid/history') data = []
     else if (path === '/api/v1/assets') data = []
     else if (path === '/api/v1/jobs') data = []
     else if (path === '/api/v1/ai-voices') data = []
@@ -71,9 +81,9 @@ async function mockWorkbenchAPI(
     } else if (path === '/api/v1/storyboards' && request.method() === 'POST') {
       options.onStoryboardCreate?.(request)
       data = { ...storyboard, id: 41, storyboard_number: 2 }
-	} else if (path === '/api/v1/scenes/31/copy' && request.method() === 'POST') {
-	  options.onSceneCopy?.(request)
-	  data = { id: 32, location: '旧车站', episode_id: 21 }
+    } else if (path === '/api/v1/scenes/31/copy' && request.method() === 'POST') {
+      options.onSceneCopy?.(request)
+      data = { id: 32, location: '旧车站', episode_id: 21 }
     }
 
     await route.fulfill({
@@ -137,6 +147,45 @@ test('desktop: failed initial load is actionable and can be retried', async ({ p
   await expect(page.getByRole('alert')).toContainText('服务暂时不可用')
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '验收短剧 · 第一集' })).toBeVisible()
+})
+
+test('desktop: a failed background refresh does not blank the loaded workbench', async ({ page }) => {
+  await mockWorkbenchAPI(page, { failDramaCalls: [2] })
+  await page.goto('/drama/2/episode/1')
+
+  await expect(page.getByRole('heading', { name: '验收短剧 · 第一集' })).toBeVisible()
+  await page.getByRole('button', { name: '2. 角色 / 场景' }).click()
+  await expect(page.getByRole('heading', { name: '角色' })).toBeVisible()
+  await expect(page.getByText('林夏')).toBeVisible()
+})
+
+test('desktop: null collection responses are treated as empty lists', async ({ page }) => {
+  await mockWorkbenchAPI(page, { nullCollections: true })
+  await page.goto('/drama/2/episode/1')
+
+  await expect(page.getByRole('heading', { name: '验收短剧 · 第一集' })).toBeVisible()
+  await page.getByRole('button', { name: '2. 角色 / 场景' }).click()
+  await expect(page.getByRole('heading', { name: '角色' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '场景' })).toBeVisible()
+})
+
+test('desktop: an existing episode can bind newly added generation configs', async ({ page }) => {
+  let updateRequest: Request | undefined
+  await mockWorkbenchAPI(page, { onEpisodeUpdate: request => { updateRequest = request } })
+  await page.goto('/drama/2/episode/1')
+
+  await page.getByRole('button', { name: '生成配置' }).click()
+  await page.getByLabel('图片配置').selectOption('51')
+  await page.getByLabel('视频配置').selectOption('52')
+  await page.getByLabel('音频配置').selectOption('53')
+  await page.getByRole('button', { name: '保存配置' }).click()
+
+  await expect(page.getByText('生成配置已更新')).toBeVisible()
+  expect(updateRequest?.postDataJSON()).toEqual({
+    image_config_id: 51,
+    video_config_id: 52,
+    audio_config_id: 53,
+  })
 })
 
 test('desktop: scene can be copied to another episode', async ({ page }) => {

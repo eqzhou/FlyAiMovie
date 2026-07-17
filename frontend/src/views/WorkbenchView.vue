@@ -16,6 +16,7 @@ const scenes = ref<any[]>([])
 const storyboards = ref<any[]>([])
 const status = ref<any>(null)
 const voices = ref<any[]>([])
+const configs = ref<any[]>([])
 const gridHist = ref<any[]>([])
 const tab = ref<'script' | 'cast' | 'grid' | 'boards' | 'export'>('script')
 const rawContent = ref('')
@@ -46,6 +47,7 @@ const characterForm = ref<any | null>(null)
 const sceneForm = ref<any | null>(null)
 const sceneTransfer = ref<any | null>(null)
 const storyboardForm = ref<any | null>(null)
+const episodeConfigForm = ref<any | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
@@ -69,14 +71,26 @@ function show(msg: string) {
   setTimeout(() => (toast.value = ''), 2600)
 }
 
+function listOf(value: unknown): any[] {
+  return Array.isArray(value) ? value.filter(Boolean) : []
+}
+
 async function load() {
-  drama.value = await dramaAPI.get(dramaId.value)
-  episode.value = (drama.value.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
-  if (!episode.value) return
-  rawContent.value = episode.value.content || ''
+  const loadedDrama = await dramaAPI.get(dramaId.value)
+  const loadedEpisode = (loadedDrama.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
+  drama.value = loadedDrama
+  if (!loadedEpisode) {
+    episode.value = null
+    return
+  }
+  episode.value = loadedEpisode
+  rawContent.value = loadedEpisode.content || ''
   await refreshAssets()
   try {
-    voices.value = await settingsAPI.voices()
+    voices.value = listOf(await settingsAPI.voices())
+  } catch { /* optional */ }
+  try {
+    configs.value = listOf(await settingsAPI.aiConfigs())
   } catch { /* optional */ }
 }
 
@@ -88,7 +102,6 @@ async function loadWorkbench() {
     await load()
     if (!episode.value) loadError.value = '未找到对应剧集'
   } catch (error) {
-    episode.value = null
     loadError.value = error instanceof Error ? error.message : '加载失败'
   } finally {
     loading.value = false
@@ -97,26 +110,30 @@ async function loadWorkbench() {
 }
 
 async function refreshAssets() {
-  if (!episode.value) return
-  characters.value = await episodeAPI.characters(episode.value.id)
-  scenes.value = await episodeAPI.scenes(episode.value.id)
-  storyboards.value = await episodeAPI.storyboards(episode.value.id)
-  status.value = await episodeAPI.pipelineStatus(episode.value.id)
+  const currentEpisode = episode.value
+  if (!currentEpisode) return
+  const episodeId = currentEpisode.id
+  characters.value = listOf(await episodeAPI.characters(episodeId))
+  scenes.value = listOf(await episodeAPI.scenes(episodeId))
+  storyboards.value = listOf(await episodeAPI.storyboards(episodeId))
+  status.value = await episodeAPI.pipelineStatus(episodeId)
   try {
-    gridHist.value = await gridAPI.history({ episode_id: episode.value.id })
+    gridHist.value = listOf(await gridAPI.history({ episode_id: episodeId }))
   } catch { gridHist.value = [] }
   try {
-    assets.value = await assetAPI.list({ episode_id: episode.value.id })
+    assets.value = listOf(await assetAPI.list({ episode_id: episodeId }))
   } catch { assets.value = [] }
   try {
-    jobs.value = await jobsAPI.list({ limit: 50 })
+    jobs.value = listOf(await jobsAPI.list({ limit: 50 }))
   } catch { jobs.value = [] }
   if (!selectedShotIds.value.length && storyboards.value.length) {
     selectedShotIds.value = storyboards.value.map((s: any) => s.id)
   }
   // refresh episode video_url
-  drama.value = await dramaAPI.get(dramaId.value)
-  episode.value = (drama.value.episodes || []).find((e: any) => e.episode_number === episodeNumber.value) || episode.value
+  const refreshedDrama = await dramaAPI.get(dramaId.value)
+  const refreshedEpisode = (refreshedDrama.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
+  drama.value = refreshedDrama
+  if (refreshedEpisode) episode.value = refreshedEpisode
 }
 
 function startPoll() {
@@ -136,6 +153,34 @@ async function saveContent() {
   await episodeAPI.update(episode.value.id, { content: rawContent.value })
   show('已保存原文')
   await load()
+}
+
+function openEpisodeConfig() {
+  const firstConfig = (serviceType: string) => configs.value.find((item) => item.service_type === serviceType)?.id || 0
+  episodeConfigForm.value = {
+    image_config_id: episode.value.image_config_id || firstConfig('image'),
+    video_config_id: episode.value.video_config_id || firstConfig('video'),
+    audio_config_id: episode.value.audio_config_id || firstConfig('audio'),
+  }
+}
+
+async function saveEpisodeConfig() {
+  const form = episodeConfigForm.value
+  if (!form?.image_config_id || !form?.video_config_id || !form?.audio_config_id) {
+    show('请选择图片、视频和音频配置')
+    return
+  }
+  busy.value = 'episode-config'
+  try {
+    await episodeAPI.update(episode.value.id, { ...form })
+    episodeConfigForm.value = null
+    show('生成配置已更新')
+    await load()
+  } catch (error: any) {
+    show(error.message || '生成配置保存失败')
+  } finally {
+    busy.value = ''
+  }
 }
 
 async function runAgent(type: string, message: string) {
@@ -400,7 +445,7 @@ async function batchTTS() {
       episode_id: episode.value.id,
       storyboard_ids: selectedShotIds.value,
     })
-    show(`配音任务已排队 ok=${res.ok} fail=${res.fail}`)
+    show(`配音任务已排队 ok=${res.ok} skipped=${res.skipped || 0} fail=${res.fail}`)
     await refreshAssets()
   } catch (e: any) {
     show(e.message)
@@ -678,6 +723,7 @@ onUnmounted(stopPoll)
         <p class="page-desc">制作工作台 · 剧本 → 角色场景 → 宫格帧 → 分镜视频 → 合成导出</p>
       </div>
       <div class="row">
+        <button class="btn" @click="openEpisodeConfig">生成配置</button>
         <button class="btn" @click="loadWorkbench">刷新</button>
         <button class="btn" @click="router.push(`/drama/${dramaId}`)">返回项目</button>
       </div>
@@ -814,24 +860,24 @@ onUnmounted(stopPoll)
                     <button class="btn" :disabled="!!busy" @click="genSceneImage(sc)">生成场景</button>
                     <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('scene', sc, $event)" /></label>
                     <button class="btn" :disabled="!!busy" @click="editScene(sc)">编辑</button>
-					<button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
-					<button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
+                    <button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
+                    <button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
                     <button class="btn btn-danger" :disabled="!!busy" @click="removeScene(sc)">删除</button>
                   </div>
                 </div>
               </div>
               <div v-if="!scenes.length" class="empty">尚未提取场景</div>
             </div>
-			<div v-if="sceneTransfer" class="modal-mask" @click.self="sceneTransfer=null">
-			  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scene-transfer-title">
-				<h3 id="scene-transfer-title">{{ sceneTransfer.mode === 'copy' ? '复制场景' : '迁移场景' }}</h3>
-				<div class="field"><label for="scene-target-episode">目标剧集</label><select id="scene-target-episode" v-model.number="sceneTransfer.target_episode_id">
-				  <option :value="0">请选择</option><option v-for="item in (drama?.episodes || []).filter((row:any) => row.id !== episode.id)" :key="item.id" :value="item.id">第 {{ item.episode_number }} 集 · {{ item.title }}</option>
-				</select></div>
-				<label v-if="sceneTransfer.mode === 'move'" class="row" style="align-items:center"><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
-				<div class="modal-actions"><button class="btn" @click="sceneTransfer=null">取消</button><button class="btn btn-primary" :disabled="!!busy" @click="confirmSceneTransfer">确认</button></div>
-			  </div>
-			</div>
+            <div v-if="sceneTransfer" class="modal-mask" @click.self="sceneTransfer=null">
+              <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scene-transfer-title">
+                <h3 id="scene-transfer-title">{{ sceneTransfer.mode === 'copy' ? '复制场景' : '迁移场景' }}</h3>
+                <div class="field"><label for="scene-target-episode">目标剧集</label><select id="scene-target-episode" v-model.number="sceneTransfer.target_episode_id">
+                  <option :value="0">请选择</option><option v-for="item in (drama?.episodes || []).filter((row:any) => row.id !== episode?.id)" :key="item.id" :value="item.id">第 {{ item.episode_number }} 集 · {{ item.title }}</option>
+                </select></div>
+                <label v-if="sceneTransfer.mode === 'move'" class="row" style="align-items:center"><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
+                <div class="modal-actions"><button class="btn" @click="sceneTransfer=null">取消</button><button class="btn btn-primary" :disabled="!!busy" @click="confirmSceneTransfer">确认</button></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1049,6 +1095,37 @@ onUnmounted(stopPoll)
         <div v-if="log" class="panel" style="margin-top:16px">
           <h3 style="margin-top:0">Agent / 任务输出</h3>
           <pre class="log-box">{{ log }}</pre>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="episodeConfigForm" class="modal-mask" @click.self="episodeConfigForm=null">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="episode-config-title">
+        <h3 id="episode-config-title">剧集生成配置</h3>
+        <div class="field">
+          <label for="episode-image-config">图片配置</label>
+          <select id="episode-image-config" v-model.number="episodeConfigForm.image_config_id">
+            <option :value="0">请选择</option>
+            <option v-for="item in configs.filter(row => row.service_type === 'image')" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="episode-video-config">视频配置</label>
+          <select id="episode-video-config" v-model.number="episodeConfigForm.video_config_id">
+            <option :value="0">请选择</option>
+            <option v-for="item in configs.filter(row => row.service_type === 'video')" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="episode-audio-config">音频配置</label>
+          <select id="episode-audio-config" v-model.number="episodeConfigForm.audio_config_id">
+            <option :value="0">请选择</option>
+            <option v-for="item in configs.filter(row => row.service_type === 'audio')" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" @click="episodeConfigForm=null">取消</button>
+          <button class="btn btn-primary" :disabled="!!busy" @click="saveEpisodeConfig">保存配置</button>
         </div>
       </div>
     </div>

@@ -286,11 +286,15 @@ func (s *Server) batchGenerateTTS(c *gin.Context) {
 			ids = append(ids, r.ID)
 		}
 	}
-	ok, fail := 0, 0
+	ok, skipped, fail := 0, 0, 0
 	for _, id := range ids {
 		var sb models.Storyboard
 		if err := organizationDB(c).First(&sb, id).Error; err != nil {
 			fail++
+			continue
+		}
+		if !generation.HasTTSContent(sb.Dialogue) {
+			skipped++
 			continue
 		}
 		var ep models.Episode
@@ -303,7 +307,7 @@ func (s *Server) batchGenerateTTS(c *gin.Context) {
 			ok++
 		}
 	}
-	response.Success(c, gin.H{"ok": ok, "fail": fail})
+	response.Success(c, gin.H{"ok": ok, "skipped": skipped, "fail": fail})
 }
 
 func (s *Server) storyboardGenerateVideo(c *gin.Context) {
