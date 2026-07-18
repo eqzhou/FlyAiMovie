@@ -946,6 +946,7 @@ onUnmounted(stopPoll)
             <button class="btn" :disabled="!!busy" @click="addStoryboard">添加分镜</button>
             <button class="btn" :disabled="!!busy" @click="batchFrames('first_frame')">批量首帧</button>
             <button class="btn" :disabled="!!busy" @click="batchFrames('last_frame')">批量尾帧</button>
+            <button class="btn" :disabled="!!busy" @click="batchFrames('composed')">批量分镜板</button>
             <button class="btn" :disabled="!!busy" @click="batchVideos">批量视频</button>
             <button class="btn" :disabled="!!busy" @click="batchTTS">批量配音</button>
           </div>
@@ -1010,12 +1011,18 @@ onUnmounted(stopPoll)
                   <img v-if="sb.last_frame_image" :src="sb.last_frame_image" />
                   <span v-else class="muted" style="font-size:11px">空</span>
                 </div>
+                <div class="frame-box">
+                  <span class="frame-label">分镜板</span>
+                  <img v-if="sb.composed_image" :src="sb.composed_image" />
+                  <span v-else class="muted" style="font-size:11px">空</span>
+                </div>
               </div>
               <video v-if="sb.video_url" class="media" style="width:100%;margin-top:6px" :src="sb.video_url" controls />
               <audio v-if="sb.tts_audio_url" :src="sb.tts_audio_url" controls style="width:100%;margin-top:6px" />
               <div class="mini-actions">
                 <button class="btn" :disabled="!!busy" @click="genFrame(sb,'first_frame')">首帧</button>
                 <button class="btn" :disabled="!!busy" @click="genFrame(sb,'last_frame')">尾帧</button>
+                <button class="btn" :disabled="!!busy" @click="genFrame(sb,'composed')">分镜板</button>
                 <button class="btn" :disabled="!!busy" @click="genVideo(sb)">视频</button>
                 <button class="btn" :disabled="!!busy" @click="genTTS(sb)">配音</button>
                 <button class="btn" :disabled="!!busy" @click="composeShot(sb)">合成</button>

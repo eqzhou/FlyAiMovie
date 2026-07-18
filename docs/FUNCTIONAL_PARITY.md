@@ -13,6 +13,15 @@
 
 `已实现` 表示存在可运行路径，不等于已经达到生产质量。只有绑定自动化用例后，能力才可标记为 `已验收`。
 
+### 2026-07-18 公开能力差异审计
+
+审计基线仍为上游公开 HEAD `ad1cd7cd0127389ce8304aa9ebda3cfc8f406a6d`。逐项对照公开 README 中的角色管理、分镜制作、视频生成、资源管理、五类 Agent、多厂商配置和 Docker 部署后，用户可观察的公开功能均已有独立实现与自动化证据。本轮关闭了最后两个证据缺口：
+
+- 分镜板此前只能由宫格或素材复用写入，现在支持单镜头/批量直接生成、预览和严格帧类型校验；
+- 浏览器 Live E2E 此前只覆盖账号、设置、邀请和素材，现在会从页面实际完成剧本改写、角色场景提取、分镜拆解、首帧/分镜板/视频/TTS、镜头合成与整集导出。
+
+仍存在的差异属于有意的 clean-room 技术实现差异或外部验收门槛：后端使用 Go + PostgreSQL/SQLite，不采用上游 TypeScript/Mastra/Drizzle；真实厂商、真实 SMTP、公开 HTTPS 和许可证归档仍需对应账号或发布环境，不能由 Mock/契约测试替代。
+
 | 编号 | 用户能力 | 可观察结果 | 当前实现 | 自动验收 |
 |---|---|---|---|---|
 | P-01 | 创建短剧与多集 | 项目和指定集数持久化，可继续编辑 | 已验收 | `TestMockAgentAndGridWorkflow` |
@@ -22,7 +31,7 @@
 | P-05 | 场景与道具资产 | 创建、编辑、生成和复用素材 | 已验收 Mock 主路径：场景/道具创建、Mock 形象生成、素材库登记和跨项目归属校验 | `TestMockAssetGenerationWorkflow`、`TestImageUploadBindsPropAndRegistersAsset`、素材归属回归测试 |
 | P-06 | 分镜拆解与编辑 | 得到有序镜头，可增删改镜头字段 | 已验收：Mock Agent 写回有序分镜；工作台支持手工新增、字段编辑和删除，API 另有归属回归覆盖 | `TestMockAgentAndGridWorkflow`、router 资源归属测试、`frontend/tests/e2e/workbench.spec.ts` |
 | P-07 | 宫格工作流 | 生成提示词和宫格图，切分并分配到镜头帧 | 已验收：Mock HTTP 流程覆盖提示词、出图、FFmpeg 切分和首帧写回 | `TestMockAgentAndGridWorkflow` |
-| P-08 | 镜头帧生成 | 支持首帧、尾帧和批量生成 | 已验收 Mock 主路径：首帧生成写回分镜，批量入口和首尾/多参考模式已有归属校验 | `TestMockPipelineEndToEnd`、`TestMockAgentAndGridWorkflow`、pipeline 归属回归测试 |
+| P-08 | 镜头帧生成 | 支持首帧、尾帧、分镜板和批量生成 | 已验收 Mock 主路径：三类帧均可在工作台直接生成并预览；非法帧类型返回 400；帧/视频/TTS 批量入口在执行前校验分镜集归属 | `TestMockPipelineEndToEnd`、`TestMockAgentAndGridWorkflow`、`TestStoryboardFrameGenerationValidatesAndPersistsComposedFrame`、`TestBatchGenerationRejectsStoryboardsFromAnotherEpisode`、Live browser E2E |
 | P-09 | 图生视频 | 单镜头/批量提交，展示状态和结果 | 已验收 Mock 主路径：单镜头生成、异步任务轮询、结果写回和批量提交 | `TestMockPipelineEndToEnd`、`TestAsyncVideoPollingCompletesPersistentJob` |
 | P-10 | TTS 配音 | 单镜头/批量生成并可试听 | 已验收 Mock 主路径：队列任务、音频落盘、分镜写回和试听 URL | `TestMockPipelineEndToEnd` |
 | P-11 | 镜头合成 | 视频、音频、字幕合成为镜头成片 | 已验收：持久任务执行 FFmpeg，支持字幕、取消、租约和恢复 | Mock FFmpeg compose E2E；`TestComposeShotAndMergeEpisode`、`TestComposeAndMergeValidationAndCancellation` |
@@ -54,7 +63,7 @@
 | N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；公共 AI 配置拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；仅开发环境可为 `openai_local` 精确放行本地文本主机，生产模式拒绝该白名单；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；AI 配置私网白名单与生产配置测试；`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
 | N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-07-18 全包实测 80.1%；`go test ./... -race -count=1`、`go vet ./...` 通过 | `go test ./... -coverprofile=...` |
-| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：桌面 9 条、390px 移动端 2 条通过，覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；本机未安装 WebKit，Safari 内核仍需在发布 CI 补测 | `frontend/tests/e2e/*.spec.ts` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：Mock 桌面/390px 移动流程覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；PostgreSQL Live Chrome 从页面完成剧本到整集成片以及账号管理；Safari/WebKit 仍需在发布 CI 补测 | `frontend/tests/e2e/*.spec.ts`、`frontend/tests/live/local-system.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
 | N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务、活跃任务和每日金额预算；按厂商/任务类型预留估算成本，成功任务记录实际成本，幂等请求不重复计额，超限返回 429，并暴露预算使用量和预警状态 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestCostEstimationAndBudgetReservation`、`TestOrganizationQuotaIsScopedAndAdminManaged` |

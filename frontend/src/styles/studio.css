@@ -172,7 +172,7 @@ button { cursor: pointer; }
 .shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .shot-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev); padding: 12px; }
 .shot-card h4 { margin: 0 0 8px; font-size: 14px; }
-.frame-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.frame-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
 .frame-box {
   border: 1px dashed var(--border); border-radius: 8px; min-height: 96px; background: #0f131b;
   display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative;

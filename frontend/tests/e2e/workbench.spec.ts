@@ -39,6 +39,7 @@ async function mockWorkbenchAPI(
   options: {
     onEpisodeUpdate?: (request: Request) => void
     onStoryboardCreate?: (request: Request) => void
+    onFrameGenerate?: (request: Request) => void
     onSceneCopy?: (request: Request) => void
     failDramaRequests?: number
     failDramaCalls?: number[]
@@ -81,6 +82,9 @@ async function mockWorkbenchAPI(
     } else if (path === '/api/v1/storyboards' && request.method() === 'POST') {
       options.onStoryboardCreate?.(request)
       data = { ...storyboard, id: 41, storyboard_number: 2 }
+    } else if (path === '/api/v1/storyboards/40/generate-frame' && request.method() === 'POST') {
+      options.onFrameGenerate?.(request)
+      data = { id: 90, image_url: '/static/storyboard-board.png', frame_type: 'composed' }
     } else if (path === '/api/v1/scenes/31/copy' && request.method() === 'POST') {
       options.onSceneCopy?.(request)
       data = { id: 32, location: '旧车站', episode_id: 21 }
@@ -97,9 +101,11 @@ async function mockWorkbenchAPI(
 test('desktop: complete workbench stages remain usable and script can be saved', async ({ page }) => {
   let updateRequest: Request | undefined
   let storyboardCreateRequest: Request | undefined
+  let frameGenerateRequest: Request | undefined
   await mockWorkbenchAPI(page, {
     onEpisodeUpdate: (request) => { updateRequest = request },
     onStoryboardCreate: (request) => { storyboardCreateRequest = request },
+    onFrameGenerate: (request) => { frameGenerateRequest = request },
   })
   await page.goto('/drama/2/episode/1')
 
@@ -136,6 +142,9 @@ test('desktop: complete workbench stages remain usable and script can be saved',
     description: '人物走向站台出口',
     reference_images: '["https://cdn.example/one.png","https://cdn.example/two.png"]',
   })
+  await page.getByRole('button', { name: '分镜板', exact: true }).click()
+  await expect(page.getByText('帧图任务已提交')).toBeVisible()
+  expect(frameGenerateRequest?.postDataJSON()).toMatchObject({ frame_type: 'composed', episode_id: 20 })
 
   await page.getByRole('button', { name: '5. 合成导出' }).click()
   await expect(page.getByRole('button', { name: '拼接导出成片' })).toBeVisible()

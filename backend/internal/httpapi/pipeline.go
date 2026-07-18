@@ -51,9 +51,12 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
-	if body.FrameType == "" {
-		body.FrameType = "first_frame"
+	frameType, err := normalizeStoryboardFrameType(body.FrameType)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
+	body.FrameType = frameType
 	var sb models.Storyboard
 	if err := organizationDB(c).First(&sb, id).Error; err != nil {
 		response.NotFound(c, "storyboard not found")
@@ -144,9 +147,16 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 		response.BadRequest(c, "invalid body")
 		return
 	}
-	if body.FrameType == "" {
-		body.FrameType = "first_frame"
+	if len(body.StoryboardIDs) == 0 && body.EpisodeID == 0 {
+		response.BadRequest(c, "storyboard_ids or episode_id is required")
+		return
 	}
+	frameType, err := normalizeStoryboardFrameType(body.FrameType)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	body.FrameType = frameType
 	ids := body.StoryboardIDs
 	if len(ids) == 0 && body.EpisodeID > 0 {
 		var rows []models.Storyboard
@@ -154,6 +164,9 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
+	}
+	if !ensureBatchStoryboardEpisode(c, ids, body.EpisodeID) {
+		return
 	}
 	if body.ConfigID != nil {
 		if err := validateAIConfigReferenceFor(c, *body.ConfigID, "image"); err != nil {
@@ -204,6 +217,37 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 	response.Success(c, gin.H{"count": len(out), "ids": out, "errors": errs})
 }
 
+func normalizeStoryboardFrameType(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "", "first_frame":
+		return "first_frame", nil
+	case "last_frame":
+		return "last_frame", nil
+	case "composed", "storyboard":
+		return "composed", nil
+	default:
+		return "", fmt.Errorf("frame_type must be first_frame, last_frame or composed")
+	}
+}
+
+func ensureBatchStoryboardEpisode(c *gin.Context, ids []uint, episodeID uint) bool {
+	if episodeID == 0 || len(ids) == 0 {
+		return true
+	}
+	var mismatched int64
+	if err := organizationDB(c).Model(&models.Storyboard{}).
+		Where("id IN ? AND deleted_at IS NULL AND episode_id <> ?", ids, episodeID).
+		Count(&mismatched).Error; err != nil {
+		response.ServerError(c, "failed to validate storyboard ownership")
+		return false
+	}
+	if mismatched > 0 {
+		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "storyboard does not belong to episode"})
+		return false
+	}
+	return true
+}
+
 func (s *Server) batchGenerateVideos(c *gin.Context) {
 	var body struct {
 		StoryboardIDs []uint `json:"storyboard_ids"`
@@ -232,6 +276,9 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
+	}
+	if !ensureBatchStoryboardEpisode(c, ids, body.EpisodeID) {
+		return
 	}
 	out := make([]uint, 0)
 	for _, id := range ids {
@@ -285,6 +332,9 @@ func (s *Server) batchGenerateTTS(c *gin.Context) {
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
+	}
+	if !ensureBatchStoryboardEpisode(c, ids, body.EpisodeID) {
+		return
 	}
 	ok, skipped, fail := 0, 0, 0
 	for _, id := range ids {
