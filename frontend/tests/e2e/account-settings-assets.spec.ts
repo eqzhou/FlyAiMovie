@@ -62,6 +62,36 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(page.getByText('车站参考图')).toBeVisible()
 })
 
+test('desktop: project creation marks and validates required fields', async ({ page }) => {
+  let created: Request | undefined
+  await mockAccountAPI(page)
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/v1/dramas' && request.method() === 'POST') created = request
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建项目' }).click()
+
+  const dialog = page.getByRole('dialog', { name: '新建短剧项目' })
+  await expect(dialog.getByText('* 为必填项')).toBeVisible()
+  await expect(dialog.getByLabel(/标题.*\*/)).toBeVisible()
+  await expect(dialog.getByLabel(/风格.*\*/)).toBeVisible()
+  await expect(dialog.getByLabel(/集数.*\*/)).toBeVisible()
+
+  await dialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('请填写项目标题')
+  await expect(dialog.getByLabel(/标题.*\*/)).toBeFocused()
+
+  await dialog.getByLabel(/标题.*\*/).fill('必填校验项目')
+  await dialog.getByLabel(/集数.*\*/).fill('0')
+  await dialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('集数必须是 1 到 50 之间的整数')
+
+  await dialog.getByLabel(/集数.*\*/).fill('2')
+  await dialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(created?.postDataJSON()).toMatchObject({ title: '必填校验项目', style: 'realistic', total_episodes: 2 })
+})
+
 test('desktop: invitation preview and acceptance submit the expected payload', async ({ page }) => {
   let accepted: Request | undefined
   await mockAccountAPI(page)

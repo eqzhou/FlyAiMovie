@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { dramaAPI } from '../api'
 
@@ -9,6 +9,9 @@ const loading = ref(true)
 const showCreate = ref(false)
 const form = ref({ title: '', description: '', style: 'realistic', total_episodes: 1 })
 const err = ref('')
+const formError = ref('')
+const titleInput = ref<HTMLInputElement | null>(null)
+const episodeInput = ref<HTMLInputElement | null>(null)
 
 async function load() {
   loading.value = true
@@ -23,11 +26,44 @@ async function load() {
 }
 
 async function create() {
-  if (!form.value.title.trim()) return
-  await dramaAPI.create(form.value)
+  formError.value = ''
+  const title = form.value.title.trim()
+  if (!title) {
+    formError.value = '请填写项目标题'
+    await nextTick()
+    titleInput.value?.focus()
+    return
+  }
+  if (!form.value.style) {
+    formError.value = '请选择项目风格'
+    return
+  }
+  const episodeCount = Number(form.value.total_episodes)
+  if (!Number.isInteger(episodeCount) || episodeCount < 1 || episodeCount > 50) {
+    formError.value = '集数必须是 1 到 50 之间的整数'
+    await nextTick()
+    episodeInput.value?.focus()
+    return
+  }
+  try {
+    await dramaAPI.create({ ...form.value, title, total_episodes: episodeCount })
+    closeCreate()
+    form.value = { title: '', description: '', style: 'realistic', total_episodes: 1 }
+    await load()
+  } catch (e: any) {
+    formError.value = e.message || '创建项目失败，请稍后重试'
+  }
+}
+
+function openCreate() {
+  formError.value = ''
+  showCreate.value = true
+  nextTick(() => titleInput.value?.focus())
+}
+
+function closeCreate() {
+  formError.value = ''
   showCreate.value = false
-  form.value = { title: '', description: '', style: 'realistic', total_episodes: 1 }
-  await load()
 }
 
 async function delDrama(d: any) {
@@ -58,7 +94,7 @@ onMounted(load)
         <h1 class="page-title">短剧项目</h1>
         <p class="page-desc">{{ dramas.length }} 个项目 · 一句话到成片</p>
       </div>
-      <button class="btn btn-primary" @click="showCreate = true">新建项目</button>
+      <button class="btn btn-primary" @click="openCreate">新建项目</button>
     </div>
 
     <p v-if="err" class="muted">{{ err }}</p>
@@ -87,27 +123,29 @@ onMounted(load)
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
       </div>
-      <div v-if="!dramas.length" class="card empty" @click="showCreate = true">还没有项目，点击创建</div>
+      <div v-if="!dramas.length" class="card empty" @click="openCreate">还没有项目，点击创建</div>
     </div>
 
-    <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false">
-      <div class="modal">
-        <h3>新建短剧项目</h3>
-        <div class="field"><label>标题</label><input v-model="form.title" placeholder="例如：雨夜重逢" /></div>
-        <div class="field"><label>简介</label><textarea v-model="form.description" rows="3" /></div>
-        <div class="field"><label>风格</label>
-          <select v-model="form.style">
+    <div v-if="showCreate" class="modal-mask" @click.self="closeCreate">
+      <form class="modal" role="dialog" aria-modal="true" aria-labelledby="create-drama-title" novalidate @submit.prevent="create">
+        <h3 id="create-drama-title">新建短剧项目</h3>
+        <p class="form-required-note"><span class="required-mark" aria-hidden="true">*</span> 为必填项</p>
+        <div class="field"><label for="drama-title">标题 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-title" ref="titleInput" v-model="form.title" placeholder="例如：雨夜重逢" maxlength="200" required :aria-invalid="!!formError && !form.title.trim()" /></div>
+        <div class="field"><label for="drama-description">简介（选填）</label><textarea id="drama-description" v-model="form.description" rows="3" maxlength="10000" /></div>
+        <div class="field"><label for="drama-style">风格 <span class="required-mark" aria-hidden="true">*</span></label>
+          <select id="drama-style" v-model="form.style" required>
             <option value="realistic">写实</option>
             <option value="anime">动漫</option>
             <option value="cinematic">电影感</option>
           </select>
         </div>
-        <div class="field"><label>集数</label><input v-model.number="form.total_episodes" type="number" min="1" max="50" /></div>
+        <div class="field"><label for="drama-episodes">集数 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-episodes" ref="episodeInput" v-model.number="form.total_episodes" type="number" min="1" max="50" step="1" required /></div>
+        <p v-if="formError" class="auth-error" role="alert">{{ formError }}</p>
         <div class="modal-actions">
-          <button class="btn" @click="showCreate = false">取消</button>
-          <button class="btn btn-primary" @click="create">创建</button>
+          <button class="btn" type="button" @click="closeCreate">取消</button>
+          <button class="btn btn-primary" type="submit">创建</button>
         </div>
-      </div>
+      </form>
     </div>
   </div>
 </template>

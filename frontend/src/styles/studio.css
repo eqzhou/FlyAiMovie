@@ -45,6 +45,8 @@ button { cursor: pointer; }
 .auth-form h1 { margin: 0 0 24px; font-size: 24px; }
 .auth-submit { width: 100%; justify-content: center; min-height: 42px; }
 .auth-error { margin: 0 0 12px; color: var(--danger); font-size: 13px; }
+.form-required-note { margin: -4px 0 12px; color: var(--muted); font-size: 12px; }
+.required-mark { color: var(--danger); font-weight: 700; }
 .load-error { max-width: 520px; margin: 48px auto 0; text-align: center; }
 .load-error h2 { margin: 0 0 8px; font-size: 20px; }
 .load-error p { margin: 0 0 16px; overflow-wrap: anywhere; }
