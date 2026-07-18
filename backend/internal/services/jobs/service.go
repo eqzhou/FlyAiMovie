@@ -3,11 +3,13 @@ package jobs
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -21,9 +23,10 @@ const (
 )
 
 var (
-	ErrJobNotFound   = errors.New("job not found")
-	ErrTerminalJob   = errors.New("terminal job cannot transition")
-	ErrQuotaExceeded = errors.New("generation quota exceeded")
+	ErrJobNotFound    = errors.New("job not found")
+	ErrTerminalJob    = errors.New("terminal job cannot transition")
+	ErrQuotaExceeded  = errors.New("generation quota exceeded")
+	ErrBudgetExceeded = errors.New("generation budget exceeded")
 )
 
 type Service struct {
@@ -78,7 +81,8 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		if err := enforceQuota(tx, organizationID); err != nil {
+		estimatedCost := EstimateCost(kind, targetType, provider)
+		if err := enforceQuota(tx, organizationID, estimatedCost); err != nil {
 			return err
 		}
 		timestamp := now()
@@ -87,7 +91,8 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 			OrganizationID: organizationID, Kind: kind, Status: initialStatus, TargetType: targetType, TargetID: targetID,
 			ConfigID: configID, Provider: provider, Attempt: 1, MaxAttempts: 3,
 			Progress: 1, Stage: initialStatus, StatusMessage: "job created", Currency: "CNY", AvailableAt: timestamp, LeaseExpiresAt: &leaseExpiry, PayloadJSON: payload,
-			CreatedAt: timestamp, UpdatedAt: timestamp,
+			EstimatedCost: estimatedCost,
+			CreatedAt:     timestamp, UpdatedAt: timestamp,
 		}
 		if initialStatus == StatusRunning {
 			job.StartedAt = &timestamp
@@ -103,12 +108,12 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 	return &job, nil
 }
 
-func enforceQuota(tx *gorm.DB, organizationID uint) error {
+func enforceQuota(tx *gorm.DB, organizationID uint, estimatedCost float64) error {
 	if organizationID == 0 {
 		return nil
 	}
-	quota := models.OrganizationQuota{OrganizationID: organizationID, DailyJobLimit: 200, MaxActiveJobs: 10}
-	if err := tx.Where("organization_id = ?", organizationID).First(&quota).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	quota := models.OrganizationQuota{OrganizationID: organizationID, DailyJobLimit: 200, MaxActiveJobs: 10, BudgetWarningPercent: 80}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ?", organizationID).First(&quota).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	var active int64
@@ -126,7 +131,64 @@ func enforceQuota(tx *gorm.DB, organizationID uint) error {
 	if quota.DailyJobLimit > 0 && daily >= int64(quota.DailyJobLimit) {
 		return fmt.Errorf("%w: daily job limit reached", ErrQuotaExceeded)
 	}
+	if quota.DailyBudgetCNY > 0 && estimatedCost > 0 {
+		var reserved float64
+		if err := tx.Model(&models.GenerationJob{}).
+			Where("organization_id = ? AND created_at >= ? AND status NOT IN ?", organizationID, startOfDay, []string{StatusSucceeded, StatusFailed, StatusCanceled}).
+			Select("COALESCE(SUM(estimated_cost), 0)").Scan(&reserved).Error; err != nil {
+			return err
+		}
+		var spent float64
+		if err := tx.Model(&models.GenerationJob{}).
+			Where("organization_id = ? AND created_at >= ?", organizationID, startOfDay).
+			Select("COALESCE(SUM(actual_cost), 0)").Scan(&spent).Error; err != nil {
+			return err
+		}
+		if spent+reserved+estimatedCost > quota.DailyBudgetCNY {
+			return fmt.Errorf("%w: daily budget %.2f CNY exceeded", ErrBudgetExceeded, quota.DailyBudgetCNY)
+		}
+	}
 	return nil
+}
+
+// EstimateCost is deliberately conservative and provider-specific. It gives
+// the organization budget a deterministic reservation before a provider call;
+// a later provider billing integration can replace these defaults.
+func EstimateCost(kind, targetType, provider string) float64 {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" || provider == "mock" {
+		return 0
+	}
+	switch targetType {
+	case "image_generation":
+		switch provider {
+		case "openai":
+			return 0.04
+		case "gemini", "chatfire", "ali", "volcengine":
+			return 0.03
+		case "minimax":
+			return 0.05
+		}
+	case "video_generation":
+		switch provider {
+		case "openai":
+			return 0.50
+		case "minimax":
+			return 0.30
+		case "volcengine", "vidu", "ali":
+			return 0.20
+		}
+	case "storyboard_tts":
+		if provider == "minimax" {
+			return 0.02
+		}
+	case "storyboard_compose", "episode_compose", "episode_merge":
+		return 0.01
+	}
+	if strings.Contains(strings.ToLower(kind), "tts") && provider == "minimax" {
+		return 0.02
+	}
+	return 0
 }
 
 // RenewLease extends a worker lease only while that worker still owns it.
@@ -175,6 +237,9 @@ func (s *Service) transitionOwnedNoTx(id uint, owner, target string, extra map[s
 		updates["completed_at"] = now()
 		updates["lease_owner"] = ""
 		updates["lease_expires_at"] = nil
+		if target == StatusSucceeded {
+			updates["actual_cost"] = job.EstimatedCost
+		}
 	}
 	applyStageFields(updates, target)
 	result := s.DB.Model(&models.GenerationJob{}).
@@ -562,6 +627,9 @@ func (s *Service) transitionNoTx(id uint, target string, extra map[string]any) e
 		updates["completed_at"] = timestamp
 		updates["lease_owner"] = ""
 		updates["lease_expires_at"] = nil
+		if target == StatusSucceeded {
+			updates["actual_cost"] = job.EstimatedCost
+		}
 	}
 	applyStageFields(updates, target)
 	result := s.DB.Model(&models.GenerationJob{}).

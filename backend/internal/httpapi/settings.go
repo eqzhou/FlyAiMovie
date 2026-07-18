@@ -105,6 +105,10 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
+	if err := rejectUnknownFields(body, "service_type", "provider", "name", "base_url", "model", "endpoint", "query_endpoint", "settings", "api_key", "priority", "is_default", "is_active"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	updates := map[string]any{"updated_at": response.Now()}
 	for _, key := range []string{"service_type", "provider", "name", "base_url", "model", "endpoint", "query_endpoint", "settings"} {
 		value, exists, fieldErr := stringUpdate(body, key, maxTextRunes)
@@ -401,6 +405,10 @@ func (s *Server) updateAgentConfig(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid JSON body")
+		return
+	}
+	if err := rejectUnknownFields(body, "model", "name", "description", "system_prompt", "temperature", "max_tokens", "max_iterations", "is_active"); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := map[string]any{"updated_at": response.Now()}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,6 +22,24 @@ const (
 	maxNameRunes = 200
 	maxTextRunes = 20_000
 )
+
+func rejectUnknownFields(body map[string]any, allowed ...string) error {
+	known := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		known[field] = struct{}{}
+	}
+	unknown := make([]string, 0)
+	for field := range body {
+		if _, ok := known[field]; !ok {
+			unknown = append(unknown, field)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("unknown field %q", unknown[0])
+}
 
 func stringUpdate(body map[string]any, key string, maxRunes int) (string, bool, error) {
 	value, exists := body[key]

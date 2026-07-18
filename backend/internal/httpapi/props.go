@@ -78,6 +78,10 @@ func (s *Server) updateProp(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
+	if err := rejectUnknownFields(body, "name", "type", "description", "prompt", "image_url", "local_path"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	updates := map[string]any{"updated_at": response.Now()}
 	for _, k := range []string{"name", "type", "description", "prompt", "image_url", "local_path"} {
 		maxRunes := maxTextRunes

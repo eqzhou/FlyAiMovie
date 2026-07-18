@@ -93,6 +93,23 @@ func TestUpdateEndpointsRejectEmptyAndUnknownBodies(t *testing.T) {
 			})
 		}
 	}
+	mixedBodies := map[string]string{
+		"/api/v1/dramas/" + itoa(drama.ID):              `{"title":"updated","unknown":"field"}`,
+		"/api/v1/episodes/" + itoa(episode.ID):          `{"title":"updated","unknown":"field"}`,
+		"/api/v1/characters/" + itoa(character.ID):      `{"name":"updated","unknown":"field"}`,
+		"/api/v1/scenes/" + itoa(scene.ID):              `{"location":"updated","unknown":"field"}`,
+		"/api/v1/storyboards/" + itoa(storyboard.ID):    `{"title":"updated","unknown":"field"}`,
+		"/api/v1/props/" + itoa(prop.ID):                `{"name":"updated","unknown":"field"}`,
+		"/api/v1/assets/" + itoa(asset.ID):              `{"name":"updated","unknown":"field"}`,
+		"/api/v1/ai-configs/" + itoa(aiConfig.ID):       `{"name":"updated","unknown":"field"}`,
+		"/api/v1/agent-configs/" + itoa(agentConfig.ID): `{"name":"updated","unknown":"field"}`,
+	}
+	for path, body := range mixedBodies {
+		got := performRequest(router, http.MethodPut, path, body, nil)
+		if got.Code != http.StatusBadRequest || !strings.Contains(got.Body.String(), "unknown field") {
+			t.Errorf("%s: status=%d want 400 unknown field; body=%s", path, got.Code, got.Body.String())
+		}
+	}
 }
 
 func TestResourceWritesRejectWrongTypesAndOversizedNames(t *testing.T) {

@@ -77,9 +77,11 @@ type AuditLog struct {
 }
 
 type OrganizationQuota struct {
-	OrganizationID uint   `gorm:"primaryKey" json:"organization_id"`
-	DailyJobLimit  int    `gorm:"not null;default:200" json:"daily_job_limit"`
-	MaxActiveJobs  int    `gorm:"not null;default:10" json:"max_active_jobs"`
-	CreatedAt      string `gorm:"not null" json:"created_at"`
-	UpdatedAt      string `gorm:"not null" json:"updated_at"`
+	OrganizationID       uint    `gorm:"primaryKey" json:"organization_id"`
+	DailyJobLimit        int     `gorm:"not null;default:200" json:"daily_job_limit"`
+	MaxActiveJobs        int     `gorm:"not null;default:10" json:"max_active_jobs"`
+	DailyBudgetCNY       float64 `gorm:"not null;default:0" json:"daily_budget_cny"`
+	BudgetWarningPercent int     `gorm:"not null;default:80" json:"budget_warning_percent"`
+	CreatedAt            string  `gorm:"not null" json:"created_at"`
+	UpdatedAt            string  `gorm:"not null" json:"updated_at"`
 }

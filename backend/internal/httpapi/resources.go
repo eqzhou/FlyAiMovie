@@ -100,11 +100,16 @@ func (s *Server) updateCharacter(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
+	if err := rejectUnknownFields(body, "name", "role", "description", "appearance", "personality", "voice_style", "voiceStyle", "voice_provider", "image_url", "local_path", "reference_images", "seed_value", "sort_order"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	updates := map[string]any{"updated_at": response.Now()}
 	fields := map[string]string{
 		"name": "name", "role": "role", "description": "description", "appearance": "appearance",
 		"personality": "personality", "voice_style": "voice_style", "voiceStyle": "voice_style",
 		"voice_provider": "voice_provider", "image_url": "image_url", "local_path": "local_path",
+		"reference_images": "reference_images", "seed_value": "seed_value",
 	}
 	for k, col := range fields {
 		maxRunes := maxTextRunes
@@ -130,11 +135,25 @@ func (s *Server) updateCharacter(c *gin.Context) {
 					return
 				}
 			}
+			if col == "reference_images" && v != "" {
+				if err := validateReferenceMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
 			updates[col] = v
 			if col == "voice_style" {
 				updates["voice_sample_url"] = ""
 			}
 		}
+	}
+	if value, ok := body["sort_order"]; ok {
+		sortOrder, valid := nonNegativeJSONInt(value)
+		if !valid {
+			response.BadRequest(c, "sort_order must be a non-negative integer")
+			return
+		}
+		updates["sort_order"] = sortOrder
 	}
 	if len(updates) == 1 {
 		response.BadRequest(c, "at least one character field is required")
@@ -341,6 +360,10 @@ func (s *Server) updateScene(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid JSON body")
+		return
+	}
+	if err := rejectUnknownFields(body, "location", "time", "prompt"); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := map[string]any{"updated_at": response.Now()}
@@ -559,6 +582,11 @@ func (s *Server) updateStoryboard(c *gin.Context) {
 		"atmosphere", "image_prompt", "video_prompt", "bgm_prompt", "sound_effect", "dialogue",
 		"description", "status", "first_frame_image", "last_frame_image", "composed_image",
 		"video_url", "tts_audio_url", "reference_images"}
+	allowedFields := append([]string{"duration", "character_ids", "scene_id"}, stringKeys...)
+	if err := rejectUnknownFields(body, allowedFields...); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	for _, k := range stringKeys {
 		v, ok, fieldErr := stringUpdate(body, k, maxTextRunes)
 		if fieldErr != nil {

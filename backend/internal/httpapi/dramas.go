@@ -172,6 +172,10 @@ func (s *Server) updateDrama(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
+	if err := rejectUnknownFields(body, "title", "description", "genre", "style", "status", "thumbnail", "metadata", "tags"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	updates := map[string]any{"updated_at": response.Now()}
 	for _, k := range []string{"title", "description", "genre", "style", "status", "thumbnail", "metadata"} {
 		maxRunes := maxTextRunes

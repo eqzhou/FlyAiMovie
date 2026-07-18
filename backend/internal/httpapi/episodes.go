@@ -90,6 +90,10 @@ func (s *Server) updateEpisode(c *gin.Context) {
 		response.BadRequest(c, "invalid body")
 		return
 	}
+	if err := rejectUnknownFields(body, "content", "script_content", "title", "description", "status", "image_config_id", "video_config_id", "audio_config_id"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	var episode models.Episode
 	if err := organizationDB(c).First(&episode, id).Error; err != nil {
 		response.NotFound(c, "episode not found")

@@ -98,6 +98,10 @@ func (s *Server) updateAsset(c *gin.Context) {
 		response.BadRequest(c, "invalid body")
 		return
 	}
+	if err := rejectUnknownFields(body, "name", "description", "type", "category", "url", "thumbnail_url", "local_path", "mime_type", "format", "file_size", "width", "height", "duration", "is_favorite"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	updates := map[string]any{"updated_at": response.Now()}
 	for _, key := range []string{"name", "description", "type", "category", "url", "thumbnail_url", "local_path", "mime_type", "format"} {
 		maxRunes := maxTextRunes

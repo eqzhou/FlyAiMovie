@@ -48,15 +48,15 @@
 | N-01 | API 密钥不出现在读取、创建或更新响应中 | 已验收 | `TestAIConfigResponsesNeverExposeAPIKey` |
 | N-02 | 非法分页参数不会导致 panic 或无界查询 | 已验收 | `TestDramaPaginationClampsInvalidPageSize` |
 | N-03 | 未列入配置的跨域来源不获得 CORS 授权 | 已验收 | `TestCORSRejectsUntrustedOrigin` |
-| N-04 | 写入操作具备 schema 校验、事务和明确错误码 | 主要路径已加固：所有 JSON 解析错误均返回 400；主要更新接口拒绝空对象、未知字段、错误类型和越界值；严格未知字段/枚举审计仍待补 | `write_contracts_test.go`、`write_validation.go`、jobs/assets/AI config 测试 |
+| N-04 | 写入操作具备 schema 校验、事务和明确错误码 | 已验收主要更新路径：所有 JSON 解析错误均返回 400；短剧、剧集、角色、场景、道具、分镜、素材、AI 与 Agent 配置更新均拒绝空对象、混合未知字段、错误类型和越界值 | `write_contracts_test.go`、`write_validation.go`、jobs/assets/AI config 测试 |
 | N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
 | N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；公共 AI 配置拒绝回环、私网、链路本地 IP、元数据主机、用户信息、查询和片段；仅开发环境可为 `openai_local` 精确放行本地文本主机，生产模式拒绝该白名单；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport，禁止代理绕过 | `mediafetch`、`storage` 单元测试；AI 配置私网白名单与生产配置测试；`TestUnsafeProviderIPRejectsPrivateAndSpecialRanges` |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
-| N-08 | 核心 Go 包测试覆盖率不少于 80% | 未达到：2026-07-18 全包实测 54.4%，HTTP 57.3%、adapters 52.2%、generation 35.3%、jobs 70.9%，agents、AI、generation 和迁移服务仍低于目标 | `go test ./... -coverprofile=...` |
-| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 部分验收：Chrome 桌面 6 条通过，覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；本机缺少 Playwright WebKit，2 条移动端用例本轮未执行 | `frontend/tests/e2e/*.spec.ts` |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-07-18 全包实测 80.1%；`go test ./... -race -count=1`、`go vet ./...` 通过 | `go test ./... -coverprofile=...` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：桌面 9 条、390px 移动端 2 条通过，覆盖登录、邀请、设置、素材、工作台、场景迁移和任务中心；本机未安装 WebKit，Safari 内核仍需在发布 CI 补测 | `frontend/tests/e2e/*.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
-| N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务和活跃任务上限，幂等请求不重复计额，超限返回 429 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestOrganizationQuotaIsScopedAndAdminManaged` |
+| N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务、活跃任务和每日金额预算；按厂商/任务类型预留估算成本，成功任务记录实际成本，幂等请求不重复计额，超限返回 429，并暴露预算使用量和预警状态 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestCostEstimationAndBudgetReservation`、`TestOrganizationQuotaIsScopedAndAdminManaged` |
 | N-13 | 多用户组织具备成员管理与组织切换 | 已验收主路径：owner/admin 角色边界、owner 保护、移除成员会话撤销、切换组织旋转 Session；已有账号必须通过邮箱绑定的一次性邀请接受，新账号在接受时设置密码；邀请支持状态查询、撤销和重发，旧 token 立即失效 | `TestMemberManagementAndOrganizationSwitch`、`TestAdminCannotManageOwnerOrGrantAdmin`、`TestOrganizationInvitationAcceptsNewUserOnce`、`TestOrganizationInvitationRequiresExistingUserPassword`、`TestOrganizationInvitationExpires`、`TestOrganizationInvitationCanBeRevokedAndResent` |
 | N-14 | 密码变更具备身份校验与会话撤销 | 已验收：校验当前密码、旋转自助会话、旧密码和旧 Session 失效；组织管理员不得修改成员的全局账号凭据 | `TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`TestOrganizationAdminCannotResetGlobalMemberPassword` |
 | N-16 | 忘记密码具备安全恢复流程 | 已验收核心及 SMTP 投递实现：请求响应不枚举账号；SMTP 支持 587 STARTTLS/465 隐式 TLS；token 只存哈希、30 分钟过期、一次性消费；成功后更新密码并撤销所有 Session；主动改密和组织删除会清理未消费 token。真实 SMTP 账号 smoke test 待部署 | `TestPasswordResetRequestDoesNotEnumerateAccounts`、`TestPasswordResetConsumesTokenAndRevokesSessions`、`TestPasswordResetExpiredTokenRejected`、`TestSMTPPasswordResetSenderRequiresHTTPSAndCredentials` |

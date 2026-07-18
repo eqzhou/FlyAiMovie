@@ -175,6 +175,12 @@ func TestGridAssignmentModesAndFailedProbe(t *testing.T) {
 	if quotaRecorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("quota status=%d body=%s", quotaRecorder.Code, quotaRecorder.Body.String())
 	}
+	budgetRecorder := httptest.NewRecorder()
+	budgetContext, _ := gin.CreateTestContext(budgetRecorder)
+	respondGenerationError(budgetContext, jobs.ErrBudgetExceeded)
+	if budgetRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("budget status=%d body=%s", budgetRecorder.Code, budgetRecorder.Body.String())
+	}
 	if err := server.assignGridCells(context, []uint{shots[0].ID, shots[1].ID, shots[0].ID, shots[1].ID}, []string{"f1", "f2", "l1", "l2"}, "first_last"); err != nil {
 		t.Fatal(err)
 	}

@@ -386,6 +386,41 @@ func TestOrganizationQuotaLimitsActiveAndDailyJobs(t *testing.T) {
 	}
 }
 
+func TestCostEstimationAndBudgetReservation(t *testing.T) {
+	if EstimateCost("image.generate", "image_generation", "openai") != 0.04 || EstimateCost("video.generate", "video_generation", "volcengine") != 0.20 || EstimateCost("tts.generate", "storyboard_tts", "minimax") != 0.02 || EstimateCost("image.generate", "image_generation", "mock") != 0 {
+		t.Fatal("provider cost defaults are incorrect")
+	}
+	service := testService(t)
+	nowText := now()
+	quota := models.OrganizationQuota{OrganizationID: 44, DailyJobLimit: 100, MaxActiveJobs: 100, DailyBudgetCNY: 0.10, BudgetWarningPercent: 80, CreatedAt: nowText, UpdatedAt: nowText}
+	if err := service.DB.Create(&quota).Error; err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.CreateForTargetOrganization(44, "image.generate", "image_generation", 1, "openai", nil)
+	if err != nil || first.EstimatedCost != 0.04 {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	if err := service.SetSucceeded(first.ID, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	var stored models.GenerationJob
+	if err := service.DB.First(&stored, first.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ActualCost != 0.04 {
+		t.Fatalf("actual cost=%v", stored.ActualCost)
+	}
+	for id := uint(2); id < 10; id++ {
+		if _, err := service.CreateForTargetOrganization(44, "image.generate", "image_generation", id, "openai", nil); err != nil {
+			if !errors.Is(err, ErrBudgetExceeded) {
+				t.Fatalf("budget error=%v", err)
+			}
+			return
+		}
+	}
+	t.Fatal("budget reservation did not stop generation")
+}
+
 func TestJobWrappersListsAndOwnedFailure(t *testing.T) {
 	service := testService(t)
 	payloadJob, err := service.CreateQueuedPayloadOrganization(30, "episode.merge", "episode_merge", 1, "ffmpeg", nil, `{"episode_id":1}`)

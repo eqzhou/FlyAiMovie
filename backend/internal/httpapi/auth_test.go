@@ -393,12 +393,12 @@ func TestOrganizationQuotaIsScopedAndAdminManaged(t *testing.T) {
 	ownerCookie, ownerCSRF, _ := createTestActorSession(t, server, "quota-owner@example.com", "quota-owner", "owner")
 	viewerCookie, viewerCSRF, _ := createTestActorSession(t, server, "quota-viewer@example.com", "quota-viewer", "viewer")
 
-	updated := performAuthRequest(router, http.MethodPut, "/api/v1/organization/quota", `{"daily_job_limit":25,"max_active_jobs":3}`, ownerCookie, ownerCSRF)
-	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"daily_job_limit":25`) {
+	updated := performAuthRequest(router, http.MethodPut, "/api/v1/organization/quota", `{"daily_job_limit":25,"max_active_jobs":3,"daily_budget_cny":12.5,"budget_warning_percent":75}`, ownerCookie, ownerCSRF)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"daily_job_limit":25`) || !strings.Contains(updated.Body.String(), `"daily_budget_cny":12.5`) {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
 	ownerQuota := performAuthRequest(router, http.MethodGet, "/api/v1/organization/quota", "", ownerCookie, "")
-	if ownerQuota.Code != http.StatusOK || !strings.Contains(ownerQuota.Body.String(), `"max_active_jobs":3`) {
+	if ownerQuota.Code != http.StatusOK || !strings.Contains(ownerQuota.Body.String(), `"max_active_jobs":3`) || !strings.Contains(ownerQuota.Body.String(), `"budget_warning_percent":75`) || !strings.Contains(ownerQuota.Body.String(), `"budget_warning":false`) {
 		t.Fatalf("owner status=%d body=%s", ownerQuota.Code, ownerQuota.Body.String())
 	}
 	viewerQuota := performAuthRequest(router, http.MethodGet, "/api/v1/organization/quota", "", viewerCookie, "")
