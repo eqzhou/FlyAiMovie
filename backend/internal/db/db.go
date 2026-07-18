@@ -1,16 +1,19 @@
 package db
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -89,6 +92,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.AIServiceProvider{},
 		&models.AIVoice{},
 		&models.AgentConfig{},
+		&models.PromptTemplate{},
 		&models.AgentRun{},
 		&models.AgentRunEvent{},
 		&models.ImageGeneration{},
@@ -151,13 +155,52 @@ func SeedDefaults(gdb *gorm.DB) error {
 		}
 	}
 
-	return SeedOrganizationDefaults(gdb, 0)
+	organizationIDs := []uint{0}
+	var organizations []models.Organization
+	if err := gdb.Select("id").Find(&organizations).Error; err != nil {
+		return err
+	}
+	for _, organization := range organizations {
+		organizationIDs = append(organizationIDs, organization.ID)
+	}
+	for _, organizationID := range organizationIDs {
+		if err := SeedOrganizationDefaults(gdb, organizationID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SeedOrganizationDefaults ensures every organization can run the local Mock
 // workflow independently of the one-time legacy resource migration.
 func SeedOrganizationDefaults(gdb *gorm.DB, organizationID uint) error {
 	ts := response.Now()
+	for _, item := range prompttemplate.Defaults() {
+		var existing models.PromptTemplate
+		err := gdb.Where("organization_id = ? AND key = ?", organizationID, item.Key).First(&existing).Error
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("find prompt %s: %w", item.Key, err)
+		}
+		var legacyAgent models.AgentConfig
+		if err := gdb.Where("organization_id = ? AND agent_type = ? AND deleted_at IS NULL", organizationID, item.Key).First(&legacyAgent).Error; err == nil && strings.TrimSpace(legacyAgent.SystemPrompt) != "" {
+			if _, validationErr := prompttemplate.Variables(legacyAgent.SystemPrompt); validationErr != nil {
+				continue
+			}
+			item.Content = legacyAgent.SystemPrompt
+		}
+		variables, err := prompttemplate.Variables(item.Content)
+		if err != nil {
+			return fmt.Errorf("validate default prompt %s: %w", item.Key, err)
+		}
+		variablesJSON, _ := json.Marshal(variables)
+		row := models.PromptTemplate{OrganizationID: organizationID, Key: item.Key, Name: item.Name, Category: item.Category, Description: item.Description, Content: item.Content, VariablesJSON: string(variablesJSON), Version: 1, IsActive: true, CreatedAt: ts, UpdatedAt: ts}
+		if err := gdb.Create(&row).Error; err != nil {
+			return fmt.Errorf("seed prompt %s: %w", item.Key, err)
+		}
+	}
 	agentDefaults := []models.AgentConfig{
 		{OrganizationID: organizationID, AgentType: "script_rewriter", Name: "剧本改写", Description: "小说/大纲 → 格式化剧本", IsActive: true, CreatedAt: ts, UpdatedAt: ts},
 		{OrganizationID: organizationID, AgentType: "extractor", Name: "角色场景提取", Description: "从剧本提取角色与场景并去重", IsActive: true, CreatedAt: ts, UpdatedAt: ts},

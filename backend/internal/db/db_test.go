@@ -84,16 +84,43 @@ func TestSeedOrganizationDefaultsIsIdempotentAndIsolated(t *testing.T) {
 		}
 	}
 	for _, organizationID := range []uint{11, 22} {
-		var mockCount, agentCount int64
+		var mockCount, agentCount, promptCount int64
 		if err := database.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND provider = ?", organizationID, "mock").Count(&mockCount).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := database.Model(&models.AgentConfig{}).Where("organization_id = ? AND deleted_at IS NULL", organizationID).Count(&agentCount).Error; err != nil {
 			t.Fatal(err)
 		}
-		if mockCount != 4 || agentCount != 5 {
-			t.Fatalf("organization %d defaults: mock=%d agents=%d", organizationID, mockCount, agentCount)
+		if err := database.Model(&models.PromptTemplate{}).Where("organization_id = ? AND deleted_at IS NULL", organizationID).Count(&promptCount).Error; err != nil {
+			t.Fatal(err)
 		}
+		if mockCount != 4 || agentCount != 5 || promptCount != 5 {
+			t.Fatalf("organization %d defaults: mock=%d agents=%d prompts=%d", organizationID, mockCount, agentCount, promptCount)
+		}
+	}
+}
+
+func TestSeedOrganizationDefaultsPreservesUnsupportedLegacyPrompt(t *testing.T) {
+	database, err := Open(t.TempDir() + "/legacy-prompt.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	legacy := models.AgentConfig{OrganizationID: 33, AgentType: "script_rewriter", Name: "Legacy", SystemPrompt: "keep {{unsupported}}", IsActive: true, CreatedAt: "now", UpdatedAt: "now"}
+	if err := database.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedOrganizationDefaults(database, 33); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := database.Model(&models.PromptTemplate{}).Where("organization_id = ? AND key = ?", 33, "script_rewriter").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("unsupported legacy prompt was migrated, count=%d", count)
 	}
 }
 

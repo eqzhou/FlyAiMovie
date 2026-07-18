@@ -197,6 +197,12 @@ export const settingsAPI = {
   providers: () => api.get('/ai-providers'),
   agentConfigs: () => api.get('/agent-configs'),
   upsertAgentConfig: (d: any) => api.post('/agent-configs', d),
+  promptTemplates: () => api.get('/prompt-templates'),
+  createPromptTemplate: (d: any) => api.post('/prompt-templates', d),
+  updatePromptTemplate: (id: number, d: any) => api.put(`/prompt-templates/${id}`, d),
+  deletePromptTemplate: (id: number) => api.del(`/prompt-templates/${id}`),
+  previewPromptTemplate: (id: number, variables: Record<string, string>) => api.post<{ rendered: string; version: number }>(`/prompt-templates/${id}/preview`, { variables }),
+  restorePromptTemplate: (id: number) => api.post(`/prompt-templates/${id}/restore-default`, {}),
   voices: () => api.get('/ai-voices'),
   syncVoices: () => api.post('/ai-voices/sync'),
 }

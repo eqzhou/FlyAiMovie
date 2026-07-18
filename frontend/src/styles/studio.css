@@ -125,6 +125,23 @@ button { cursor: pointer; }
 .settings-modal-wide { width: min(680px, calc(100vw - 32px)); }
 .settings-span { grid-column: 1 / -1; }
 .settings-check { display: flex; align-items: center; gap: 8px; min-height: 42px; }
+.prompt-template-panel { overflow-x: auto; }
+.prompt-template-table { min-width: 1040px; }
+.prompt-template-table th:nth-child(1), .prompt-template-table td:nth-child(1) { min-width: 190px; }
+.prompt-template-table th:nth-child(2), .prompt-template-table td:nth-child(2) { min-width: 92px; white-space: nowrap; }
+.prompt-template-table th:nth-child(3), .prompt-template-table td:nth-child(3) { min-width: 310px; }
+.prompt-template-table th:nth-child(4), .prompt-template-table td:nth-child(4),
+.prompt-template-table th:nth-child(5), .prompt-template-table td:nth-child(5) { min-width: 54px; white-space: nowrap; }
+.prompt-template-table th:last-child, .prompt-template-table td:last-child { min-width: 236px; }
+.prompt-template-table .settings-table-actions { flex-wrap: nowrap; }
+.prompt-template-description { max-width: 280px; margin: 5px 0 0; font-size: 12px; }
+.prompt-variable-list, .prompt-token-reference { display: flex; flex-wrap: wrap; gap: 6px; }
+.prompt-variable-list code, .prompt-token-reference code {
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--muted); padding: 3px 6px; font-size: 11px;
+}
+.prompt-token-reference { margin: -4px 0 12px; }
+.prompt-preview-name { margin: -4px 0 16px; color: var(--muted); font-size: 13px; }
+.prompt-preview-result { min-height: 120px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 14px; line-height: 1.7; }
 .character-library-head { margin-bottom: 12px; }
 .character-library-list { padding: 0 16px; }
 .character-library-table td { vertical-align: middle; }

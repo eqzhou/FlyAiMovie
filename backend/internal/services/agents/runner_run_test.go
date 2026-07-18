@@ -111,6 +111,40 @@ func TestRunnerRunExecutesReadThenWriteModelPass(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesOrganizationPromptTemplateAndVersion(t *testing.T) {
+	var systemMessage string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Messages) > 0 {
+			systemMessage = body.Messages[0].Content
+		}
+		writeChatResponse(w, `{"actions":[{"tool":"save_script","args":{"script":"## S01 | 内景 · 车站 | 夜"}}],"summary":"saved"}`)
+	}))
+	defer server.Close()
+	fixture := newRunnerFixture(t, server.URL, nil)
+	now := response.Now()
+	template := models.PromptTemplate{OrganizationID: 21, Key: "script_rewriter", Name: "Custom", Category: "agent_system", Content: "为 {{drama_title}} / {{episode_title}} 执行 {{user_instruction}}", VariablesJSON: `["drama_title","episode_title","user_instruction"]`, Version: 7, IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runner.Run(context.Background(), 21, "script_rewriter", fixture.drama.ID, fixture.episode.ID, "重写对白"); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Runner Drama", "Runner Episode", "重写对白", "提示词模板版本: 7", "save_script"} {
+		if !strings.Contains(systemMessage, expected) {
+			t.Fatalf("system prompt missing %q: %s", expected, systemMessage)
+		}
+	}
+}
+
 func TestRunnerRunInvalidJSONUsesDeterministicWrite(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeChatResponse(w, "## S03 | 外景 · 街道 | 日\n角色：出发。")

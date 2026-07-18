@@ -108,6 +108,7 @@ func (s *Server) Router() *gin.Engine {
 		s.registerUpload(api)
 		s.registerAIConfigs(api)
 		s.registerAgentConfigs(api)
+		s.registerPromptTemplates(api)
 		s.registerAgent(api)
 		s.registerCompose(api)
 		s.registerMerge(api)

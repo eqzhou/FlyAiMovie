@@ -13,6 +13,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
+	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"gorm.io/gorm"
 )
 
@@ -78,10 +79,7 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 		}
 	}
 
-	system := r.buildSystemPrompt(agentType)
-	if agentConfig.SystemPrompt != "" {
-		system = agentConfig.SystemPrompt + "\n\n" + r.loadSkill(agentType) + "\n\n" + toolCatalog(agentType)
-	}
+	system := r.resolveSystemPrompt(organizationID, agentType, dramaID, requestedEpisode, message, agentConfig.SystemPrompt)
 	temperature := float32(0.4)
 	if agentConfig.Temperature != nil {
 		temperature = float32(*agentConfig.Temperature)
@@ -312,6 +310,41 @@ func (r *Runner) buildSystemPrompt(agentType string) string {
 	skill := r.loadSkill(agentType)
 	tools := toolCatalog(agentType)
 	return base + "\n\n" + skill + "\n\n" + tools
+}
+
+func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string) string {
+	base := defaultPrompt(agentType)
+	version := 0
+	var template models.PromptTemplate
+	if err := db.DB.Where("organization_id = ? AND key = ? AND category = ? AND is_active = ? AND deleted_at IS NULL", organizationID, agentType, "agent_system", true).First(&template).Error; err == nil {
+		var drama models.Drama
+		_ = db.DB.Where("organization_id = ? AND id = ?", organizationID, dramaID).First(&drama).Error
+		var characters []models.Character
+		var scenes []models.Scene
+		_ = db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, dramaID).Order("id").Find(&characters).Error
+		_ = db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, dramaID).Order("id").Find(&scenes).Error
+		characterNames := make([]string, 0, len(characters))
+		for _, character := range characters {
+			characterNames = append(characterNames, character.Name)
+		}
+		sceneNames := make([]string, 0, len(scenes))
+		for _, scene := range scenes {
+			sceneNames = append(sceneNames, scene.Location)
+		}
+		if rendered, err := prompttemplate.Render(template.Content, map[string]string{
+			"drama_title": drama.Title, "episode_title": episode.Title, "user_instruction": message,
+			"character_names": strings.Join(characterNames, "、"), "scene_names": strings.Join(sceneNames, "、"),
+		}); err == nil {
+			base = rendered
+			version = template.Version
+		}
+	} else if strings.TrimSpace(legacyPrompt) != "" {
+		base = legacyPrompt
+	}
+	if version > 0 {
+		base += fmt.Sprintf("\n\n提示词模板版本: %d", version)
+	}
+	return base + "\n\n" + r.loadSkill(agentType) + "\n\n" + toolCatalog(agentType)
 }
 
 func (r *Runner) loadSkill(agentType string) string {

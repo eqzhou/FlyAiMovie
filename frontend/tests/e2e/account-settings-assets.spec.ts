@@ -7,8 +7,9 @@ const actor = {
   csrf_token: 'csrf-e2e',
 }
 
-async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) {
+async function mockAccountAPI(page: Page, options: { signedIn?: boolean; role?: 'owner' | 'admin' | 'editor' | 'viewer' } = {}) {
   let signedIn = options.signedIn ?? false
+  const currentActor = { ...actor, role: options.role || actor.role }
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -20,8 +21,8 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/auth/me' && !signedIn) {
       status = 401
       return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: 401, message: 'unauthorized' }) })
-    } else if (path === '/api/v1/auth/me') data = actor
-    else if (path === '/api/v1/auth/login') { signedIn = true; data = actor }
+    } else if (path === '/api/v1/auth/me') data = currentActor
+    else if (path === '/api/v1/auth/login') { signedIn = true; data = currentActor }
     else if (path === '/api/v1/auth/organizations') data = [{ ...actor.organization, role: 'owner', current: true }]
     else if (path === '/api/v1/auth/invitations/invite-token') data = { email: 'new@example.com', role: 'editor', organization: actor.organization, expires_at: '2099-01-01T00:00:00Z' }
     else if (path === '/api/v1/auth/invitations/invite-token/accept') data = actor
@@ -33,6 +34,11 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/ai-configs/10/test') data = { status: 'ok', provider: 'mock', model: 'mock', latency_ms: 1, detail: 'Mock 服务可用' }
     else if (path === '/api/v1/ai-providers') data = [{ provider: 'mock', service_type: 'image' }]
     else if (path === '/api/v1/agent-configs') data = [{ id: 20, agent_type: 'script_rewriter', name: 'Script Rewriter', model: 'mock', is_active: true }]
+    else if (path === '/api/v1/prompt-templates') data = [
+      { id: 80, key: 'script_rewriter', name: '剧本改写', category: 'agent_system', description: '将故事素材整理为短剧剧本', content: '为 {{drama_title}} 执行 {{user_instruction}}', variables_json: '["drama_title","user_instruction"]', version: 3, is_active: true },
+      { id: 81, key: 'grid_prompt_generator', name: '宫格提示词', category: 'agent_system', description: '生成连续画面', content: '{{episode_title}}', variables_json: '["episode_title"]', version: 1, is_active: true },
+    ]
+    else if (path === '/api/v1/prompt-templates/80/preview') data = { rendered: '为 归途 执行 重写对白', version: 3 }
     else if (path === '/api/v1/organization/quota') data = { daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 2, active_jobs: 0, daily_budget_cny: 10, budget_warning_percent: 80, budget_used_cny: 1.25, budget_warning: false }
     else if (path === '/api/v1/organization/cache') data = { objects: 3, references: 4, bytes: 2048, orphaned: 1 }
     else if (path === '/api/v1/organization/cache/purge') data = { purged: { deleted_objects: 1 }, cleanup: { completed: 1, failed: 0 } }
@@ -55,9 +61,11 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
 
 test('desktop: login, settings and asset library workflows are reachable', async ({ page }) => {
   let updatedConfig: Request | undefined
+  let updatedPrompt: Request | undefined
   await mockAccountAPI(page)
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/ai-configs/10' && request.method() === 'PUT') updatedConfig = request
+    if (new URL(request.url()).pathname === '/api/v1/prompt-templates/80' && request.method() === 'PUT') updatedPrompt = request
   })
   await page.goto('/login')
   await page.getByLabel('邮箱').fill('owner@example.com')
@@ -96,6 +104,22 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await page.getByRole('button', { name: '编辑' }).first().click()
   await expect(page.getByRole('dialog', { name: '编辑 Agent' })).toBeVisible()
   await page.getByRole('dialog', { name: '编辑 Agent' }).getByRole('button', { name: '取消' }).click()
+
+  await settingsNavigation.getByRole('tab', { name: '提示词' }).click()
+  await expect(page.getByRole('row', { name: /剧本改写/ })).toContainText('v3')
+  const promptRow = page.getByRole('row', { name: /剧本改写/ })
+  await promptRow.getByRole('button', { name: '预览' }).click()
+  const previewDialog = page.getByRole('dialog', { name: '预览提示词' })
+  await previewDialog.getByLabel('项目标题').fill('归途')
+  await previewDialog.getByLabel('用户要求').fill('重写对白')
+  await previewDialog.getByRole('button', { name: '生成预览' }).click()
+  await expect(previewDialog.getByText('为 归途 执行 重写对白')).toBeVisible()
+  await previewDialog.getByRole('button', { name: '关闭' }).click()
+  await promptRow.getByRole('button', { name: '编辑' }).click()
+  const promptDialog = page.getByRole('dialog', { name: '编辑提示词' })
+  await promptDialog.getByLabel('模板内容').fill('新模板 {{drama_title}}')
+  await promptDialog.getByRole('button', { name: '保存修改' }).click()
+  expect(updatedPrompt?.postDataJSON()).toMatchObject({ content: '新模板 {{drama_title}}' })
 
   await settingsNavigation.getByRole('tab', { name: '组织与权限' }).click()
   await expect(page.getByText('生成配额')).toBeVisible()
@@ -140,6 +164,17 @@ test('desktop: project creation marks and validates required fields', async ({ p
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   expect(created?.postDataJSON()).toMatchObject({ title: '必填校验项目', style: 'realistic', total_episodes: 2 })
+})
+
+test('desktop: viewers can preview prompts without mutation controls', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, role: 'viewer' })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  await expect(page.getByRole('button', { name: '新建提示词' })).toHaveCount(0)
+  const promptRow = page.getByRole('row', { name: /剧本改写/ })
+  await expect(promptRow.getByRole('button', { name: '预览' })).toBeVisible()
+  await expect(promptRow.getByRole('button', { name: '编辑' })).toHaveCount(0)
+  await expect(promptRow.getByRole('button', { name: '恢复默认' })).toHaveCount(0)
 })
 
 test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
@@ -230,4 +265,10 @@ test('mobile: login and asset library fit a 390px viewport', async ({ page }) =>
   await expect(page.getByText('车站参考图')).toBeVisible()
   const layout = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }))
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.width)
+
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  await expect(page.getByText('剧本改写', { exact: true })).toBeVisible()
+  const settingsLayout = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }))
+  expect(settingsLayout.scrollWidth).toBeLessThanOrEqual(settingsLayout.width)
 })

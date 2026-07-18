@@ -8,6 +8,7 @@ const configs = ref<any[]>([])
 const router = useRouter()
 const providers = ref<any[]>([])
 const agents = ref<any[]>([])
+const promptTemplates = ref<any[]>([])
 const form = ref({
   service_type: 'text',
   provider: 'openai',
@@ -20,7 +21,7 @@ const form = ref({
 })
 const toast = ref('')
 const agentForm = ref<any | null>(null)
-const activeSection = ref<'services' | 'agents' | 'organization' | 'security'>('services')
+const activeSection = ref<'services' | 'agents' | 'prompts' | 'organization' | 'security'>('services')
 const showServiceModal = ref(false)
 const editingConfigID = ref<number | null>(null)
 const originalProvider = ref('')
@@ -30,6 +31,14 @@ const showMemberModal = ref(false)
 const showInviteModal = ref(false)
 const showPasswordModal = ref(false)
 const showDeleteModal = ref(false)
+const promptForm = ref<any | null>(null)
+const previewTemplate = ref<any | null>(null)
+const previewVariables = ref<Record<string, string>>({})
+const previewResult = ref('')
+const previewError = ref('')
+const builtInPromptKeys = new Set(['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'grid_prompt_generator'])
+const promptCategoryLabels: Record<string, string> = { agent_system: 'Agent 系统', grid: '宫格', image: '图片', video: '视频', audio: '音频' }
+const promptVariableLabels: Record<string, string> = { drama_title: '项目标题', episode_title: '剧集标题', user_instruction: '用户要求', character_names: '角色名称', scene_names: '场景名称' }
 const providerChoices: Record<string, Array<{ value: string; label: string; base: string }>> = {
   text: [
     { value: 'openai', label: 'OpenAI / Compatible', base: 'https://api.openai.com' },
@@ -81,6 +90,7 @@ async function load() {
   configs.value = await settingsAPI.aiConfigs()
   providers.value = await settingsAPI.providers()
   agents.value = await settingsAPI.agentConfigs()
+  promptTemplates.value = await settingsAPI.promptTemplates()
   quota.value = await quotaAPI.get()
   cache.value = await cacheAPI.stats()
   if (canManageQuota.value && authStore.state.enabled) {
@@ -278,6 +288,67 @@ function editAgent(agent: any) {
   }
 }
 
+function promptVariables(template: any): string[] {
+  try { return JSON.parse(template.variables_json || '[]') } catch { return [] }
+}
+
+function promptToken(variable: string) { return `{{${variable}}}` }
+function isBuiltInPrompt(template: any) { return builtInPromptKeys.has(template.key) }
+
+function openCreatePrompt() {
+  promptForm.value = { id: null, key: '', name: '', category: 'image', description: '', content: '', is_active: true }
+}
+
+function editPrompt(template: any) {
+  promptForm.value = { id: template.id, key: template.key, name: template.name, category: template.category, description: template.description || '', content: template.content, is_active: template.is_active !== false }
+}
+
+async function savePrompt() {
+  if (!promptForm.value) return
+  const data = { key: promptForm.value.key, name: promptForm.value.name, category: promptForm.value.category, description: promptForm.value.description, content: promptForm.value.content, is_active: promptForm.value.is_active }
+  if (!data.key.trim() || !data.name.trim() || !data.content.trim()) { show('标识、名称和模板内容必填'); return }
+  try {
+    if (promptForm.value.id) await settingsAPI.updatePromptTemplate(promptForm.value.id, data)
+    else await settingsAPI.createPromptTemplate(data)
+    show(promptForm.value.id ? '提示词已更新' : '提示词已创建')
+    promptForm.value = null
+    promptTemplates.value = await settingsAPI.promptTemplates()
+  } catch (error) { show(`保存失败：${error instanceof Error ? error.message : '未知错误'}`) }
+}
+
+function openPreview(template: any) {
+  previewTemplate.value = template
+  previewVariables.value = Object.fromEntries(promptVariables(template).map((name) => [name, '']))
+  previewResult.value = ''
+  previewError.value = ''
+}
+
+async function renderPreview() {
+  if (!previewTemplate.value) return
+  previewError.value = ''
+  try {
+    const result = await settingsAPI.previewPromptTemplate(previewTemplate.value.id, previewVariables.value)
+    previewResult.value = result.rendered
+  } catch (error) {
+    previewResult.value = ''
+    previewError.value = error instanceof Error ? error.message : '预览失败'
+  }
+}
+
+async function restorePrompt(template: any) {
+  if (!confirm(`恢复「${template.name}」的内置模板？`)) return
+  await settingsAPI.restorePromptTemplate(template.id)
+  promptTemplates.value = await settingsAPI.promptTemplates()
+  show('已恢复内置模板')
+}
+
+async function removePrompt(template: any) {
+  if (!confirm(`删除「${template.name}」？`)) return
+  await settingsAPI.deletePromptTemplate(template.id)
+  promptTemplates.value = await settingsAPI.promptTemplates()
+  show('提示词已删除')
+}
+
 async function saveAgent() {
   if (!agentForm.value) return
   await settingsAPI.upsertAgentConfig(agentForm.value)
@@ -301,6 +372,7 @@ onMounted(load)
     <div class="settings-tabs" role="tablist" aria-label="设置分类">
       <button role="tab" :aria-selected="activeSection === 'services'" :class="{ active: activeSection === 'services' }" @click="activeSection = 'services'">AI 服务</button>
       <button role="tab" :aria-selected="activeSection === 'agents'" :class="{ active: activeSection === 'agents' }" @click="activeSection = 'agents'">Agent</button>
+      <button role="tab" :aria-selected="activeSection === 'prompts'" :class="{ active: activeSection === 'prompts' }" @click="activeSection = 'prompts'">提示词</button>
       <button role="tab" :aria-selected="activeSection === 'organization'" :class="{ active: activeSection === 'organization' }" @click="activeSection = 'organization'">组织与权限</button>
       <button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">安全与数据</button>
     </div>
@@ -324,6 +396,28 @@ onMounted(load)
           </tbody>
         </table>
         <div v-if="!configs.length" class="empty">尚未配置 AI 服务</div>
+      </div>
+    </section>
+
+    <section v-if="activeSection === 'prompts'" class="settings-section" role="tabpanel">
+      <div class="settings-section-head">
+        <div><h2>提示词模板</h2><p class="muted">{{ promptTemplates.length }} 个模板 · 组织内生效</p></div>
+        <button v-if="canManageSettings" class="btn btn-primary" @click="openCreatePrompt">新建提示词</button>
+      </div>
+      <div class="panel prompt-template-panel">
+        <table v-if="promptTemplates.length" class="table prompt-template-table">
+          <thead><tr><th>名称</th><th>分类</th><th>变量</th><th>版本</th><th>状态</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="template in promptTemplates" :key="template.id">
+              <td><strong>{{ template.name }}</strong><p class="muted prompt-template-description">{{ template.description || template.key }}</p></td>
+              <td>{{ promptCategoryLabels[template.category] || template.category }}</td>
+              <td><div class="prompt-variable-list"><code v-for="variable in promptVariables(template)" :key="variable">{{ variable }}</code><span v-if="!promptVariables(template).length" class="muted">无</span></div></td>
+              <td>v{{ template.version }}</td><td>{{ template.is_active ? '启用' : '停用' }}</td>
+              <td><div class="toolbar settings-table-actions"><button class="btn" @click="openPreview(template)">预览</button><button v-if="canManageSettings" class="btn" @click="editPrompt(template)">编辑</button><button v-if="canManageSettings && isBuiltInPrompt(template)" class="btn" @click="restorePrompt(template)">恢复默认</button><button v-if="canManageSettings && !isBuiltInPrompt(template)" class="btn btn-danger" @click="removePrompt(template)">删除</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty">尚未创建提示词模板</div>
       </div>
     </section>
 
@@ -384,7 +478,11 @@ onMounted(load)
 
     <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="modal-actions"><button type="button" class="btn" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary">{{ editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
-    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="2" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="agent-prompt">系统提示</label><textarea id="agent-prompt" v-model="agentForm.system_prompt" rows="6" /></div></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
+    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="2" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
+
+    <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-reference settings-span"><code v-for="(_, variable) in promptVariableLabels" :key="variable">{{ promptToken(variable) }}</code></div></div><div class="modal-actions"><button type="button" class="btn" @click="promptForm = null">取消</button><button type="submit" class="btn btn-primary">{{ promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
+
+    <div v-if="previewTemplate" class="modal-mask" @click.self="previewTemplate = null"><div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="preview-prompt-title" @keydown.esc="previewTemplate = null"><h3 id="preview-prompt-title">预览提示词</h3><p class="prompt-preview-name">{{ previewTemplate.name }} · v{{ previewTemplate.version }}</p><div v-if="promptVariables(previewTemplate).length" class="field-grid"><div v-for="variable in promptVariables(previewTemplate)" :key="variable" class="field"><label :for="`preview-${variable}`">{{ promptVariableLabels[variable] || variable }}</label><input :id="`preview-${variable}`" v-model="previewVariables[variable]" /></div></div><p v-if="previewError" class="form-error" role="alert">{{ previewError }}</p><div v-if="previewResult" class="prompt-preview-result" aria-live="polite">{{ previewResult }}</div><div class="modal-actions"><button type="button" class="btn" @click="previewTemplate = null">关闭</button><button type="button" class="btn btn-primary" @click="renderPreview">生成预览</button></div></div></div>
 
     <div v-if="showMemberModal" class="modal-mask" @click.self="showMemberModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="member-modal-title" @submit.prevent="addMember"><h3 id="member-modal-title">添加成员</h3><div class="field"><label for="member-email">邮箱</label><input id="member-email" v-model="memberForm.email" type="email" /></div><div class="field"><label for="member-name">显示名称</label><input id="member-name" v-model="memberForm.display_name" /></div><div class="field"><label for="member-password">初始密码</label><input id="member-password" v-model="memberForm.password" type="password" placeholder="12-128 个字符" /></div><div class="field"><label for="member-role">角色</label><select id="member-role" v-model="memberForm.role"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="modal-actions"><button type="button" class="btn" @click="showMemberModal = false">取消</button><button type="submit" class="btn btn-primary">添加成员</button></div></form></div>
 

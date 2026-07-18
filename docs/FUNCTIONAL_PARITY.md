@@ -38,11 +38,12 @@
 | P-12 | 整集导出 | 按分镜顺序拼接并写回单集视频 | 已验收 Mock 主路径：按分镜顺序合并、任务恢复和缺失镜头返回 409 | `TestMockPipelineEndToEnd`、`TestComposeShotAndMergeEpisode` |
 | P-13 | 生成历史与进度 | 查询图片、视频、宫格和合成状态 | 已验收：图片、视频、TTS、镜头合成与整集导出统一进入任务系统 | jobs 并发、恢复、重试、claim；`TestAsyncImagePollingCompletesPersistentJob`、`TestAsyncVideoPollingCompletesPersistentJob` |
 | P-14 | AI 服务设置 | 配置文本/图片/视频/音频供应商，密钥不回显 | 已验收 | `TestAIConfigResponsesNeverExposeAPIKey` |
-| P-15 | Agent 配置与 Skills | 运行时读取独立编写的技能说明并覆盖 Agent 配置 | 已验收：模型、系统提示、温度、最大 token 与模型迭代限制生效；五类 Agent 离线流程写回数据库 | `TestChatWithMaxTokensForwardsLimit`、`TestOfflineFallbackAgentsPersistWorkflow` |
+| P-15 | Agent 配置与 Skills | 运行时读取独立编写的技能说明并覆盖 Agent 配置 | 已验收：模型、温度、最大 token 与模型迭代限制生效；五类 Agent 离线流程写回数据库 | `TestChatWithMaxTokensForwardsLimit`、`TestOfflineFallbackAgentsPersistWorkflow` |
 | P-16 | 本地离线演示 | 无外部密钥时通过 mock 走完整流程 | 已验收 | `TestMockPipelineEndToEnd` |
 | P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已实现：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
 | P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI 图片与 Sora 视频、Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；Sora 尾帧/多参考输入会明确拒绝；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
+| P-20 | 提示词模板 | 组织内管理、版本化、预览并应用五类 Agent 提示词 | 已验收：白名单变量插值、未知表达式拒绝、组织隔离、历史配置迁移、模板版本缓存失效、内置恢复与只读预览 | `prompt_templates_test.go`、`template_test.go`、`TestRunnerUsesOrganizationPromptTemplateAndVersion`、设置页桌面/移动 E2E |
 | P-20 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
 | P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
 | P-22 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库页面已接入 | `TestCharacterTemplateImportCreatesIndependentCharacter` |

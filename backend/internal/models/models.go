@@ -221,6 +221,22 @@ type AgentConfig struct {
 	DeletedAt      *string  `json:"deleted_at,omitempty"`
 }
 
+type PromptTemplate struct {
+	OrganizationID uint    `gorm:"not null;default:0;uniqueIndex:idx_org_prompt_key" json:"-"`
+	ID             uint    `gorm:"primaryKey" json:"id"`
+	Key            string  `gorm:"not null;uniqueIndex:idx_org_prompt_key" json:"key"`
+	Name           string  `gorm:"not null" json:"name"`
+	Category       string  `gorm:"not null;index" json:"category"`
+	Description    string  `json:"description"`
+	Content        string  `gorm:"not null" json:"content"`
+	VariablesJSON  string  `gorm:"not null;default:'[]'" json:"variables_json"`
+	Version        int     `gorm:"not null;default:1" json:"version"`
+	IsActive       bool    `gorm:"not null;default:true" json:"is_active"`
+	CreatedAt      string  `gorm:"not null" json:"created_at"`
+	UpdatedAt      string  `gorm:"not null" json:"updated_at"`
+	DeletedAt      *string `json:"deleted_at,omitempty"`
+}
+
 type ImageGeneration struct {
 	OrganizationID  uint    `gorm:"not null;default:0;index" json:"-"`
 	ID              uint    `gorm:"primaryKey" json:"id"`
