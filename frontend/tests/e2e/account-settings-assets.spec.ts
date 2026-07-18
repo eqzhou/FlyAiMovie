@@ -33,6 +33,8 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/organization/cache/purge') data = { purged: { deleted_objects: 1 }, cleanup: { completed: 1, failed: 0 } }
     else if (path === '/api/v1/organization/members') data = [{ user_id: 1, email: actor.user.email, display_name: actor.user.display_name, role: 'owner' }]
     else if (path === '/api/v1/organization/members/invitations') data = []
+    else if (path === '/api/v1/character-library') data = [{ id: 40, name: '跨项目主角', role: '主角', appearance: '短发，黑色外套', voice_style: '沉稳', image_url: '' }]
+    else if (path === '/api/v1/dramas') data = { items: [{ id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }] }] }
     else if (path === '/api/v1/dramas/2') data = { id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }], characters: [], scenes: [], props: [] }
     else if (path === '/api/v1/assets') data = [{ id: 30, name: '车站参考图', type: 'image', category: 'reference', url: '/media/station.png', is_favorite: false }]
 
@@ -112,6 +114,41 @@ test('desktop: project creation marks and validates required fields', async ({ p
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   expect(created?.postDataJSON()).toMatchObject({ title: '必填校验项目', style: 'realistic', total_episodes: 2 })
+})
+
+test('desktop: character library keeps forms in focused dialogs', async ({ page }) => {
+  let created: Request | undefined
+  let imported: Request | undefined
+  await mockAccountAPI(page, { signedIn: true })
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v1/character-library' && request.method() === 'POST') created = request
+    if (path === '/api/v1/character-library/40/import' && request.method() === 'POST') imported = request
+  })
+  await page.goto('/character-library')
+
+  await expect(page.getByRole('heading', { name: '角色库' })).toBeVisible()
+  await expect(page.getByRole('row', { name: /跨项目主角/ })).toBeVisible()
+  await expect(page.getByLabel('角色定位')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '新建角色模板' }).click()
+  const createDialog = page.getByRole('dialog', { name: '新建角色模板' })
+  await expect(createDialog.getByLabel(/名称.*\*/)).toBeFocused()
+  await createDialog.getByLabel(/名称.*\*/).fill('新建模板')
+  await createDialog.getByRole('button', { name: '创建模板' }).click()
+  await expect(createDialog).toHaveCount(0)
+  expect(created?.postDataJSON()).toMatchObject({ name: '新建模板' })
+
+  const characterRow = page.getByRole('row', { name: /跨项目主角/ })
+  await characterRow.getByRole('button', { name: '导入项目' }).click()
+  const importDialog = page.getByRole('dialog', { name: '导入角色模板' })
+  await expect(importDialog.getByText('跨项目主角')).toBeVisible()
+  await expect(importDialog.getByLabel('项目')).toHaveValue('2')
+  await expect(importDialog.getByLabel('剧集（可选）')).toContainText('第一集')
+  await importDialog.getByLabel('剧集（可选）').selectOption('20')
+  await importDialog.getByRole('button', { name: '确认导入' }).click()
+  await expect(importDialog).toHaveCount(0)
+  expect(imported?.postDataJSON()).toMatchObject({ drama_id: 2, episode_id: 20 })
 })
 
 test('desktop: invitation preview and acceptance submit the expected payload', async ({ page }) => {
