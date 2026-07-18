@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -166,13 +168,30 @@ func (s *Server) deleteAsset(c *gin.Context) {
 		response.BadRequest(c, "invalid asset id")
 		return
 	}
-	result := organizationDB(c).Model(&models.Asset{}).Where("id = ? AND deleted_at IS NULL", id).Update("deleted_at", response.Now())
-	if result.Error != nil {
-		response.ServerError(c, "failed to delete asset")
+	organizationID := currentOrganizationID(c)
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("id = ? AND deleted_at IS NULL", id)
+		if actor, ok := currentAuth(c); ok {
+			query = query.Where("organization_id = ?", actor.Organization.ID)
+		}
+		var asset models.Asset
+		if err := query.First(&asset).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&asset).Update("deleted_at", response.Now()).Error; err != nil {
+			return err
+		}
+		if asset.ContentHash != "" {
+			return mediacache.New(tx, s.Store).Release(organizationID, "asset", strconv.FormatUint(uint64(asset.ID), 10))
+		}
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		response.NotFound(c, "asset not found")
 		return
 	}
-	if result.RowsAffected == 0 {
-		response.NotFound(c, "asset not found")
+	if err != nil {
+		response.ServerError(c, "failed to delete asset")
 		return
 	}
 	response.Success(c, nil)

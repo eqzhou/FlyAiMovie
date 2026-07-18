@@ -20,6 +20,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"gorm.io/gorm"
 )
@@ -243,6 +244,37 @@ func TestRegisterAssetDeduplicatesWithinOrganization(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("asset count=%d want 2", count)
+	}
+}
+
+func TestCacheGeneratedFileHashesAndDeduplicates(t *testing.T) {
+	database := generationDatabase(t)
+	store := storage.NewLocal(t.TempDir())
+	if _, _, _, _, err := cacheGeneratedFile(nil, nil, 1, "image_generation", 1, "image", "missing", "", "image/png"); err == nil {
+		t.Fatal("missing storage accepted")
+	}
+	first, _, err := store.SaveBytes("images", "first.png", []byte("identical"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPath, firstURL, hash, size, err := cacheGeneratedFile(nil, store, 1, "image_generation", 1, "image", first, store.PublicURL(first), "image/png")
+	if err != nil || firstPath != first || firstURL != store.PublicURL(first) || hash == "" || size != 9 {
+		t.Fatalf("path=%q url=%q hash=%q size=%d err=%v", firstPath, firstURL, hash, size, err)
+	}
+	cache := mediacache.New(database, store)
+	if _, _, _, _, err := cacheGeneratedFile(cache, store, 1, "image_generation", 1, "image", first, store.PublicURL(first), "image/png"); err != nil {
+		t.Fatal(err)
+	}
+	second, secondAbsolute, err := store.SaveBytes("images", "second.png", []byte("identical"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _, _, _, err := cacheGeneratedFile(cache, store, 1, "image_generation", 2, "image", second, store.PublicURL(second), "image/png")
+	if err != nil || canonical != first {
+		t.Fatalf("canonical=%q first=%q err=%v", canonical, first, err)
+	}
+	if _, err := os.Stat(secondAbsolute); !os.IsNotExist(err) {
+		t.Fatalf("duplicate file still exists: %v", err)
 	}
 }
 

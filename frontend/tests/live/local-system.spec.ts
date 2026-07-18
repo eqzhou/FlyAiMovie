@@ -70,6 +70,8 @@ test('live backend: account, settings, invitation and asset workflows', async ({
     const quotaPanel = page.locator('.panel').filter({ hasText: '生成配额' })
     await quotaPanel.locator('input[type="number"]').nth(0).fill('321')
     await quotaPanel.locator('input[type="number"]').nth(1).fill('7')
+    await quotaPanel.locator('input[type="number"]').nth(2).fill('25')
+    await quotaPanel.locator('input[type="number"]').nth(3).fill('75')
     await quotaPanel.getByRole('button', { name: '保存配额' }).click()
     await expect(page.getByText('生成配额已保存')).toBeVisible()
 
@@ -91,6 +93,11 @@ test('live backend: account, settings, invitation and asset workflows', async ({
     await expect(page.getByText('live-pixel.png')).toBeVisible()
 
     await page.goto('/settings')
+    const cachePanel = page.locator('.panel').filter({ hasText: '本地缓存' })
+    await expect(cachePanel).toContainText(/对象 [1-9]/)
+    page.once('dialog', (dialog) => dialog.accept())
+    await cachePanel.getByRole('button', { name: '清理过期缓存' }).click()
+    await expect(page.getByText('过期缓存已清理')).toBeVisible()
     await page.locator('.field').filter({ hasText: '已有账号邀请邮箱' }).locator('input').fill(invitedEmail)
     await page.getByRole('button', { name: '创建安全邀请' }).click()
     const invitationURL = await page.locator('input[readonly]').inputValue()

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
+import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
 
 const configs = ref<any[]>([])
@@ -49,7 +49,8 @@ const providerChoices: Record<string, Array<{ value: string; label: string; base
     { value: 'mock', label: 'Mock (离线演示)', base: 'http://localhost' },
   ],
 }
-const quota = ref({ daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 0, active_jobs: 0 })
+const quota = ref({ daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 0, active_jobs: 0, daily_budget_cny: 0, budget_warning_percent: 80, budget_used_cny: 0, budget_warning: false })
+const cache = ref({ objects: 0, references: 0, bytes: 0, orphaned: 0 })
 const canManageQuota = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
 const members = ref<any[]>([])
 const memberForm = ref({ email: '', display_name: '', password: '', role: 'editor' })
@@ -70,6 +71,7 @@ async function load() {
   providers.value = await settingsAPI.providers()
   agents.value = await settingsAPI.agentConfigs()
   quota.value = await quotaAPI.get()
+  cache.value = await cacheAPI.stats()
   if (canManageQuota.value && authStore.state.enabled) {
     members.value = await memberAPI.list()
     invitations.value = await memberAPI.invitations()
@@ -142,9 +144,22 @@ async function deleteOrganization() {
 }
 
 async function saveQuota() {
-  await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs })
+  await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs, daily_budget_cny: quota.value.daily_budget_cny, budget_warning_percent: quota.value.budget_warning_percent })
   show('生成配额已保存')
   quota.value = await quotaAPI.get()
+}
+
+async function purgeCache() {
+  if (!confirm('清理当前组织的过期缓存？')) return
+  await cacheAPI.purge()
+  cache.value = await cacheAPI.stats()
+  show('过期缓存已清理')
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
 async function create() {
@@ -294,10 +309,23 @@ onMounted(load)
       <div class="field-grid">
         <div class="field"><label>每日任务上限</label><input v-model.number="quota.daily_job_limit" type="number" min="1" max="100000" :disabled="!canManageQuota" /></div>
         <div class="field"><label>并发任务上限</label><input v-model.number="quota.max_active_jobs" type="number" min="1" max="1000" :disabled="!canManageQuota" /></div>
+        <div class="field"><label>每日预算（CNY，0 为不限）</label><input v-model.number="quota.daily_budget_cny" type="number" min="0" step="0.01" :disabled="!canManageQuota" /></div>
+        <div class="field"><label>预算预警阈值（%）</label><input v-model.number="quota.budget_warning_percent" type="number" min="1" max="100" :disabled="!canManageQuota" /></div>
       </div>
       <div class="toolbar" style="align-items:center;margin-bottom:0">
         <button v-if="canManageQuota" class="btn btn-primary" @click="saveQuota">保存配额</button>
-        <span class="muted">今日已用 {{ quota.daily_jobs_used }} · 当前活跃 {{ quota.active_jobs }}</span>
+        <span class="muted">今日任务 {{ quota.daily_jobs_used }} · 当前活跃 {{ quota.active_jobs }} · 已计预算 ¥{{ quota.budget_used_cny.toFixed(2) }}</span>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h3 style="margin-top:0">本地缓存</h3>
+      <div class="toolbar" style="align-items:center;margin-bottom:0">
+        <span>对象 {{ cache.objects }}</span>
+        <span>引用 {{ cache.references }}</span>
+        <span>容量 {{ formatBytes(cache.bytes) }}</span>
+        <span>待回收 {{ cache.orphaned }}</span>
+        <button v-if="canManageQuota" class="btn" @click="purgeCache">清理过期缓存</button>
       </div>
     </div>
 

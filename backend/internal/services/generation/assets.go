@@ -11,7 +11,18 @@ func registerAsset(asset models.Asset) {
 		return
 	}
 	var existing models.Asset
-	if err := db.DB.Where("organization_id = ? AND url = ? AND deleted_at IS NULL", asset.OrganizationID, asset.URL).First(&existing).Error; err == nil {
+	query := db.DB.Where("organization_id = ? AND deleted_at IS NULL", asset.OrganizationID)
+	switch {
+	case asset.ImageGenID != nil:
+		query = query.Where("image_gen_id = ?", *asset.ImageGenID)
+	case asset.VideoGenID != nil:
+		query = query.Where("video_gen_id = ?", *asset.VideoGenID)
+	case asset.StoryboardID != nil:
+		query = query.Where("storyboard_id = ? AND category = ? AND url = ?", *asset.StoryboardID, asset.Category, asset.URL)
+	default:
+		query = query.Where("url = ?", asset.URL)
+	}
+	if err := query.First(&existing).Error; err == nil {
 		return
 	}
 	if asset.CreatedAt == "" {

@@ -82,6 +82,7 @@ func loadExportRows(out gin.H, organizationID uint) error {
 		{"job_events", &[]models.JobEvent{}}, {"agent_runs", &[]models.AgentRun{}}, {"agent_run_events", &[]models.AgentRunEvent{}},
 		{"media_migrations", &[]models.MediaMigration{}},
 		{"media_deletion_tasks", &[]models.MediaDeletionTask{}},
+		{"media_cache_objects", &[]models.MediaCacheObject{}}, {"media_cache_references", &[]models.MediaCacheReference{}},
 		{"agent_configs", &[]models.AgentConfig{}}, {"voices", &[]models.AIVoice{}}, {"audit_logs", &[]models.AuditLog{}}, {"quota", &[]models.OrganizationQuota{}},
 		{"invitations", &[]models.OrganizationInvitation{}},
 	}
@@ -148,7 +149,7 @@ func purgeOrganization(database *gorm.DB, store *storage.LocalStorage, organizat
 			return err
 		}
 		resources := []any{
-			&models.AgentRunEvent{}, &models.AgentRun{}, &models.JobEvent{}, &models.MediaMigration{},
+			&models.AgentRunEvent{}, &models.AgentRun{}, &models.JobEvent{}, &models.MediaMigration{}, &models.MediaCacheReference{}, &models.MediaCacheObject{},
 			&models.StoryboardCharacter{}, &models.EpisodeCharacter{}, &models.EpisodeScene{}, &models.Asset{}, &models.GridHistory{},
 			&models.ImageGeneration{}, &models.VideoGeneration{}, &models.VideoMerge{}, &models.GenerationJob{}, &models.Storyboard{},
 			&models.CharacterTemplate{}, &models.Character{}, &models.Scene{}, &models.Prop{}, &models.Episode{}, &models.Drama{}, &models.AIServiceConfig{},
@@ -212,6 +213,13 @@ func (s *Server) organizationMediaPaths(organizationID uint) (map[string]struct{
 	}
 	for _, row := range storyboards {
 		values = append(values, row.FirstFrameImage, row.LastFrameImage, row.ComposedImage, row.VideoURL, row.TTSAudioURL, row.SubtitleURL, row.ComposedVideoURL)
+	}
+	var cacheObjects []models.MediaCacheObject
+	if err := db.DB.Where("organization_id = ?", organizationID).Find(&cacheObjects).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range cacheObjects {
+		values = append(values, row.LocalPath, row.PublicURL)
 	}
 	var episodes []models.Episode
 	if err := db.DB.Where("organization_id = ?", organizationID).Find(&episodes).Error; err != nil {

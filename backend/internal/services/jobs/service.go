@@ -3,11 +3,13 @@ package jobs
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -250,7 +252,10 @@ func (s *Service) transitionOwnedNoTx(id uint, owner, target string, extra map[s
 	if result.RowsAffected != 1 {
 		return ErrTerminalJob
 	}
-	return s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra))
+	if err := s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra)); err != nil {
+		return err
+	}
+	return s.cacheResult(job, target, extra)
 }
 
 func (s *Service) SetSucceededOwned(id uint, owner, resultJSON string) error {
@@ -641,7 +646,22 @@ func (s *Service) transitionNoTx(id uint, target string, extra map[string]any) e
 	if result.RowsAffected != 1 {
 		return fmt.Errorf("job changed concurrently")
 	}
-	return s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra))
+	if err := s.appendEvent(job.OrganizationID, id, target, eventProgress(target, extra), eventMessage(target, extra)); err != nil {
+		return err
+	}
+	return s.cacheResult(job, target, extra)
+}
+
+func (s *Service) cacheResult(job models.GenerationJob, target string, extra map[string]any) error {
+	if target != StatusSucceeded {
+		return nil
+	}
+	result, ok := extra["result_json"].(string)
+	if !ok || result == "" {
+		return nil
+	}
+	_, _, err := mediacache.New(s.DB, nil).PutValue(job.OrganizationID, "job_result", strconv.FormatUint(uint64(job.ID), 10), "json", result, 7*24*time.Hour)
+	return err
 }
 
 func applyStageFields(updates map[string]any, target string) {

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -409,6 +410,14 @@ func TestCostEstimationAndBudgetReservation(t *testing.T) {
 	}
 	if stored.ActualCost != 0.04 {
 		t.Fatalf("actual cost=%v", stored.ActualCost)
+	}
+	var cached models.MediaCacheObject
+	if err := service.DB.Joins("JOIN media_cache_references ON media_cache_references.object_id = media_cache_objects.id").
+		Where("media_cache_references.organization_id = ? AND media_cache_references.namespace = ? AND media_cache_references.cache_key = ?", 44, "job_result", strconv.FormatUint(uint64(first.ID), 10)).First(&cached).Error; err != nil {
+		t.Fatalf("job result was not cached: %v", err)
+	}
+	if cached.Payload != "{}" {
+		t.Fatalf("cached result=%q", cached.Payload)
 	}
 	for id := uint(2); id < 10; id++ {
 		if _, err := service.CreateForTargetOrganization(44, "image.generate", "image_generation", id, "openai", nil); err != nil {

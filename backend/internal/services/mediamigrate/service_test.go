@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -117,6 +118,17 @@ func TestRunMigratesMediaAndIsRepeatable(t *testing.T) {
 	}
 	if migrations != 1 {
 		t.Fatalf("migration records=%d", migrations)
+	}
+	var cacheReference models.MediaCacheReference
+	if err := service.DB.Where("organization_id = ? AND namespace = ? AND cache_key = ?", 4, "asset", strconv.FormatUint(uint64(asset.ID), 10)).First(&cacheReference).Error; err != nil {
+		t.Fatalf("migration cache reference missing: %v", err)
+	}
+	var cacheObject models.MediaCacheObject
+	if err := service.DB.First(&cacheObject, cacheReference.ObjectID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cacheObject.ContentHash == "" || cacheObject.LocalPath != asset.LocalPath || asset.ContentHash != cacheObject.ContentHash {
+		t.Fatalf("asset=%+v cache=%+v", asset, cacheObject)
 	}
 }
 

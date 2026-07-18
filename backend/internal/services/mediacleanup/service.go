@@ -31,8 +31,16 @@ func New(database *gorm.DB, store *storage.LocalStorage) *Service {
 }
 
 func (s *Service) Queue(organizationID uint, paths []string) error {
+	return s.QueueReason(organizationID, paths, "organization_deleted")
+}
+
+func (s *Service) QueueReason(organizationID uint, paths []string, reason string) error {
 	if s == nil || s.DB == nil || s.Store == nil {
 		return fmt.Errorf("media cleanup service is not configured")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len(reason) > 100 {
+		return fmt.Errorf("cleanup reason is required")
 	}
 	now := response.Now()
 	seen := make(map[string]struct{}, len(paths))
@@ -53,7 +61,7 @@ func (s *Service) Queue(organizationID uint, paths []string) error {
 			if existing.Status == "completed" {
 				continue
 			}
-			if err := s.DB.Model(&existing).Updates(map[string]any{"status": "pending", "available_at": now, "updated_at": now}).Error; err != nil {
+			if err := s.DB.Model(&existing).Updates(map[string]any{"status": "pending", "reason": reason, "available_at": now, "updated_at": now}).Error; err != nil {
 				return err
 			}
 			continue
@@ -61,7 +69,7 @@ func (s *Service) Queue(organizationID uint, paths []string) error {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		task := models.MediaDeletionTask{OrganizationID: organizationID, PathHash: hash, LocalPath: relative, Reason: "organization_deleted", Status: "pending", AvailableAt: now, CreatedAt: now, UpdatedAt: now}
+		task := models.MediaDeletionTask{OrganizationID: organizationID, PathHash: hash, LocalPath: relative, Reason: reason, Status: "pending", AvailableAt: now, CreatedAt: now, UpdatedAt: now}
 		if err := s.DB.Create(&task).Error; err != nil {
 			return err
 		}

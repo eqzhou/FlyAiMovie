@@ -4,19 +4,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/ffmpeg"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 func (s *Server) registerImages(api *gin.RouterGroup) {
@@ -239,9 +242,31 @@ func (s *Server) registerUpload(api *gin.RouterGroup) {
 			response.ServerError(c, err.Error())
 			return
 		}
+		savedRel := rel
 		url := s.Store.PublicURL(rel)
-		if err := s.bindUploadedImage(c, url, rel); err != nil {
+		hash, size, err := mediacache.HashFile(s.Store.Abs(rel))
+		if err != nil {
 			_ = os.Remove(s.Store.Abs(rel))
+			response.ServerError(c, "failed to hash image")
+			return
+		}
+		temporaryKey := "upload:" + rel
+		cacheObject, reused, err := s.Cache.Put(mediacache.PutInput{OrganizationID: currentOrganizationID(c), Namespace: "image_upload", Key: temporaryKey,
+			ContentHash: hash, Kind: "image", LocalPath: rel, PublicURL: url, MimeType: info.MIME, Size: size})
+		if err != nil {
+			_ = os.Remove(s.Store.Abs(rel))
+			response.ServerError(c, "failed to cache image")
+			return
+		}
+		rel, url = cacheObject.LocalPath, cacheObject.PublicURL
+		if reused && savedRel != rel {
+			_ = os.Remove(s.Store.Abs(savedRel))
+		}
+		if err := s.bindUploadedImage(c, url, rel, hash, size, temporaryKey); err != nil {
+			_ = s.Cache.Release(currentOrganizationID(c), "image_upload", temporaryKey)
+			if !reused {
+				_ = os.Remove(s.Store.Abs(savedRel))
+			}
 			response.BadRequest(c, err.Error())
 			return
 		}
@@ -250,7 +275,19 @@ func (s *Server) registerUpload(api *gin.RouterGroup) {
 	api.POST("/upload/media", s.uploadMedia)
 }
 
-func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {
+func (s *Server) bindUploadedImage(c *gin.Context, url, rel, contentHash string, fileSize int64, temporaryCacheKey string) error {
+	return db.DB.Transaction(func(tx *gorm.DB) error {
+		return s.bindUploadedImageTx(c, tx, url, rel, contentHash, fileSize, temporaryCacheKey)
+	})
+}
+
+func (s *Server) bindUploadedImageTx(c *gin.Context, tx *gorm.DB, url, rel, contentHash string, fileSize int64, temporaryCacheKey string) error {
+	organizationQuery := func() *gorm.DB {
+		if actor, ok := currentAuth(c); ok {
+			return tx.Where("organization_id = ?", actor.Organization.ID)
+		}
+		return tx
+	}
 	parseID := func(key string) (*uint, error) {
 		raw := strings.TrimSpace(c.PostForm(key))
 		if raw == "" {
@@ -312,7 +349,7 @@ func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {
 	now := response.Now()
 	if characterID != nil {
 		var row models.Character
-		if err := organizationDB(c).First(&row, *characterID).Error; err != nil {
+		if err := organizationQuery().First(&row, *characterID).Error; err != nil {
 			return errors.New("character not found")
 		}
 		if dramaID != nil && row.DramaID != *dramaID {
@@ -320,11 +357,11 @@ func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {
 		}
 		if episodeID != nil {
 			var ep models.Episode
-			if err := organizationDB(c).First(&ep, *episodeID).Error; err != nil || ep.DramaID != row.DramaID {
+			if err := organizationQuery().First(&ep, *episodeID).Error; err != nil || ep.DramaID != row.DramaID {
 				return errors.New("character does not belong to episode")
 			}
 		}
-		if err := organizationDB(c).Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "updated_at": now}).Error; err != nil {
+		if err := organizationQuery().Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "updated_at": now}).Error; err != nil {
 			return err
 		}
 		dramaID = &row.DramaID
@@ -332,13 +369,13 @@ func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {
 	}
 	if sceneID != nil {
 		var row models.Scene
-		if err := organizationDB(c).First(&row, *sceneID).Error; err != nil {
+		if err := organizationQuery().First(&row, *sceneID).Error; err != nil {
 			return errors.New("scene not found")
 		}
 		if dramaID != nil && row.DramaID != *dramaID {
 			return errors.New("scene does not belong to drama")
 		}
-		if err := organizationDB(c).Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "status": "completed", "updated_at": now}).Error; err != nil {
+		if err := organizationQuery().Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "status": "completed", "updated_at": now}).Error; err != nil {
 			return err
 		}
 		dramaID = &row.DramaID
@@ -346,20 +383,29 @@ func (s *Server) bindUploadedImage(c *gin.Context, url, rel string) error {
 	}
 	if propID != nil {
 		var row models.Prop
-		if err := organizationDB(c).First(&row, *propID).Error; err != nil {
+		if err := organizationQuery().First(&row, *propID).Error; err != nil {
 			return errors.New("prop not found")
 		}
 		if dramaID != nil && row.DramaID != *dramaID {
 			return errors.New("prop does not belong to drama")
 		}
-		if err := organizationDB(c).Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "updated_at": now}).Error; err != nil {
+		if err := organizationQuery().Model(&row).Updates(map[string]any{"image_url": url, "local_path": rel, "updated_at": now}).Error; err != nil {
 			return err
 		}
 		dramaID = &row.DramaID
 		category = "prop"
 	}
-	asset := models.Asset{OrganizationID: currentOrganizationID(c), DramaID: dramaID, EpisodeID: episodeID, StoryboardID: storyboardID, Name: name, Type: "image", Category: category, URL: url, LocalPath: rel, MimeType: "image", CreatedAt: now, UpdatedAt: now}
-	return organizationDB(c).Create(&asset).Error
+	asset := models.Asset{OrganizationID: currentOrganizationID(c), DramaID: dramaID, EpisodeID: episodeID, StoryboardID: storyboardID, Name: name, Type: "image", Category: category,
+		URL: url, LocalPath: rel, MimeType: "image", ContentHash: contentHash, FileSize: fileSize, CreatedAt: now, UpdatedAt: now}
+	if err := organizationQuery().Create(&asset).Error; err != nil {
+		return err
+	}
+	cache := mediacache.New(tx, s.Store)
+	if _, _, err := cache.Put(mediacache.PutInput{OrganizationID: asset.OrganizationID, Namespace: "asset", Key: strconv.FormatUint(uint64(asset.ID), 10),
+		ContentHash: contentHash, Kind: "image", LocalPath: rel, PublicURL: url, MimeType: "image", Size: fileSize}); err != nil {
+		return err
+	}
+	return cache.Release(asset.OrganizationID, "image_upload", temporaryCacheKey)
 }
 
 func validateGenerationOwnership(c *gin.Context, storyboardID, dramaID, sceneID, characterID, episodeID *uint) error {

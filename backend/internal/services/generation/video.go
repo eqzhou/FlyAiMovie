@@ -12,6 +12,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
@@ -21,6 +22,7 @@ type VideoService struct {
 	Store      *storage.LocalStorage
 	Jobs       *jobs.Service
 	References *mediaref.Resolver
+	Cache      *mediacache.Service
 }
 
 func (s *VideoService) Generate(ctx context.Context, rec *models.VideoGeneration, configID *uint) error {
@@ -163,6 +165,13 @@ func (s *VideoService) FinalizeAuthorized(ctx context.Context, rec *models.Video
 	}
 	rec.LocalPath = rel
 	rec.VideoURL = s.Store.PublicURL(rel)
+	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, rec.OrganizationID, "video_generation", rec.ID, "video", rec.LocalPath, rec.VideoURL, "video/mp4")
+	if cacheErr != nil {
+		rec.Status, rec.ErrorMsg = "failed", cacheErr.Error()
+		s.failJob(rec.OrganizationID, rec.ID, cacheErr)
+		return cacheErr
+	}
+	rec.LocalPath, rec.VideoURL = canonicalPath, canonicalURL
 	rec.Status = "completed"
 	now := response.Now()
 	rec.CompletedAt = &now
@@ -179,7 +188,7 @@ func (s *VideoService) FinalizeAuthorized(ctx context.Context, rec *models.Video
 			"updated_at": now,
 		})
 	}
-	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成视频", Type: "video", Category: "video", URL: rec.VideoURL, LocalPath: rec.LocalPath, VideoGenID: &rec.ID})
+	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成视频", Type: "video", Category: "video", URL: rec.VideoURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, VideoGenID: &rec.ID})
 	if s.Jobs != nil {
 		result, _ := json.Marshal(map[string]string{"video_url": rec.VideoURL})
 		_ = s.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "video_generation", rec.ID, string(result))

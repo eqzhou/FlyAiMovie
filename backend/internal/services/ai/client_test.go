@@ -34,6 +34,48 @@ func TestChatWithMaxTokensForwardsLimit(t *testing.T) {
 	}
 }
 
+func TestChatCachesIdenticalRequestsWithinOrganization(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/chat-cache.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"cached"}}]}`))
+	}))
+	defer server.Close()
+	cfg := &ServiceConfig{OrganizationID: 77, ID: 3, Provider: "openai", BaseURL: server.URL, APIKey: "test", Model: "test-model"}
+	for range 2 {
+		result, err := ChatWithMaxTokens(context.Background(), cfg, "system", "same prompt", 0.2, 100)
+		if err != nil || result != "cached" {
+			t.Fatalf("result=%q err=%v", result, err)
+		}
+	}
+	if requestCount != 1 {
+		t.Fatalf("provider request count=%d want 1", requestCount)
+	}
+	cfg.UpdatedAt = "new-version"
+	if _, err := ChatWithMaxTokens(context.Background(), cfg, "system", "same prompt", 0.2, 100); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("updated config reused stale cache, count=%d", requestCount)
+	}
+	other := *cfg
+	other.OrganizationID = 78
+	if _, err := ChatWithMaxTokens(context.Background(), &other, "system", "same prompt", 0.2, 100); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 3 {
+		t.Fatalf("cross-organization cache leaked, count=%d", requestCount)
+	}
+}
+
 func TestPreferredConfigMustMatchServiceType(t *testing.T) {
 	database, err := db.Open(t.TempDir() + "/ai.db")
 	if err != nil {
@@ -179,7 +221,7 @@ func TestChatDefaultModelWrapperAndEmptyResponse(t *testing.T) {
 	if err != nil || result != "wrapper ok" {
 		t.Fatalf("result=%q err=%v", result, err)
 	}
-	if _, err := ChatWithMaxTokens(context.Background(), cfg, "system", "user", 0, 0); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := ChatWithMaxTokens(context.Background(), cfg, "system", "different user", 0, 0); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("empty response error=%v", err)
 	}
 }

@@ -19,6 +19,8 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/ffmpeg"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacleanup"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"gorm.io/gorm"
 )
@@ -30,6 +32,7 @@ type AsyncRunner struct {
 	TTS      *TTSService
 	Jobs     *jobs.Service
 	Store    *storage.LocalStorage
+	Cache    *mediacache.Service
 	once     sync.Once
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -55,7 +58,36 @@ func (r *AsyncRunner) Start() {
 			}
 		}
 		go r.loop()
+		if r.Cache != nil {
+			go r.cacheLoop()
+		}
 	})
+}
+
+func (r *AsyncRunner) cacheLoop() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.stop:
+			return
+		case <-ticker.C:
+			if err := r.purgeCacheOnce(); err != nil {
+				log.Printf("purge expired cache: %v", err)
+			}
+		}
+	}
+}
+
+func (r *AsyncRunner) purgeCacheOnce() error {
+	if r.Cache == nil || r.Store == nil {
+		return fmt.Errorf("cache worker is not configured")
+	}
+	if _, err := r.Cache.PurgeAllExpired(1000); err != nil {
+		return err
+	}
+	_, err := mediacleanup.New(r.Cache.DB, r.Store).ProcessOrganization(0, 1000)
+	return err
 }
 
 func (r *AsyncRunner) loop() {
@@ -244,9 +276,15 @@ func (r *AsyncRunner) composeStoryboard(ctx context.Context, organizationID uint
 		}
 	}
 	url := r.Store.PublicURL(rel)
+	canonicalPath, canonicalURL, contentHash, size, err := cacheGeneratedFile(r.Cache, r.Store, organizationID, "storyboard_compose", id, "video", rel, url, "video/mp4")
+	if err != nil {
+		return "", err
+	}
+	rel, url = canonicalPath, canonicalURL
 	if err := scopedDB(db.DB, organizationID).Model(&models.Storyboard{}).Where("id = ?", id).Updates(map[string]any{"composed_video_url": url, "status": "composed", "updated_at": response.Now()}).Error; err != nil {
 		return "", err
 	}
+	registerAsset(models.Asset{OrganizationID: organizationID, StoryboardID: &id, Name: "镜头合成", Type: "video", Category: "composed", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
 	b, _ := json.Marshal(map[string]string{"composed_video_url": url})
 	return string(b), nil
 }
@@ -331,6 +369,11 @@ func (r *AsyncRunner) mergeEpisode(ctx context.Context, organizationID, episodeI
 		}
 	}
 	url := r.Store.PublicURL(rel)
+	canonicalPath, canonicalURL, contentHash, size, err := cacheGeneratedFile(r.Cache, r.Store, organizationID, "episode_merge", episodeID, "video", rel, url, "video/mp4")
+	if err != nil {
+		return "", err
+	}
+	rel, url = canonicalPath, canonicalURL
 	ts := response.Now()
 	var ep models.Episode
 	if err := scopedDB(db.DB, organizationID).Where("id = ?", episodeID).First(&ep).Error; err != nil {
@@ -343,6 +386,7 @@ func (r *AsyncRunner) mergeEpisode(ctx context.Context, organizationID, episodeI
 	if err := db.DB.Create(&merge).Error; err != nil {
 		return "", err
 	}
+	registerAsset(models.Asset{OrganizationID: organizationID, DramaID: &ep.DramaID, EpisodeID: &ep.ID, Name: ep.Title, Type: "video", Category: "episode", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
 	b, _ := json.Marshal(map[string]any{"merged_url": url, "merge_id": merge.ID})
 	return string(b), nil
 }

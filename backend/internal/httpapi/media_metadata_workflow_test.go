@@ -51,6 +51,22 @@ func TestMediaUploadProbeRepairAndAssetApplication(t *testing.T) {
 	if data["probe_status"] != "completed" || data["duration_seconds"].(float64) <= 0 || data["width"] != float64(64) || data["height"] != float64(48) {
 		t.Fatalf("metadata=%#v", data)
 	}
+	duplicateResponse := performMediaUpload(t, router, videoPath, map[string]string{"name": "Duplicate Video"})
+	if duplicateResponse.Code != http.StatusCreated {
+		t.Fatalf("duplicate upload status=%d body=%s", duplicateResponse.Code, duplicateResponse.Body.String())
+	}
+	duplicateData := decodeResponse(t, duplicateResponse)["data"].(map[string]any)
+	duplicateAssetID := uint(duplicateData["id"].(float64))
+	if duplicateData["url"] != data["url"] || duplicateData["local_path"] != data["local_path"] {
+		t.Fatalf("upload was not deduplicated: first=%#v duplicate=%#v", data, duplicateData)
+	}
+	var cacheObject models.MediaCacheObject
+	if err := db.DB.Where("organization_id = ? AND content_hash = ?", 0, data["content_hash"]).First(&cacheObject).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cacheObject.ReferenceCount != 2 {
+		t.Fatalf("cache reference count=%d want 2", cacheObject.ReferenceCount)
+	}
 	assertRequestStatus(t, router, http.MethodPost, "/api/v1/assets/"+idText(assetID)+"/probe", `{}`, http.StatusOK)
 	assertRequestStatus(t, router, http.MethodPost, "/api/v1/assets/metadata/repair", `{}`, http.StatusOK)
 
@@ -70,6 +86,7 @@ func TestMediaUploadProbeRepairAndAssetApplication(t *testing.T) {
 	assertRequestStatus(t, router, http.MethodGet, "/api/v1/assets/"+idText(assetID), "", http.StatusOK)
 	assertRequestStatus(t, router, http.MethodPut, "/api/v1/assets/"+idText(assetID), `{"is_favorite":true,"duration":1}`, http.StatusOK)
 	assertRequestStatus(t, router, http.MethodDelete, "/api/v1/assets/"+idText(assetID), "", http.StatusOK)
+	assertRequestStatus(t, router, http.MethodDelete, "/api/v1/assets/"+idText(duplicateAssetID), "", http.StatusOK)
 }
 
 func TestHTTPConversionHelpers(t *testing.T) {

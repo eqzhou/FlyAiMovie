@@ -74,7 +74,7 @@ func main() {
 
 	srv := httpapi.NewServer(cfg, store, skillsDir, frontendDist)
 	// background poller for async image/video jobs
-	async := &generation.AsyncRunner{Images: srv.Images, Videos: srv.Videos, TTS: srv.TTS, Jobs: jobs.New(gdb), Store: store}
+	async := &generation.AsyncRunner{Images: srv.Images, Videos: srv.Videos, TTS: srv.TTS, Jobs: jobs.New(gdb), Store: store, Cache: srv.Cache}
 	async.Start()
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	if p := os.Getenv("PORT"); p != "" {

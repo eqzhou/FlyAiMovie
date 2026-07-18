@@ -2,23 +2,30 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/security"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	openai "github.com/sashabaranov/go-openai"
 	"gorm.io/gorm"
 )
 
 type ServiceConfig struct {
-	ID       uint
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Model    string
+	OrganizationID uint
+	ID             uint
+	Provider       string
+	BaseURL        string
+	APIKey         string
+	Model          string
+	UpdatedAt      string
 }
 
 func GetActiveConfig(serviceType string, preferredID *uint) (*ServiceConfig, error) {
@@ -111,11 +118,13 @@ func mapConfig(row models.AIServiceConfig) *ServiceConfig {
 		apiKey = ""
 	}
 	return &ServiceConfig{
-		ID:       row.ID,
-		Provider: row.Provider,
-		BaseURL:  row.BaseURL,
-		APIKey:   apiKey,
-		Model:    row.Model,
+		OrganizationID: row.OrganizationID,
+		ID:             row.ID,
+		Provider:       row.Provider,
+		BaseURL:        row.BaseURL,
+		APIKey:         apiKey,
+		Model:          row.Model,
+		UpdatedAt:      row.UpdatedAt,
 	}
 }
 
@@ -150,6 +159,12 @@ func Chat(ctx context.Context, cfg *ServiceConfig, system, user string, temperat
 }
 
 func ChatWithMaxTokens(ctx context.Context, cfg *ServiceConfig, system, user string, temperature float32, maxTokens int) (string, error) {
+	cacheKey := chatCacheKey(cfg, system, user, temperature, maxTokens)
+	if db.DB != nil {
+		if cached, err := mediacache.New(db.DB, nil).ResolveValue(cfg.OrganizationID, "ai_request", cacheKey); err == nil {
+			return cached, nil
+		}
+	}
 	client := NewOpenAIClient(cfg)
 	model := cfg.Model
 	if model == "" {
@@ -173,7 +188,28 @@ func ChatWithMaxTokens(ctx context.Context, cfg *ServiceConfig, system, user str
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("empty chat response")
 	}
-	return resp.Choices[0].Message.Content, nil
+	result := resp.Choices[0].Message.Content
+	if db.DB != nil && result != "" {
+		_, _, _ = mediacache.New(db.DB, nil).PutValue(cfg.OrganizationID, "ai_request", cacheKey, "text", result, time.Hour)
+	}
+	return result, nil
+}
+
+func chatCacheKey(cfg *ServiceConfig, system, user string, temperature float32, maxTokens int) string {
+	input := struct {
+		ConfigID    uint    `json:"config_id"`
+		Provider    string  `json:"provider"`
+		BaseURL     string  `json:"base_url"`
+		Model       string  `json:"model"`
+		UpdatedAt   string  `json:"updated_at"`
+		System      string  `json:"system"`
+		User        string  `json:"user"`
+		Temperature float32 `json:"temperature"`
+		MaxTokens   int     `json:"max_tokens"`
+	}{cfg.ID, cfg.Provider, cfg.BaseURL, cfg.Model, cfg.UpdatedAt, system, user, temperature, maxTokens}
+	payload, _ := json.Marshal(input)
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
 }
 
 func GetByID(id uint) (*models.AIServiceConfig, error) {

@@ -100,4 +100,6 @@ wait_job "$(field job_id <<<"$merge")"
 
 final="$(json_request GET "/dramas/$DRAMA_ID")"
 jq -e --argjson episode_id "$EPISODE_ID" '.data.episodes[] | select(.id == $episode_id) | .video_url | length > 0' <<<"$final" >/dev/null
+cache="$(json_request GET /organization/cache)"
+jq -e '.data.objects > 0 and .data.references > 0 and .data.bytes > 0' <<<"$cache" >/dev/null
 echo "live E2E passed: drama=$DRAMA_ID episode=$EPISODE_ID storyboard=$STORYBOARD_ID"

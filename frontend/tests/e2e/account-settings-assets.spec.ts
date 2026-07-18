@@ -26,7 +26,9 @@ async function mockAccountAPI(page: Page) {
     else if (path === '/api/v1/ai-configs') data = [{ id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock' }]
     else if (path === '/api/v1/ai-providers') data = [{ provider: 'mock', service_type: 'image' }]
     else if (path === '/api/v1/agent-configs') data = [{ id: 20, agent_type: 'script_rewriter', name: 'Script Rewriter', model: 'mock', is_active: true }]
-    else if (path === '/api/v1/organization/quota') data = { daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 2, active_jobs: 0 }
+    else if (path === '/api/v1/organization/quota') data = { daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 2, active_jobs: 0, daily_budget_cny: 10, budget_warning_percent: 80, budget_used_cny: 1.25, budget_warning: false }
+    else if (path === '/api/v1/organization/cache') data = { objects: 3, references: 4, bytes: 2048, orphaned: 1 }
+    else if (path === '/api/v1/organization/cache/purge') data = { purged: { deleted_objects: 1 }, cleanup: { completed: 1, failed: 0 } }
     else if (path === '/api/v1/organization/members') data = [{ user_id: 1, email: actor.user.email, display_name: actor.user.display_name, role: 'owner' }]
     else if (path === '/api/v1/organization/members/invitations') data = []
     else if (path === '/api/v1/dramas/2') data = { id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }], characters: [], scenes: [], props: [] }
@@ -48,6 +50,8 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
   await expect(page.getByText('Mock Image')).toBeVisible()
   await expect(page.getByText('生成配额')).toBeVisible()
+  await expect(page.getByText('本地缓存')).toBeVisible()
+  await expect(page.getByText('容量 2.0 KB')).toBeVisible()
   await page.getByRole('combobox').nth(0).selectOption('video')
   await expect(page.getByRole('combobox').nth(1)).toContainText('OpenAI Sora')
   await page.getByRole('combobox').nth(0).selectOption('text')

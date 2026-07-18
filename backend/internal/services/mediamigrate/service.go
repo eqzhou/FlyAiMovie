@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"gorm.io/gorm"
@@ -102,15 +104,29 @@ func (s *Service) migrateOne(ctx context.Context, candidate Candidate) error {
 		return err
 	}
 	publicURL := s.Store.PublicURL(rel)
+	hash, size, err := mediacache.HashFile(s.Store.Abs(rel))
+	if err != nil {
+		_ = os.Remove(s.Store.Abs(rel))
+		s.DB.Model(&record).Updates(map[string]any{"status": "failed", "last_error": err.Error(), "updated_at": response.Now()})
+		return err
+	}
+	canonicalRel := rel
 	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		cacheObject, _, cacheErr := mediacache.New(tx, s.Store).Put(mediacache.PutInput{OrganizationID: candidate.OrganizationID,
+			Namespace: candidate.TargetType, Key: strconv.FormatUint(uint64(candidate.TargetID), 10), ContentHash: hash, Kind: candidate.Kind,
+			LocalPath: rel, PublicURL: publicURL, Size: size})
+		if cacheErr != nil {
+			return cacheErr
+		}
+		canonicalRel, publicURL = cacheObject.LocalPath, cacheObject.PublicURL
 		var update *gorm.DB
 		switch candidate.TargetType {
 		case "asset":
-			update = tx.Model(&models.Asset{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"url": publicURL, "local_path": rel, "updated_at": response.Now()})
+			update = tx.Model(&models.Asset{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"url": publicURL, "local_path": canonicalRel, "content_hash": hash, "file_size": size, "updated_at": response.Now()})
 		case "image_generation":
-			update = tx.Model(&models.ImageGeneration{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"image_url": publicURL, "local_path": rel, "updated_at": response.Now()})
+			update = tx.Model(&models.ImageGeneration{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"image_url": publicURL, "local_path": canonicalRel, "updated_at": response.Now()})
 		case "video_generation":
-			update = tx.Model(&models.VideoGeneration{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"video_url": publicURL, "local_path": rel, "updated_at": response.Now()})
+			update = tx.Model(&models.VideoGeneration{}).Where("organization_id = ? AND id = ?", candidate.OrganizationID, candidate.TargetID).Updates(map[string]any{"video_url": publicURL, "local_path": canonicalRel, "updated_at": response.Now()})
 		}
 		if update == nil {
 			return gorm.ErrInvalidData
@@ -125,11 +141,13 @@ func (s *Service) migrateOne(ctx context.Context, candidate Candidate) error {
 			return err
 		}
 		completed := response.Now()
-		return tx.Model(&record).Updates(map[string]any{"status": "completed", "local_path": rel, "last_error": "", "updated_at": completed, "completed_at": completed}).Error
+		return tx.Model(&record).Updates(map[string]any{"status": "completed", "local_path": canonicalRel, "last_error": "", "updated_at": completed, "completed_at": completed}).Error
 	})
 	if err != nil {
 		_ = os.Remove(s.Store.Abs(rel))
 		s.DB.Model(&record).Updates(map[string]any{"status": "failed", "last_error": err.Error(), "updated_at": response.Now()})
+	} else if canonicalRel != rel {
+		_ = os.Remove(s.Store.Abs(rel))
 	}
 	return err
 }

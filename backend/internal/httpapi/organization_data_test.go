@@ -6,11 +6,13 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/config"
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 )
 
 func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
@@ -36,6 +38,9 @@ func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
 	if err := db.DB.Create(&aiConfig).Error; err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := server.Cache.PutValue(organization.ID, "ai_request", "export-cache", "text", "private cached output", time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	exported := performAuthRequest(router, http.MethodGet, "/api/v1/organization/export", "", cookie, "")
 	if exported.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", exported.Code, exported.Body.String())
@@ -44,13 +49,16 @@ func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
 	if !strings.Contains(body, "exported drama") || strings.Contains(body, "foreign drama") {
 		t.Fatalf("scope failure: %s", body)
 	}
-	for _, secret := range []string{"test-placeholder-key", "password_hash", "csrf_token", "token_hash"} {
+	for _, secret := range []string{"test-placeholder-key", "private cached output", "password_hash", "csrf_token", "token_hash"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("export leaked %q: %s", secret, body)
 		}
 	}
 	if !strings.Contains(body, `"api_key_set":true`) {
 		t.Fatalf("credential presence marker missing: %s", body)
+	}
+	if !strings.Contains(body, `"media_cache_objects"`) || !strings.Contains(body, `"media_cache_references"`) {
+		t.Fatalf("cache metadata missing from export: %s", body)
 	}
 }
 
@@ -81,6 +89,13 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	}
 	asset := models.Asset{OrganizationID: organization.ID, DramaID: &drama.ID, Name: "private", Type: "document", URL: server.Store.PublicURL(rel), LocalPath: rel, CreatedAt: now, UpdatedAt: now}
 	if err := db.DB.Create(&asset).Error; err != nil {
+		t.Fatal(err)
+	}
+	cacheRel, cacheAbs, err := server.Store.Save("cache", "cache-only.bin", strings.NewReader("cache-only"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.Cache.Put(mediacache.PutInput{OrganizationID: organization.ID, Namespace: "test", Key: "cache-only", ContentHash: "cache-only-hash", Kind: "binary", LocalPath: cacheRel, PublicURL: server.Store.PublicURL(cacheRel), Size: 10}); err != nil {
 		t.Fatal(err)
 	}
 	template := models.CharacterTemplate{OrganizationID: organization.ID, Name: "private template", CreatedAt: now, UpdatedAt: now}
@@ -116,6 +131,9 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
 		t.Fatalf("media still exists: %v", err)
 	}
+	if _, err := os.Stat(cacheAbs); !os.IsNotExist(err) {
+		t.Fatalf("cache-only media still exists: %v", err)
+	}
 	var deletionTask models.MediaDeletionTask
 	if err := db.DB.Where("organization_id = ?", organization.ID).First(&deletionTask).Error; err != nil || deletionTask.Status != "completed" {
 		t.Fatalf("media deletion task=%+v err=%v", deletionTask, err)
@@ -124,6 +142,7 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 		&models.Organization{}: "organization", &models.Drama{}: "drama", &models.Asset{}: "asset", &models.Membership{}: "membership", &models.Session{}: "session",
 		&models.CharacterTemplate{}: "character template", &models.GenerationJob{}: "job", &models.JobEvent{}: "job event",
 		&models.AgentRun{}: "agent run", &models.AgentRunEvent{}: "agent event", &models.MediaMigration{}: "media migration",
+		&models.MediaCacheObject{}: "cache object", &models.MediaCacheReference{}: "cache reference",
 	} {
 		var count int64
 		query := db.DB.Model(model).Where("organization_id = ?", organization.ID)

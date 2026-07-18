@@ -18,6 +18,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/agents"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacleanup"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
@@ -32,6 +33,7 @@ type Server struct {
 	Videos       *generation.VideoService
 	TTS          *generation.TTSService
 	Jobs         *jobs.Service
+	Cache        *mediacache.Service
 	Frontend     string // dist path optional
 	ResetSender  PasswordResetSender
 	agentRunMu   sync.Mutex
@@ -40,15 +42,17 @@ type Server struct {
 
 func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, frontendDist string) *Server {
 	jobService := jobs.New(db.DB)
+	cacheService := mediacache.New(db.DB, store)
 	references := &mediaref.Resolver{Store: store}
 	server := &Server{
 		Cfg:          cfg,
 		Store:        store,
 		Agents:       agents.NewRunner(skillsDir),
-		Images:       &generation.ImageService{Store: store, Jobs: jobService, References: references},
-		Videos:       &generation.VideoService{Store: store, Jobs: jobService, References: references},
-		TTS:          &generation.TTSService{Store: store},
+		Images:       &generation.ImageService{Store: store, Jobs: jobService, References: references, Cache: cacheService},
+		Videos:       &generation.VideoService{Store: store, Jobs: jobService, References: references, Cache: cacheService},
+		TTS:          &generation.TTSService{Store: store, Cache: cacheService},
 		Jobs:         jobService,
+		Cache:        cacheService,
 		Frontend:     frontendDist,
 		ResetSender:  NoopPasswordResetSender{},
 		agentCancels: make(map[uint]context.CancelFunc),
@@ -58,6 +62,9 @@ func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, front
 		"status": "failed", "last_error": "server restarted during agent execution", "completed_at": timestamp, "updated_at": timestamp,
 	}).Error; err != nil {
 		log.Printf("recover interrupted agent runs: %v", err)
+	}
+	if _, err := cacheService.PurgeAllExpired(100); err != nil {
+		log.Printf("purge expired cache: %v", err)
 	}
 	if cleanup, err := mediacleanup.New(db.DB, store).ProcessOrganization(0, 100); err != nil {
 		log.Printf("retry media cleanup tasks: %v", err)
@@ -75,7 +82,7 @@ func (s *Server) Router() *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger(), s.securityHeaders())
+	r.Use(gin.Recovery(), routeTemplateLogger(), s.securityHeaders())
 	r.Use(s.rateLimit(newIPRateLimiter(s.Cfg.Server.RateLimitPerMinute, time.Minute, time.Now)), s.cors())
 
 	r.GET("/api/v1/health", func(c *gin.Context) {
@@ -113,6 +120,7 @@ func (s *Server) Router() *gin.Engine {
 		s.registerJobs(api)
 		s.registerAuditLogs(api)
 		s.registerOrganizationQuota(api)
+		s.registerMediaCache(api)
 		s.registerOrganizationMembers(api)
 		s.registerOrganizationData(api)
 	}
@@ -137,6 +145,26 @@ func (s *Server) Router() *gin.Engine {
 		})
 	}
 	return r
+}
+
+func routeTemplateLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		startedAt := time.Now()
+		c.Next()
+
+		route := c.FullPath()
+		if route == "" {
+			route = "<unmatched>"
+		}
+		fmt.Fprintf(gin.DefaultWriter, "[GIN] %s | %3d | %13v | %15s | %-7s %q\n",
+			time.Now().Format("2006/01/02 - 15:04:05"),
+			c.Writer.Status(),
+			time.Since(startedAt),
+			c.ClientIP(),
+			c.Request.Method,
+			route,
+		)
+	}
 }
 
 func (s *Server) servePrivateStatic(c *gin.Context) {

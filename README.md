@@ -53,6 +53,7 @@ docker compose -f docker-compose.sqlite.yml up --build
 - 宫格历史、任务查询/取消、统一素材库 API、批量帧/视频/配音、道具管理、本地存储 `/static`
 - 跨项目角色模板库、项目内场景复制/迁移、视频/音频上传与 FFprobe 元数据
 - 任务中心：阶段日志、筛选、单任务重试/取消与批量取消；Agent 运行历史和工具调用审计
+- 组织隔离缓存：AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按内容哈希去重；设置页可查看容量并清理过期项
 - **Mock 厂商**（`provider=mock`）：无外网密钥时也可跑通演示链路
 
 功能对等范围、自动验收状态和 clean-room 红线见 [`docs/FUNCTIONAL_PARITY.md`](docs/FUNCTIONAL_PARITY.md)。

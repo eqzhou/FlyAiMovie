@@ -15,6 +15,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
@@ -25,6 +26,7 @@ type ImageService struct {
 	Store      *storage.LocalStorage
 	Jobs       *jobs.Service
 	References *mediaref.Resolver
+	Cache      *mediacache.Service
 }
 
 func (s *ImageService) Finalize(ctx context.Context, rec *models.ImageGeneration, sourceURL string) error {
@@ -36,13 +38,19 @@ func (s *ImageService) Finalize(ctx context.Context, rec *models.ImageGeneration
 		return err
 	}
 	rec.LocalPath, rec.ImageURL, rec.Status = local, s.Store.PublicURL(local), "completed"
+	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, rec.OrganizationID, "image_generation", rec.ID, "image", rec.LocalPath, rec.ImageURL, "image/png")
+	if cacheErr != nil {
+		rec.Status, rec.ErrorMsg, rec.UpdatedAt = "failed", cacheErr.Error(), response.Now()
+		return cacheErr
+	}
+	rec.LocalPath, rec.ImageURL = canonicalPath, canonicalURL
 	now := response.Now()
 	rec.CompletedAt, rec.UpdatedAt = &now, now
 	if err := scopedDB(db.DB, rec.OrganizationID).Save(rec).Error; err != nil {
 		return err
 	}
 	s.ApplySideEffects(rec)
-	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ImageGenID: &rec.ID})
+	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID})
 	if s.Jobs != nil {
 		result, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
 		_ = s.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "image_generation", rec.ID, string(result))
@@ -133,6 +141,13 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 	}
 	rec.LocalPath = localRel
 	rec.ImageURL = s.Store.PublicURL(localRel)
+	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, rec.OrganizationID, "image_generation", rec.ID, "image", rec.LocalPath, rec.ImageURL, "image/png")
+	if cacheErr != nil {
+		rec.Status, rec.ErrorMsg = "failed", cacheErr.Error()
+		s.failJob(rec.OrganizationID, rec.ID, cacheErr)
+		return cacheErr
+	}
+	rec.LocalPath, rec.ImageURL = canonicalPath, canonicalURL
 	rec.Status = "completed"
 	now := response.Now()
 	rec.CompletedAt = &now
@@ -141,7 +156,7 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 
 	// side-effects: update character/scene/storyboard
 	s.ApplySideEffects(rec)
-	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ImageGenID: &rec.ID})
+	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID})
 	if s.Jobs != nil {
 		result, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
 		_ = s.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "image_generation", rec.ID, string(result))

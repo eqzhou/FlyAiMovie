@@ -1,11 +1,34 @@
 package db
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"gorm.io/gorm"
 )
+
+func TestDatabaseLoggerSuppressesExpectedMisses(t *testing.T) {
+	var output bytes.Buffer
+	databaseLogger := newDatabaseLogger(&output)
+	databaseLogger.Trace(context.Background(), time.Now(), func() (string, int64) {
+		return "SELECT * FROM users WHERE email = 'private@example.com'", 0
+	}, gorm.ErrRecordNotFound)
+	if output.Len() != 0 {
+		t.Fatalf("record-not-found query was logged: %s", output.String())
+	}
+
+	databaseLogger.Trace(context.Background(), time.Now(), func() (string, int64) {
+		return "SELECT 1", 0
+	}, errors.New("database unavailable"))
+	if !strings.Contains(output.String(), "database unavailable") {
+		t.Fatalf("real database error was not logged: %s", output.String())
+	}
+}
 
 func TestOpenDatabaseValidation(t *testing.T) {
 	if _, err := OpenDatabase("postgres", "", ""); err == nil || !strings.Contains(err.Error(), "DSN") {

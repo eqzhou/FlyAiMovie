@@ -13,6 +13,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/google/uuid"
 )
@@ -24,6 +25,7 @@ var (
 
 type TTSService struct {
 	Store *storage.LocalStorage
+	Cache *mediacache.Service
 }
 
 func (s *TTSService) GenerateForStoryboard(ctx context.Context, storyboardID uint, audioConfigID *uint) (string, error) {
@@ -113,13 +115,18 @@ func (s *TTSService) generateForStoryboard(ctx context.Context, sb *models.Story
 	}
 	_ = abs
 	url := s.Store.PublicURL(rel)
+	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, organizationID, "storyboard_tts", sb.ID, "audio", rel, url, "audio/mpeg")
+	if cacheErr != nil {
+		return "", cacheErr
+	}
+	rel, url = canonicalPath, canonicalURL
 	query := db.DB.Model(&models.Storyboard{}).Where("id = ?", sb.ID)
 	if organizationID != 0 {
 		query = query.Where("organization_id = ?", organizationID)
 	}
 	query.Updates(map[string]any{"tts_audio_url": url, "updated_at": response.Now()})
 	episodeID := sb.EpisodeID
-	registerAsset(models.Asset{OrganizationID: organizationID, EpisodeID: &episodeID, StoryboardID: &sb.ID, Name: "镜头配音", Type: "audio", Category: "tts", URL: url, LocalPath: rel})
+	registerAsset(models.Asset{OrganizationID: organizationID, EpisodeID: &episodeID, StoryboardID: &sb.ID, Name: "镜头配音", Type: "audio", Category: "tts", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
 	return url, nil
 }
 

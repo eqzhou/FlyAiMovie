@@ -14,6 +14,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
 
@@ -401,6 +402,36 @@ func TestLegacyPollingDelegatesToPersistentPollers(t *testing.T) {
 	}
 	if imageRecord.Status != "failed" || videoRecord.Status != "failed" {
 		t.Fatalf("image=%+v video=%+v", imageRecord, videoRecord)
+	}
+}
+
+func TestAsyncRunnerPurgesExpiredCache(t *testing.T) {
+	if err := (&AsyncRunner{}).purgeCacheOnce(); err == nil {
+		t.Fatal("unconfigured cache worker succeeded")
+	}
+	database := generationDatabase(t)
+	store := storage.NewLocal(t.TempDir())
+	cache := mediacache.New(database, store)
+	relative, absolute, err := store.SaveBytes("cache", "expired.bin", []byte("expired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _, err := cache.Put(mediacache.PutInput{OrganizationID: 15, Namespace: "job", Key: "1", ContentHash: "expired", Kind: "binary", LocalPath: relative})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Release(15, "job", "1"); err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	if err := database.Model(&models.MediaCacheObject{}).Where("id = ?", object.ID).Update("expires_at", expired).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&AsyncRunner{Cache: cache, Store: store}).purgeCacheOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(absolute); !os.IsNotExist(err) {
+		t.Fatalf("expired file still exists: %v", err)
 	}
 }
 

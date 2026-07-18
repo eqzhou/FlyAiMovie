@@ -40,6 +40,7 @@
 | P-23 | 场景复制与迁移 | 复制到目标集；迁移时事务更新场景、剧集关联与可选关联分镜 | 已验收后端事务和前端操作；跨项目必须显式确认 | `TestSceneMoveAcrossDramaRequiresExplicitOptions`、`frontend/tests/e2e/workbench.spec.ts` |
 | P-24 | 媒体元数据与迁移 | 上传视频/音频后读取真实时长；历史外链可 dry-run 和断点迁移 | 已实现：FFprobe 失败保存错误而非错误的 0；迁移仅在验证成功后替换 URL | `mediainfo/probe_test.go`、`mediamigrate/service_test.go` |
 | P-25 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；Agent 取消在上下文/工具边界生效，服务重启遗留运行标记为中断失败 | jobs service/API tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
+| P-26 | 统一缓存生命周期 | AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按组织隔离缓存，可去重、计数、过期和手动清理 | 已验收：图片/视频/音频上传及所有生成链路均接入；物理对象按组织/类型/内容哈希去重，逻辑引用独立计数；过期对象进入可重试删除补偿队列，设置页展示容量并提供管理员清理入口；组织导出/删除包含缓存记录 | `mediacache/service_test.go`、`TestPostgresCacheLifecycle`、`TestMediaCacheStatsAndPurgeWorkflow`、图片/媒体重复上传测试、`TestChatCachesIdenticalRequestsWithinOrganization`、live browser E2E |
 
 ## 非功能验收
 
@@ -72,9 +73,7 @@
 
 ## 下一阶段完成标准
 
-- 扩展 Mock 集成/E2E 到异常恢复、服务重启和移动端关键流程。
-- 使用真实 SMTP 账号验收组织邀请和密码恢复投递；撤销、重发和写操作审计已实现。
-- 将核心 Go 包与前端关键业务逻辑覆盖率提升至 80% 以上。
-- 执行真实厂商账号 smoke test，并归档供应商协议版本与测试证据。
-- 为生成任务补按厂商价格计算的金额预算；继续验证组织导出/删除的备份恢复流程。
-- 建立 Git 发布基线、生产部署配置、回滚流程、SBOM、漏洞扫描及许可证归档。
+- 使用真实 OpenAI、MiniMax、火山、Vidu、阿里账号执行 smoke test，并归档供应商协议版本与测试证据。
+- 使用真实 SMTP 账号验收组织邀请和密码恢复投递。
+- 在发布 CI 补跑 WebKit，并在干净 Docker/PostgreSQL 环境验证初始化、数据卷恢复和数据库备份回滚。
+- 生成 SBOM、执行依赖漏洞与许可证扫描，并完成 FFmpeg 构建、字体、图标、声音、肖像和模型条款的法务归档。

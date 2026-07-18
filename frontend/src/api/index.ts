@@ -212,8 +212,13 @@ export const auditAPI = {
 }
 
 export const quotaAPI = {
-  get: () => api.get<{ daily_job_limit: number; max_active_jobs: number; daily_jobs_used: number; active_jobs: number }>('/organization/quota'),
-  update: (data: { daily_job_limit: number; max_active_jobs: number }) => api.put('/organization/quota', data),
+  get: () => api.get<{ daily_job_limit: number; max_active_jobs: number; daily_jobs_used: number; active_jobs: number; daily_budget_cny: number; budget_warning_percent: number; budget_used_cny: number; budget_warning: boolean }>('/organization/quota'),
+  update: (data: { daily_job_limit: number; max_active_jobs: number; daily_budget_cny: number; budget_warning_percent: number }) => api.put('/organization/quota', data),
+}
+
+export const cacheAPI = {
+  stats: () => api.get<{ objects: number; references: number; bytes: number; orphaned: number }>('/organization/cache'),
+  purge: (limit = 100) => api.post<{ purged: any; cleanup: any }>('/organization/cache/purge', { limit }),
 }
 
 export const memberAPI = {

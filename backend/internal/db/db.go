@@ -3,9 +3,11 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
@@ -37,9 +39,7 @@ func OpenDatabase(databaseType, path, dsn string) (*gorm.DB, error) {
 	default:
 		return nil, fmt.Errorf("unsupported database type %q", databaseType)
 	}
-	gdb, err := gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	gdb, err := gorm.Open(dialector, &gorm.Config{Logger: newDatabaseLogger(os.Stderr)})
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", databaseType, err)
 	}
@@ -54,6 +54,16 @@ func OpenDatabase(databaseType, path, dsn string) (*gorm.DB, error) {
 	}
 	DB = gdb
 	return gdb, nil
+}
+
+func newDatabaseLogger(writer io.Writer) logger.Interface {
+	return logger.New(log.New(writer, "\r\n", log.LstdFlags), logger.Config{
+		SlowThreshold:             200 * time.Millisecond,
+		LogLevel:                  logger.Warn,
+		IgnoreRecordNotFoundError: true,
+		ParameterizedQueries:      true,
+		Colorful:                  false,
+	})
 }
 
 func AutoMigrate(gdb *gorm.DB) error {
@@ -92,6 +102,8 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.JobEvent{},
 		&models.MediaMigration{},
 		&models.MediaDeletionTask{},
+		&models.MediaCacheObject{},
+		&models.MediaCacheReference{},
 	); err != nil {
 		return err
 	}

@@ -22,7 +22,28 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/gin-gonic/gin"
 )
+
+func TestAccessLogUsesRouteTemplateInsteadOfInvitationToken(t *testing.T) {
+	previousWriter := gin.DefaultWriter
+	var output bytes.Buffer
+	gin.DefaultWriter = &output
+	t.Cleanup(func() { gin.DefaultWriter = previousWriter })
+
+	router := testRouter(t)
+	token := "private-invitation-token-that-must-not-be-logged"
+	response := performRequest(router, http.MethodGet, "/api/v1/auth/invitations/"+token, "", nil)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(output.String(), token) {
+		t.Fatalf("access log leaked invitation token: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "/api/v1/auth/invitations/:token") {
+		t.Fatalf("access log did not include the route template: %s", output.String())
+	}
+}
 
 func testRouter(t *testing.T) http.Handler {
 	t.Helper()
@@ -728,6 +749,22 @@ func TestImageUploadRejectsFakePayload(t *testing.T) {
 	router.ServeHTTP(responseRecorder, request)
 	if responseRecorder.Code != http.StatusOK {
 		t.Fatalf("valid image status=%d body=%s", responseRecorder.Code, responseRecorder.Body.String())
+	}
+	firstUpload := decodeResponse(t, responseRecorder)["data"].(map[string]any)
+	duplicate := performImageUpload(t, router, nil)
+	if duplicate.Code != http.StatusOK {
+		t.Fatalf("duplicate image status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	}
+	secondUpload := decodeResponse(t, duplicate)["data"].(map[string]any)
+	if firstUpload["path"] != secondUpload["path"] || firstUpload["url"] != secondUpload["url"] {
+		t.Fatalf("image uploads were not deduplicated: first=%#v second=%#v", firstUpload, secondUpload)
+	}
+	var object models.MediaCacheObject
+	if err := db.DB.Where("organization_id = ? AND kind = ?", 0, "image").First(&object).Error; err != nil {
+		t.Fatal(err)
+	}
+	if object.ReferenceCount != 2 {
+		t.Fatalf("image cache references=%d want 2", object.ReferenceCount)
 	}
 }
 

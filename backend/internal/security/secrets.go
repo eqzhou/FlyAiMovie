@@ -53,9 +53,13 @@ func DecryptSecret(value string) (string, error) {
 	if key == nil {
 		return "", fmt.Errorf("encrypted secret requires AI_CONFIG_ENCRYPTION_KEY")
 	}
-	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(value, encryptedPrefix))
+	encoded := strings.TrimPrefix(value, encryptedPrefix)
+	payload, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("decode encrypted secret: %w", err)
+	}
+	if base64.RawStdEncoding.EncodeToString(payload) != encoded {
+		return "", fmt.Errorf("decode encrypted secret: non-canonical encoding")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {

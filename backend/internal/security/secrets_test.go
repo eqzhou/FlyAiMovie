@@ -108,7 +108,11 @@ func TestSecretBoundaryCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := ciphertext[:len(ciphertext)-1] + "A"
+	replacement := "A"
+	if strings.HasSuffix(ciphertext, replacement) {
+		replacement = "B"
+	}
+	tampered := ciphertext[:len(ciphertext)-1] + replacement
 	if _, err := DecryptSecret(tampered); err == nil {
 		t.Fatal("tampered ciphertext accepted")
 	}

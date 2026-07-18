@@ -7,14 +7,18 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediainfo"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const maxMediaUploadBytes int64 = 500 << 20
@@ -64,9 +68,31 @@ func (s *Server) uploadMedia(c *gin.Context) {
 		LocalPath: rel, FileSize: fileHeader.Size, MimeType: mime, ContentHash: hex.EncodeToString(hash.Sum(nil)),
 		ReferenceCount: 1, ProbeStatus: "pending", CreatedAt: now, UpdatedAt: now}
 	applyProbe(c.Request.Context(), abs, &asset)
-	if err := organizationDB(c).Create(&asset).Error; err != nil {
+	var cacheObject *models.MediaCacheObject
+	reused := false
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&asset).Error; err != nil {
+			return err
+		}
+		var cacheErr error
+		cacheObject, reused, cacheErr = mediacache.New(tx, s.Store).Put(mediacache.PutInput{OrganizationID: asset.OrganizationID, Namespace: "asset", Key: strconv.FormatUint(uint64(asset.ID), 10),
+			ContentHash: asset.ContentHash, Kind: asset.Type, LocalPath: asset.LocalPath, PublicURL: asset.URL, MimeType: asset.MimeType, Size: asset.FileSize})
+		if cacheErr != nil {
+			return cacheErr
+		}
+		if reused && cacheObject.LocalPath != asset.LocalPath {
+			asset.LocalPath, asset.URL = cacheObject.LocalPath, cacheObject.PublicURL
+			return tx.Model(&asset).Updates(map[string]any{"local_path": asset.LocalPath, "url": asset.URL, "updated_at": response.Now()}).Error
+		}
+		return nil
+	})
+	if err != nil {
+		_ = os.Remove(abs)
 		response.ServerError(c, "failed to register media")
 		return
+	}
+	if reused && cacheObject != nil && cacheObject.LocalPath != rel {
+		_ = os.Remove(abs)
 	}
 	response.Created(c, asset)
 }
