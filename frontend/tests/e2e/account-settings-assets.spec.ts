@@ -7,7 +7,8 @@ const actor = {
   csrf_token: 'csrf-e2e',
 }
 
-async function mockAccountAPI(page: Page) {
+async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) {
+  let signedIn = options.signedIn ?? false
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -15,11 +16,12 @@ async function mockAccountAPI(page: Page) {
     let data: unknown = {}
     let status = 200
 
-    if (path === '/api/v1/auth/status') data = { enabled: false, setup_required: false }
-    else if (path === '/api/v1/auth/me') {
+    if (path === '/api/v1/auth/status') data = { enabled: true, setup_required: false }
+    else if (path === '/api/v1/auth/me' && !signedIn) {
       status = 401
       return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: 401, message: 'unauthorized' }) })
-    } else if (path === '/api/v1/auth/login') data = actor
+    } else if (path === '/api/v1/auth/me') data = actor
+    else if (path === '/api/v1/auth/login') { signedIn = true; data = actor }
     else if (path === '/api/v1/auth/organizations') data = [{ ...actor.organization, role: 'owner', current: true }]
     else if (path === '/api/v1/auth/invitations/invite-token') data = { email: 'new@example.com', role: 'editor', organization: actor.organization, expires_at: '2099-01-01T00:00:00Z' }
     else if (path === '/api/v1/auth/invitations/invite-token/accept') data = actor
@@ -48,14 +50,34 @@ test('desktop: login, settings and asset library workflows are reachable', async
 
   await page.goto('/settings')
   await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+  const settingsNavigation = page.getByRole('tablist', { name: '设置分类' })
+  await expect(settingsNavigation).toBeVisible()
+  await expect(settingsNavigation.getByRole('tab', { name: 'AI 服务' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('Mock Image')).toBeVisible()
+  await expect(page.getByText('生成配额')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '添加 AI 服务' }).click()
+  const serviceDialog = page.getByRole('dialog', { name: '添加 AI 服务' })
+  await serviceDialog.getByLabel('类型').selectOption('video')
+  await expect(serviceDialog.getByLabel('厂商')).toContainText('OpenAI Sora')
+  await serviceDialog.getByLabel('类型').selectOption('text')
+  await expect(serviceDialog.getByLabel('厂商')).toContainText('本地 OpenAI Compatible')
+  await serviceDialog.getByRole('button', { name: '取消' }).click()
+
+  await settingsNavigation.getByRole('tab', { name: 'Agent' }).click()
+  await page.getByRole('button', { name: '编辑' }).first().click()
+  await expect(page.getByRole('dialog', { name: '编辑 Agent' })).toBeVisible()
+  await page.getByRole('dialog', { name: '编辑 Agent' }).getByRole('button', { name: '取消' }).click()
+
+  await settingsNavigation.getByRole('tab', { name: '组织与权限' }).click()
   await expect(page.getByText('生成配额')).toBeVisible()
   await expect(page.getByText('本地缓存')).toBeVisible()
   await expect(page.getByText('容量 2.0 KB')).toBeVisible()
-  await page.getByRole('combobox').nth(0).selectOption('video')
-  await expect(page.getByRole('combobox').nth(1)).toContainText('OpenAI Sora')
-  await page.getByRole('combobox').nth(0).selectOption('text')
-  await expect(page.getByRole('combobox').nth(1)).toContainText('本地 OpenAI Compatible')
+
+  await settingsNavigation.getByRole('tab', { name: '安全与数据' }).click()
+  await page.getByRole('button', { name: '修改密码' }).click()
+  await expect(page.getByRole('dialog', { name: '修改密码' })).toBeVisible()
+  await page.getByRole('dialog', { name: '修改密码' }).getByRole('button', { name: '取消' }).click()
 
   await page.goto('/drama/2/assets')
   await expect(page.getByRole('heading', { name: '素材项目 · 素材库' })).toBeVisible()
@@ -64,7 +86,7 @@ test('desktop: login, settings and asset library workflows are reachable', async
 
 test('desktop: project creation marks and validates required fields', async ({ page }) => {
   let created: Request | undefined
-  await mockAccountAPI(page)
+  await mockAccountAPI(page, { signedIn: true })
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/dramas' && request.method() === 'POST') created = request
   })
