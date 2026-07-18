@@ -89,3 +89,21 @@ func TestPromptTemplateRestoreDeleteAndFailureSurfaces(t *testing.T) {
 		t.Fatalf("custom restore status=%d", restored.Code)
 	}
 }
+
+func TestPromptTemplatePreviewSupportsGenerationVariables(t *testing.T) {
+	_, router := testServerRouter(t)
+	created := performRequest(router, http.MethodPost, "/api/v1/prompt-templates", `{
+		"key":"shot_motion","name":"Shot Motion","category":"video",
+		"content":"{{shot_title}} / {{shot_description}} / {{image_prompt}} / {{grid_rows}}x{{grid_cols}} / {{grid_mode}}"
+	}`, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	id := jsonNumber(decodeResponse(t, created)["data"].(map[string]any)["id"].(float64))
+	preview := performRequest(router, http.MethodPost, "/api/v1/prompt-templates/"+id+"/preview", `{"variables":{
+		"shot_title":"Station","shot_description":"Walk","image_prompt":"Rain","grid_rows":"2","grid_cols":"3","grid_mode":"first_frame"
+	}}`, nil)
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), "Station / Walk / Rain / 2x3 / first_frame") {
+		t.Fatalf("preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+}

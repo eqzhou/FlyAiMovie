@@ -41,16 +41,31 @@ func TestVariablesReturnsStableUniqueNames(t *testing.T) {
 
 func TestBuiltInDefaultsAreComplete(t *testing.T) {
 	items := Defaults()
-	if len(items) != 5 {
+	if len(items) != 8 {
 		t.Fatalf("Defaults() returned %d items", len(items))
 	}
+	categories := map[string]bool{}
 	for _, item := range items {
 		got, ok := DefaultFor(item.Key)
-		if !ok || got.Content == "" || got.Category != "agent_system" {
+		if !ok || got.Content == "" || got.Category == "" {
 			t.Fatalf("invalid default: %#v", got)
+		}
+		categories[got.Category] = true
+	}
+	for _, category := range []string{"agent_system", "image", "video", "grid"} {
+		if !categories[category] {
+			t.Fatalf("missing default category %q", category)
 		}
 	}
 	if _, ok := DefaultFor("unknown"); ok {
 		t.Fatal("unknown default reported as present")
+	}
+}
+
+func TestGenerationTemplateVariables(t *testing.T) {
+	content := "{{shot_title}} {{shot_description}} {{image_prompt}} {{video_prompt}} {{grid_rows}}x{{grid_cols}} {{grid_mode}}"
+	variables, err := Variables(content)
+	if err != nil || len(variables) != 7 {
+		t.Fatalf("Variables() = %#v, %v", variables, err)
 	}
 }

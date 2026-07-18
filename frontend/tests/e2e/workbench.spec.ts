@@ -40,6 +40,7 @@ async function mockWorkbenchAPI(
     onEpisodeUpdate?: (request: Request) => void
     onStoryboardCreate?: (request: Request) => void
     onFrameGenerate?: (request: Request) => void
+    onStoryboardUpdate?: (request: Request) => void
     onSceneCopy?: (request: Request) => void
     failDramaRequests?: number
     failDramaCalls?: number[]
@@ -72,6 +73,13 @@ async function mockWorkbenchAPI(
     else if (path === '/api/v1/episodes/20/pipeline-status') {
       data = { has_script: true, characters: 1, scenes: 1, storyboards: 1, with_video: 0, with_tts: 0, composed: 0 }
     } else if (path === '/api/v1/ai-configs') data = aiConfigs
+    else if (path === '/api/v1/prompt-templates') data = [
+      { id: 80, key: 'storyboard_image', name: '镜头图片', category: 'image', content: '{{shot_title}} {{shot_description}}', variables_json: '["shot_title","shot_description"]', version: 1, is_active: true },
+      { id: 81, key: 'storyboard_video', name: '镜头视频', category: 'video', content: '{{shot_description}} {{video_prompt}}', variables_json: '["shot_description","video_prompt"]', version: 1, is_active: true },
+      { id: 82, key: 'grid_composition', name: '宫格构图', category: 'grid', content: '{{grid_rows}}x{{grid_cols}} {{user_instruction}}', variables_json: '["grid_rows","grid_cols","user_instruction"]', version: 1, is_active: true },
+    ]
+    else if (path === '/api/v1/prompt-templates/80/preview') data = { rendered: '重逢 两人在站台相遇，电影感构图', version: 1 }
+    else if (path === '/api/v1/prompt-templates/82/preview') data = { rendered: '2x2 连续的车站重逢镜头', version: 1 }
     else if (path === '/api/v1/grid/history') data = []
     else if (path === '/api/v1/assets') data = []
     else if (path === '/api/v1/jobs') data = []
@@ -85,6 +93,9 @@ async function mockWorkbenchAPI(
     } else if (path === '/api/v1/storyboards/40/generate-frame' && request.method() === 'POST') {
       options.onFrameGenerate?.(request)
       data = { id: 90, image_url: '/static/storyboard-board.png', frame_type: 'composed' }
+    } else if (path === '/api/v1/storyboards/40' && request.method() === 'PUT') {
+      options.onStoryboardUpdate?.(request)
+      data = { ...storyboard, ...request.postDataJSON() }
     } else if (path === '/api/v1/scenes/31/copy' && request.method() === 'POST') {
       options.onSceneCopy?.(request)
       data = { id: 32, location: '旧车站', episode_id: 21 }
@@ -149,6 +160,40 @@ test('desktop: complete workbench stages remain usable and script can be saved',
   await page.getByRole('button', { name: '5. 合成导出' }).click()
   await expect(page.getByRole('button', { name: '拼接导出成片' })).toBeVisible()
   await expect(page.getByText('尚未导出成片')).toBeVisible()
+})
+
+test('desktop: prompt templates apply through focused shot and grid editors', async ({ page }) => {
+  let storyboardUpdate: Request | undefined
+  await mockWorkbenchAPI(page, { onStoryboardUpdate: (request) => { storyboardUpdate = request } })
+  await page.goto('/drama/2/episode/1')
+
+  await page.getByRole('button', { name: '4. 分镜 / 视频' }).click()
+  await page.getByRole('button', { name: '改图词' }).click()
+  const shotDialog = page.getByRole('dialog', { name: '编辑图片提示词' })
+  await expect(shotDialog.getByLabel('提示词模板')).toContainText('镜头图片')
+  await shotDialog.getByRole('button', { name: '套用模板' }).click()
+  await expect(shotDialog.getByLabel('图片提示词')).toHaveValue('重逢 两人在站台相遇，电影感构图')
+  await shotDialog.getByRole('button', { name: '保存' }).click()
+  expect(storyboardUpdate?.postDataJSON()).toEqual({ image_prompt: '重逢 两人在站台相遇，电影感构图' })
+
+  await page.getByRole('button', { name: '改视频词' }).click()
+  const videoDialog = page.getByRole('dialog', { name: '编辑视频提示词' })
+  await expect(videoDialog.getByLabel('提示词模板')).toContainText('镜头视频')
+  await videoDialog.getByRole('button', { name: '取消' }).click()
+
+  await page.getByRole('button', { name: '改对白' }).click()
+  const dialogueDialog = page.getByRole('dialog', { name: '编辑对白' })
+  await expect(dialogueDialog.getByLabel('提示词模板')).toHaveCount(0)
+  await expect(dialogueDialog.getByLabel('对白')).toHaveValue('好久不见')
+  await dialogueDialog.getByRole('button', { name: '取消' }).click()
+
+  await page.getByRole('button', { name: '3. 宫格帧' }).click()
+  await page.getByRole('button', { name: '套用提示词模板' }).click()
+  const gridDialog = page.getByRole('dialog', { name: '编辑宫格提示词' })
+  await gridDialog.getByRole('button', { name: '套用模板' }).click()
+  await expect(gridDialog.getByLabel('宫格提示词')).toHaveValue('2x2 连续的车站重逢镜头')
+  await gridDialog.getByRole('button', { name: '应用' }).click()
+  await expect(page.getByLabel('宫格提示词')).toHaveValue('2x2 连续的车站重逢镜头')
 })
 
 test('desktop: failed initial load is actionable and can be retried', async ({ page }) => {
@@ -220,6 +265,9 @@ test('mobile: workbench navigation and export fit a 390px viewport', async ({ pa
   await expect(page.getByRole('button', { name: '1. 剧本' })).toBeVisible()
   await page.getByRole('button', { name: '5. 合成导出' }).click()
   await expect(page.getByRole('button', { name: '拼接导出成片' })).toBeVisible()
+  await page.getByRole('button', { name: '4. 分镜 / 视频' }).click()
+  await page.getByRole('button', { name: '改图词' }).click()
+  await expect(page.getByRole('dialog', { name: '编辑图片提示词' })).toBeVisible()
 
   const layout = await page.evaluate(() => ({
     viewportWidth: document.documentElement.clientWidth,

@@ -43,14 +43,14 @@
 | P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已实现：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
 | P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI 图片与 Sora 视频、Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；Sora 尾帧/多参考输入会明确拒绝；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
-| P-20 | 提示词模板 | 组织内管理、版本化、预览并应用五类 Agent 提示词 | 已验收：白名单变量插值、未知表达式拒绝、组织隔离、历史配置迁移、模板版本缓存失效、内置恢复与只读预览 | `prompt_templates_test.go`、`template_test.go`、`TestRunnerUsesOrganizationPromptTemplateAndVersion`、设置页桌面/移动 E2E |
-| P-20 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
-| P-21 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
-| P-22 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库页面已接入 | `TestCharacterTemplateImportCreatesIndependentCharacter` |
-| P-23 | 场景复制与迁移 | 复制到目标集；迁移时事务更新场景、剧集关联与可选关联分镜 | 已验收后端事务和前端操作；跨项目必须显式确认 | `TestSceneMoveAcrossDramaRequiresExplicitOptions`、`frontend/tests/e2e/workbench.spec.ts` |
-| P-24 | 媒体元数据与迁移 | 上传视频/音频后读取真实时长；历史外链可 dry-run 和断点迁移 | 已实现：FFprobe 失败保存错误而非错误的 0；迁移仅在验证成功后替换 URL | `mediainfo/probe_test.go`、`mediamigrate/service_test.go` |
-| P-25 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；Agent 取消在上下文/工具边界生效，服务重启遗留运行标记为中断失败 | jobs service/API tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
-| P-26 | 统一缓存生命周期 | AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按组织隔离缓存，可去重、计数、过期和手动清理 | 已验收：图片/视频/音频上传及所有生成链路均接入；物理对象按组织/类型/内容哈希去重，逻辑引用独立计数；过期对象进入可重试删除补偿队列，设置页展示容量并提供管理员清理入口；组织导出/删除包含缓存记录 | `mediacache/service_test.go`、`TestPostgresCacheLifecycle`、`TestMediaCacheStatsAndPurgeWorkflow`、图片/媒体重复上传测试、`TestChatCachesIdenticalRequestsWithinOrganization`、live browser E2E |
+| P-20 | 提示词模板 | 组织内管理、版本化、预览并应用 Agent、镜头图片、镜头视频和宫格提示词 | 已验收：8 个独立内置模板，白名单变量插值、未知表达式拒绝、组织隔离、历史配置迁移、模板版本缓存失效、内置恢复、只读预览和工作台确认写回 | `prompt_templates_test.go`、`template_test.go`、`TestRunnerUsesOrganizationPromptTemplateAndVersion`、设置页与工作台桌面/移动 E2E |
+| P-21 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试 |
+| P-22 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
+| P-23 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库页面已接入 | `TestCharacterTemplateImportCreatesIndependentCharacter` |
+| P-24 | 场景复制与迁移 | 复制到目标集；迁移时事务更新场景、剧集关联与可选关联分镜 | 已验收后端事务和前端操作；跨项目必须显式确认 | `TestSceneMoveAcrossDramaRequiresExplicitOptions`、`frontend/tests/e2e/workbench.spec.ts` |
+| P-25 | 媒体元数据与迁移 | 上传视频/音频后读取真实时长；历史外链可 dry-run 和断点迁移 | 已实现：FFprobe 失败保存错误而非错误的 0；迁移仅在验证成功后替换 URL | `mediainfo/probe_test.go`、`mediamigrate/service_test.go` |
+| P-26 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；Agent 取消在上下文/工具边界生效，服务重启遗留运行标记为中断失败 | jobs service/API tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
+| P-27 | 统一缓存生命周期 | AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按组织隔离缓存，可去重、计数、过期和手动清理 | 已验收：图片/视频/音频上传及所有生成链路均接入；物理对象按组织/类型/内容哈希去重，逻辑引用独立计数；过期对象进入可重试删除补偿队列，设置页展示容量并提供管理员清理入口；组织导出/删除包含缓存记录 | `mediacache/service_test.go`、`TestPostgresCacheLifecycle`、`TestMediaCacheStatsAndPurgeWorkflow`、图片/媒体重复上传测试、`TestChatCachesIdenticalRequestsWithinOrganization`、live browser E2E |
 
 ## 非功能验收
 

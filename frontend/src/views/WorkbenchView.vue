@@ -17,6 +17,7 @@ const storyboards = ref<any[]>([])
 const status = ref<any>(null)
 const voices = ref<any[]>([])
 const configs = ref<any[]>([])
+const promptTemplates = ref<any[]>([])
 const gridHist = ref<any[]>([])
 const tab = ref<'script' | 'cast' | 'grid' | 'boards' | 'export'>('script')
 const rawContent = ref('')
@@ -47,10 +48,15 @@ const characterForm = ref<any | null>(null)
 const sceneForm = ref<any | null>(null)
 const sceneTransfer = ref<any | null>(null)
 const storyboardForm = ref<any | null>(null)
+const promptEditor = ref<any | null>(null)
 const episodeConfigForm = ref<any | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
+const promptEditorTemplates = computed(() => promptEditor.value
+  ? promptTemplates.value.filter((template) => template.is_active !== false && template.category === promptEditor.value.category)
+  : [])
+const hasActiveJobs = computed(() => jobs.value.some((job) => !['succeeded', 'failed', 'canceled'].includes(job.status)))
 
 const progressPct = computed(() => {
   if (!status.value) return 0
@@ -92,6 +98,9 @@ async function load() {
   try {
     configs.value = listOf(await settingsAPI.aiConfigs())
   } catch { /* optional */ }
+  try {
+    promptTemplates.value = listOf(await settingsAPI.promptTemplates())
+  } catch { promptTemplates.value = [] }
 }
 
 async function loadWorkbench() {
@@ -139,7 +148,7 @@ async function refreshAssets() {
 function startPoll() {
   stopPoll()
   pollTimer.value = window.setInterval(() => {
-    if (document.visibilityState === 'visible') refreshAssets().catch(() => {})
+    if (document.visibilityState === 'visible' && hasActiveJobs.value) refreshAssets().catch(() => {})
   }, 5000)
 }
 function stopPoll() {
@@ -686,18 +695,74 @@ async function saveShot(sb: any, fields: Record<string, any>) {
     await storyboardAPI.update(sb.id, fields)
     show('分镜已更新')
     await refreshAssets()
+    return true
   } catch (e: any) {
     show(e.message)
+    return false
   } finally {
     busy.value = ''
   }
 }
 
-async function editShotField(sb: any, field: string, label: string) {
-  const cur = sb[field] || ''
-  const next = window.prompt(label, cur)
-  if (next === null) return
-  await saveShot(sb, { [field]: next })
+function openPromptEditor(sb: any, field: string, label: string) {
+  const category = field === 'image_prompt' ? 'image' : field === 'video_prompt' ? 'video' : ''
+  const matching = promptTemplates.value.filter((template) => template.is_active !== false && template.category === category)
+  promptEditor.value = {
+    target: 'storyboard', storyboard: sb, field, label, category,
+    value: sb[field] || '', template_id: matching[0]?.id || 0, error: '',
+  }
+}
+
+function openGridPromptEditor() {
+  const matching = promptTemplates.value.filter((template) => template.is_active !== false && template.category === 'grid')
+  promptEditor.value = {
+    target: 'grid', storyboard: null, field: 'grid_prompt', label: '宫格提示词', category: 'grid',
+    value: gridPrompt.value, template_id: matching[0]?.id || 0, error: '',
+  }
+}
+
+function promptRuntimeVariables(editor: any) {
+  const storyboard = editor.storyboard || {}
+  return {
+    drama_title: drama.value?.title || '', episode_title: episode.value?.title || '',
+    user_instruction: editor.value || '', character_names: characters.value.map((item) => item.name).join('、'),
+    scene_names: scenes.value.map((item) => `${item.location}${item.time ? `·${item.time}` : ''}`).join('、'),
+    shot_title: storyboard.title || '', shot_description: storyboard.description || storyboard.action || '',
+    image_prompt: storyboard.image_prompt || '', video_prompt: storyboard.video_prompt || '',
+    grid_rows: String(gridRows.value), grid_cols: String(gridCols.value), grid_mode: gridMode.value,
+  }
+}
+
+async function applySelectedPromptTemplate() {
+  const editor = promptEditor.value
+  if (!editor) return
+  if (!editor.template_id) editor.template_id = promptEditorTemplates.value[0]?.id || 0
+  if (!editor.template_id) {
+    editor.error = '当前分类没有可用模板'
+    return
+  }
+  editor.error = ''
+  busy.value = 'prompt-preview'
+  try {
+    const result = await settingsAPI.previewPromptTemplate(editor.template_id, promptRuntimeVariables(editor))
+    editor.value = result.rendered
+  } catch (error) {
+    editor.error = error instanceof Error ? error.message : '模板应用失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function savePromptEditor() {
+  const editor = promptEditor.value
+  if (!editor) return
+  if (editor.target === 'grid') {
+    gridPrompt.value = editor.value
+    promptEditor.value = null
+    show('宫格提示词已应用')
+    return
+  }
+  if (await saveShot(editor.storyboard, { [editor.field]: editor.value })) promptEditor.value = null
 }
 
 function toggleShot(id: number) {
@@ -898,13 +963,14 @@ onUnmounted(stopPoll)
               <input type="number" min="1" max="4" v-model.number="gridCols" style="width:52px;margin-left:4px" />
             </label>
             <button class="btn" :disabled="!!busy" @click="buildGridPrompt">生成提示词</button>
+            <button class="btn" :disabled="!!busy" @click="openGridPromptEditor">套用提示词模板</button>
             <button class="btn btn-primary" :disabled="!!busy" @click="generateGrid">生成宫格图</button>
             <button class="btn" :disabled="!!busy || !gridImage" @click="splitGrid">切分写回分镜</button>
             <button class="btn" :disabled="!!busy" @click="runAgent('grid_prompt_generator', '请为本集镜头生成宫格首帧提示词')">Agent 提示词</button>
           </div>
           <div class="field">
-            <label>宫格提示词</label>
-            <textarea v-model="gridPrompt" rows="8" placeholder="可先点击「生成提示词」" />
+            <label for="grid-prompt">宫格提示词</label>
+            <textarea id="grid-prompt" v-model="gridPrompt" rows="8" placeholder="可先点击「生成提示词」" />
           </div>
           <div class="split-2">
             <div>
@@ -1026,9 +1092,9 @@ onUnmounted(stopPoll)
                 <button class="btn" :disabled="!!busy" @click="genVideo(sb)">视频</button>
                 <button class="btn" :disabled="!!busy" @click="genTTS(sb)">配音</button>
                 <button class="btn" :disabled="!!busy" @click="composeShot(sb)">合成</button>
-                <button class="btn" :disabled="!!busy" @click="editShotField(sb,'image_prompt','图片提示词')">改图词</button>
-                <button class="btn" :disabled="!!busy" @click="editShotField(sb,'video_prompt','视频提示词')">改视频词</button>
-                <button class="btn" :disabled="!!busy" @click="editShotField(sb,'dialogue','对白')">改对白</button>
+                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'image_prompt','图片提示词')">改图词</button>
+                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'video_prompt','视频提示词')">改视频词</button>
+                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'dialogue','对白')">改对白</button>
                 <button class="btn btn-danger" :disabled="!!busy" @click="removeStoryboard(sb)">删除</button>
               </div>
             </div>
@@ -1108,6 +1174,30 @@ onUnmounted(stopPoll)
         <div v-if="log" class="panel" style="margin-top:16px">
           <h3 style="margin-top:0">Agent / 任务输出</h3>
           <pre class="log-box">{{ log }}</pre>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="promptEditor" class="modal-mask" @click.self="promptEditor=null">
+      <div class="modal settings-modal settings-modal-wide prompt-editor-modal" role="dialog" aria-modal="true" :aria-labelledby="`prompt-editor-${promptEditor.field}`" @keydown.esc="promptEditor=null">
+        <h3 :id="`prompt-editor-${promptEditor.field}`">编辑{{ promptEditor.label }}</h3>
+        <div v-if="promptEditor.category && promptEditorTemplates.length" class="prompt-editor-template-row">
+          <div class="field">
+            <label for="workbench-prompt-template">提示词模板</label>
+            <select id="workbench-prompt-template" v-model.number="promptEditor.template_id">
+              <option v-for="template in promptEditorTemplates" :key="template.id" :value="template.id">{{ template.name }} · v{{ template.version }}</option>
+            </select>
+          </div>
+          <button class="btn" type="button" :disabled="!!busy || !promptEditorTemplates.length" @click="applySelectedPromptTemplate">套用模板</button>
+        </div>
+        <div class="field">
+          <label for="workbench-prompt-value">{{ promptEditor.label }}</label>
+          <textarea id="workbench-prompt-value" v-model="promptEditor.value" rows="10" maxlength="20000" />
+        </div>
+        <p v-if="promptEditor.error" class="form-error" role="alert">{{ promptEditor.error }}</p>
+        <div class="modal-actions">
+          <button class="btn" type="button" @click="promptEditor=null">取消</button>
+          <button class="btn btn-primary" type="button" :disabled="!!busy" @click="savePromptEditor">{{ promptEditor.target === 'grid' ? '应用' : '保存' }}</button>
         </div>
       </div>
     </div>

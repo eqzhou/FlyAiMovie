@@ -142,6 +142,9 @@ button { cursor: pointer; }
 .prompt-token-reference { margin: -4px 0 12px; }
 .prompt-preview-name { margin: -4px 0 16px; color: var(--muted); font-size: 13px; }
 .prompt-preview-result { min-height: 120px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 14px; line-height: 1.7; }
+.prompt-editor-template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.prompt-editor-template-row .field { margin-bottom: 12px; }
+.prompt-editor-template-row .btn { margin-bottom: 12px; min-height: 39px; }
 .character-library-head { margin-bottom: 12px; }
 .character-library-list { padding: 0 16px; }
 .character-library-table td { vertical-align: middle; }
@@ -288,6 +291,8 @@ button { cursor: pointer; }
   .field-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
+	.prompt-editor-template-row { grid-template-columns: 1fr; }
+	.prompt-editor-template-row .btn { width: 100%; margin-top: -6px; }
   .settings-section-head { align-items: flex-start; flex-direction: column; }
   .settings-section-head .toolbar { width: 100%; }
   .settings-section-head .toolbar .btn { flex: 1; }
