@@ -192,6 +192,7 @@ export const settingsAPI = {
   aiConfigs: () => api.get('/ai-configs'),
   createAIConfig: (d: any) => api.post('/ai-configs', d),
   updateAIConfig: (id: number, d: any) => api.put(`/ai-configs/${id}`, d),
+  testAIConfig: (id: number) => api.post<{ status: string; provider: string; model: string; latency_ms: number; detail: string }>(`/ai-configs/${id}/test`, {}),
   deleteAIConfig: (id: number) => api.del(`/ai-configs/${id}`),
   providers: () => api.get('/ai-providers'),
   agentConfigs: () => api.get('/agent-configs'),

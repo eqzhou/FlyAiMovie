@@ -25,7 +25,8 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/auth/organizations') data = [{ ...actor.organization, role: 'owner', current: true }]
     else if (path === '/api/v1/auth/invitations/invite-token') data = { email: 'new@example.com', role: 'editor', organization: actor.organization, expires_at: '2099-01-01T00:00:00Z' }
     else if (path === '/api/v1/auth/invitations/invite-token/accept') data = actor
-    else if (path === '/api/v1/ai-configs') data = [{ id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock' }]
+    else if (path === '/api/v1/ai-configs') data = [{ id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true }]
+    else if (path === '/api/v1/ai-configs/10/test') data = { status: 'ok', provider: 'mock', model: 'mock', latency_ms: 1, detail: 'Mock 服务可用' }
     else if (path === '/api/v1/ai-providers') data = [{ provider: 'mock', service_type: 'image' }]
     else if (path === '/api/v1/agent-configs') data = [{ id: 20, agent_type: 'script_rewriter', name: 'Script Rewriter', model: 'mock', is_active: true }]
     else if (path === '/api/v1/organization/quota') data = { daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 2, active_jobs: 0, daily_budget_cny: 10, budget_warning_percent: 80, budget_used_cny: 1.25, budget_warning: false }
@@ -43,7 +44,11 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
 }
 
 test('desktop: login, settings and asset library workflows are reachable', async ({ page }) => {
+  let updatedConfig: Request | undefined
   await mockAccountAPI(page)
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/v1/ai-configs/10' && request.method() === 'PUT') updatedConfig = request
+  })
   await page.goto('/login')
   await page.getByLabel('邮箱').fill('owner@example.com')
   await page.getByLabel('密码').fill('a-secure-password')
@@ -57,6 +62,17 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(settingsNavigation.getByRole('tab', { name: 'AI 服务' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('Mock Image')).toBeVisible()
   await expect(page.getByText('生成配额')).toHaveCount(0)
+
+  const mockConfigRow = page.getByRole('row', { name: /Mock Image/ })
+  await mockConfigRow.getByRole('button', { name: '编辑' }).click()
+  const editServiceDialog = page.getByRole('dialog', { name: '编辑 AI 服务' })
+  await expect(editServiceDialog.getByLabel('模型')).toHaveValue('mock')
+  await editServiceDialog.getByLabel('名称').fill('Mock Image Updated')
+  await editServiceDialog.getByRole('button', { name: '保存修改' }).click()
+  expect(updatedConfig?.postDataJSON()).toMatchObject({ name: 'Mock Image Updated', model: 'mock' })
+
+  await mockConfigRow.getByRole('button', { name: '测试连接' }).click()
+  await expect(page.getByText('Mock 服务可用 · 1 ms')).toBeVisible()
 
   await page.getByRole('button', { name: '添加 AI 服务' }).click()
   const serviceDialog = page.getByRole('dialog', { name: '添加 AI 服务' })

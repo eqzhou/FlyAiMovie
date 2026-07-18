@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +76,32 @@ func TestValidateAIConfigPrivateCompatibleHostsRequireExplicitAllowlist(t *testi
 		if err := validateAIConfigInputWithPrivateHosts(tc.serviceType, tc.provider, "local", tc.baseURL, "", tc.allowed); err == nil {
 			t.Fatalf("unsafe local config accepted: %+v", tc)
 		}
+	}
+}
+
+func TestAIConfigConnectionTestUsesStoredCredential(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer stored-key" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"local-model"}]}`))
+	}))
+	defer provider.Close()
+
+	server, router := testServerRouter(t)
+	server.Cfg.AI.AllowedPrivateBaseURLHosts = []string{"127.0.0.1"}
+	created := performRequest(router, http.MethodPost, "/api/v1/ai-configs", `{
+		"service_type":"text","provider":"openai_local","name":"Local",
+		"base_url":"`+provider.URL+`","api_key":"stored-key","model":"local-model"
+	}`, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	id := decodeResponse(t, created)["data"].(map[string]any)["id"].(float64)
+	probed := performRequest(router, http.MethodPost, "/api/v1/ai-configs/"+jsonNumber(id)+"/test", `{}`, nil)
+	if probed.Code != http.StatusOK || !strings.Contains(probed.Body.String(), `"status":"ok"`) || strings.Contains(probed.Body.String(), "stored-key") {
+		t.Fatalf("probe status=%d body=%s", probed.Code, probed.Body.String())
 	}
 }

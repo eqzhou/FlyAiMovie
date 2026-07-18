@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
@@ -22,6 +22,10 @@ const toast = ref('')
 const agentForm = ref<any | null>(null)
 const activeSection = ref<'services' | 'agents' | 'organization' | 'security'>('services')
 const showServiceModal = ref(false)
+const editingConfigID = ref<number | null>(null)
+const originalProvider = ref('')
+const hydratingServiceForm = ref(false)
+const testingConfigID = ref<number | null>(null)
 const showMemberModal = ref(false)
 const showInviteModal = ref(false)
 const showPasswordModal = ref(false)
@@ -172,17 +176,66 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-async function create() {
+function emptyServiceForm() {
+  return { service_type: 'text', provider: 'openai', name: '', base_url: 'https://api.openai.com', api_key: '', model: '', is_default: true, is_active: true }
+}
+
+function openCreateService() {
+  editingConfigID.value = null
+  originalProvider.value = ''
+  form.value = emptyServiceForm()
+  showServiceModal.value = true
+}
+
+async function editService(config: any) {
+  hydratingServiceForm.value = true
+  editingConfigID.value = config.id
+  originalProvider.value = config.provider
+  form.value = {
+    service_type: config.service_type,
+    provider: config.provider,
+    name: config.name,
+    base_url: config.base_url || '',
+    api_key: '',
+    model: config.model || '',
+    is_default: Boolean(config.is_default),
+    is_active: config.is_active !== false,
+  }
+  showServiceModal.value = true
+  await nextTick()
+  hydratingServiceForm.value = false
+}
+
+async function saveService() {
   const keyOptional = ['mock', 'openai_local'].includes(form.value.provider)
-  if (!form.value.name || (!keyOptional && !form.value.api_key)) {
+  const providerChanged = Boolean(editingConfigID.value && originalProvider.value !== form.value.provider)
+  if (!form.value.name || ((!editingConfigID.value || providerChanged) && !keyOptional && !form.value.api_key)) {
     show(keyOptional ? '名称必填' : '名称和 API Key 必填')
     return
   }
-  await settingsAPI.createAIConfig(form.value)
+  if (editingConfigID.value) {
+    await settingsAPI.updateAIConfig(editingConfigID.value, form.value)
+  } else {
+    await settingsAPI.createAIConfig(form.value)
+  }
   form.value.api_key = ''
   showServiceModal.value = false
-  show('已添加')
+  show(editingConfigID.value ? 'AI 服务已更新' : 'AI 服务已添加')
+  editingConfigID.value = null
+  originalProvider.value = ''
   await load()
+}
+
+async function testService(config: any) {
+  testingConfigID.value = config.id
+  try {
+    const result = await settingsAPI.testAIConfig(config.id)
+    show(`${result.detail} · ${result.latency_ms} ms`)
+  } catch (error) {
+    show(`连接失败：${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    testingConfigID.value = null
+  }
 }
 
 watch(() => form.value.service_type, () => {
@@ -194,6 +247,7 @@ watch(() => form.value.service_type, () => {
 })
 
 watch(() => form.value.provider, (provider) => {
+  if (hydratingServiceForm.value) return
   const selected = availableProviders.value.find((item) => item.value === provider)
   if (selected) form.value.base_url = selected.base
 })
@@ -254,7 +308,7 @@ onMounted(load)
     <section v-if="activeSection === 'services'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>AI 服务</h2><p class="muted">{{ configs.length }} 个已配置服务 · {{ providers.length }} 个内置厂商模板</p></div>
-        <div v-if="canManageSettings" class="toolbar"><button class="btn" @click="syncVoices">同步音色</button><button class="btn btn-primary" @click="showServiceModal = true">添加 AI 服务</button></div>
+        <div v-if="canManageSettings" class="toolbar"><button class="btn" @click="syncVoices">同步音色</button><button class="btn btn-primary" @click="openCreateService">添加 AI 服务</button></div>
       </div>
       <div class="panel">
         <table class="table">
@@ -265,7 +319,7 @@ onMounted(load)
               <td>{{ c.service_type }}</td>
               <td>{{ c.provider }}</td>
               <td>{{ c.model }}</td>
-              <td><button v-if="canManageSettings" class="btn btn-danger" @click="remove(c.id)">删</button></td>
+              <td><div v-if="canManageSettings" class="toolbar settings-table-actions"><button class="btn" @click="editService(c)">编辑</button><button class="btn" :disabled="testingConfigID !== null" @click="testService(c)">{{ testingConfigID === c.id ? '测试中…' : '测试连接' }}</button><button class="btn btn-danger" @click="remove(c.id)">删</button></div></td>
             </tr>
           </tbody>
         </table>
@@ -328,7 +382,7 @@ onMounted(load)
       </div>
     </section>
 
-    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="create"><h3 id="service-modal-title">添加 AI 服务</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="modal-actions"><button type="button" class="btn" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary">保存配置</button></div></form></div>
+    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="modal-actions"><button type="button" class="btn" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary">{{ editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
     <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="2" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="agent-prompt">系统提示</label><textarea id="agent-prompt" v-model="agentForm.system_prompt" rows="6" /></div></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
 

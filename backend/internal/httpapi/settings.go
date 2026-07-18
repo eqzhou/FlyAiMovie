@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
@@ -23,8 +26,35 @@ func (s *Server) registerAIConfigs(api *gin.RouterGroup) {
 	api.GET("/ai-configs", s.listAIConfigs)
 	api.POST("/ai-configs", s.createAIConfig)
 	api.PUT("/ai-configs/:id", s.updateAIConfig)
+	api.POST("/ai-configs/:id/test", s.testAIConfig)
 	api.DELETE("/ai-configs/:id", s.deleteAIConfig)
 	api.GET("/ai-providers", s.listAIProviders)
+}
+
+func (s *Server) testAIConfig(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid id")
+		return
+	}
+	var row models.AIServiceConfig
+	if err := organizationDB(c).First(&row, id).Error; err != nil {
+		response.NotFound(c, "AI config not found")
+		return
+	}
+	key, err := security.DecryptSecret(row.APIKey)
+	if err != nil {
+		response.ServerError(c, "stored API key cannot be decrypted")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	result, err := adapters.ProbeConnection(ctx, adapters.AIConfig{Provider: row.Provider, BaseURL: row.BaseURL, APIKey: key, Model: row.Model})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": http.StatusBadGateway, "message": err.Error()})
+		return
+	}
+	response.Success(c, result)
 }
 
 func (s *Server) listAIConfigs(c *gin.Context) {

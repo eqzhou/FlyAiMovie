@@ -114,6 +114,7 @@ button { cursor: pointer; }
 .settings-section-head .toolbar { margin: 0; }
 .settings-section .panel h3 { margin: 0 0 14px; font-size: 15px; }
 .settings-panel-actions { align-items: center; margin-bottom: 0; }
+.settings-table-actions { justify-content: flex-end; margin: 0; }
 .settings-command-list { border-top: 1px solid var(--border); }
 .settings-command {
   min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 20px;
