@@ -137,6 +137,24 @@ button { cursor: pointer; }
 .character-library-empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 0; }
 .character-import-name { margin: 0 0 16px; font-weight: 700; }
 .character-import-note { margin: 4px 0 16px; font-size: 13px; }
+.page-head > :first-child { flex: 1; min-width: 0; }
+.project-head-actions { flex: 0 0 auto; flex-wrap: nowrap; align-self: flex-start; margin: 0; }
+.project-description { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.episode-grid { display: grid; gap: 10px; }
+.episode-card { min-height: 96px; display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 16px; cursor: pointer; }
+.episode-card:hover { transform: none; }
+.episode-number { color: var(--accent); font-size: 24px; font-weight: 700; text-align: center; }
+.episode-main { min-width: 0; }
+.episode-title-row { display: flex; align-items: center; gap: 10px; }
+.episode-title-row h3 { margin: 0; font-size: 16px; }
+.episode-main p { margin: 7px 0 0; font-size: 13px; }
+.episode-enter { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.project-empty { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.project-asset-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
+.project-asset-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 9px 12px; }
+.project-asset-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.project-asset-list { padding: 0 16px; }
+.project-asset-list td { vertical-align: middle; }
 
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
 .tab {
@@ -259,6 +277,10 @@ button { cursor: pointer; }
   .settings-command { align-items: flex-start; flex-direction: column; }
   .settings-command .btn { width: 100%; }
   .character-library-list { padding: 0 12px; }
+  .episode-card { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
+  .episode-number { font-size: 18px; }
+  .episode-enter { display: none; }
+  .project-asset-list { padding: 0 12px; }
 }
 .voice-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; max-height: 240px; overflow: auto; }
 .voice-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 12px; cursor: pointer; }

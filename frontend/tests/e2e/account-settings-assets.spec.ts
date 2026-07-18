@@ -25,7 +25,11 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/auth/organizations') data = [{ ...actor.organization, role: 'owner', current: true }]
     else if (path === '/api/v1/auth/invitations/invite-token') data = { email: 'new@example.com', role: 'editor', organization: actor.organization, expires_at: '2099-01-01T00:00:00Z' }
     else if (path === '/api/v1/auth/invitations/invite-token/accept') data = actor
-    else if (path === '/api/v1/ai-configs') data = [{ id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true }]
+    else if (path === '/api/v1/ai-configs') data = [
+      { id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
+      { id: 11, name: 'Mock Video', service_type: 'video', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
+      { id: 12, name: 'Mock Audio', service_type: 'audio', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
+    ]
     else if (path === '/api/v1/ai-configs/10/test') data = { status: 'ok', provider: 'mock', model: 'mock', latency_ms: 1, detail: 'Mock 服务可用' }
     else if (path === '/api/v1/ai-providers') data = [{ provider: 'mock', service_type: 'image' }]
     else if (path === '/api/v1/agent-configs') data = [{ id: 20, agent_type: 'script_rewriter', name: 'Script Rewriter', model: 'mock', is_active: true }]
@@ -36,7 +40,13 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean } = {}) 
     else if (path === '/api/v1/organization/members/invitations') data = []
     else if (path === '/api/v1/character-library') data = [{ id: 40, name: '跨项目主角', role: '主角', appearance: '短发，黑色外套', voice_style: '沉稳', image_url: '' }]
     else if (path === '/api/v1/dramas') data = { items: [{ id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }] }] }
-    else if (path === '/api/v1/dramas/2') data = { id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }], characters: [], scenes: [], props: [] }
+    else if (path === '/api/v1/dramas/2') data = {
+      id: 2, title: '素材项目', description: '用于体验项目工作流', style: 'realistic',
+      episodes: [{ id: 20, episode_number: 1, title: '第一集', status: 'draft', script_content: '' }],
+      characters: [{ id: 50, name: '阿宁', role: '主角', appearance: '短发' }],
+      scenes: [{ id: 60, location: '旧车站', time: '夜', description: '雨夜站台' }], props: [],
+    }
+    else if (path === '/api/v1/props') data = [{ id: 70, name: '旧雨伞', description: '黑色长柄伞', image_url: '' }]
     else if (path === '/api/v1/assets') data = [{ id: 30, name: '车站参考图', type: 'image', category: 'reference', url: '/media/station.png', is_favorite: false }]
 
     return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, data, message: status === 200 ? 'success' : 'error' }) })
@@ -130,6 +140,34 @@ test('desktop: project creation marks and validates required fields', async ({ p
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   expect(created?.postDataJSON()).toMatchObject({ title: '必填校验项目', style: 'realistic', total_episodes: 2 })
+})
+
+test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true })
+  await page.goto('/drama/2')
+
+  await expect(page.getByRole('heading', { name: '素材项目' })).toBeVisible()
+  const projectNavigation = page.getByRole('tablist', { name: '项目内容' })
+  await expect(projectNavigation.getByRole('tab', { name: '剧集' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('第一集', { exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: '新增剧集' }).click()
+  const episodeDialog = page.getByRole('dialog', { name: '新增剧集' })
+  await expect(episodeDialog.getByLabel('图片服务')).toHaveValue('10')
+  await expect(episodeDialog.getByLabel('视频服务')).toHaveValue('11')
+  await expect(episodeDialog.getByLabel('音频服务')).toHaveValue('12')
+  await episodeDialog.getByRole('button', { name: '取消' }).click()
+
+  await projectNavigation.getByRole('tab', { name: '项目资产' }).click()
+  const assetNavigation = page.getByRole('tablist', { name: '资产类型' })
+  await expect(assetNavigation.getByRole('tab', { name: '角色 1' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('阿宁', { exact: true })).toBeVisible()
+  await assetNavigation.getByRole('tab', { name: '场景 1' }).click()
+  await expect(page.getByText('旧车站', { exact: true })).toBeVisible()
+  await assetNavigation.getByRole('tab', { name: '道具 1' }).click()
+  await expect(page.getByText('旧雨伞', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '添加道具' }).click()
+  await expect(page.getByRole('dialog', { name: '添加道具' })).toBeVisible()
 })
 
 test('desktop: character library keeps forms in focused dialogs', async ({ page }) => {
