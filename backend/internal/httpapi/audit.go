@@ -28,6 +28,16 @@ func (s *Server) auditMutations() gin.HandlerFunc {
 			organizationID, userID, role = actor.Organization.ID, actor.User.ID, actor.Membership.Role
 		}
 		resourceType, resourceID := auditResource(c.Request.URL.Path)
+		if value, exists := c.Get("audit_resource_type"); exists {
+			if override, ok := value.(string); ok && override != "" {
+				resourceType = override
+			}
+		}
+		if value, exists := c.Get("audit_resource_id"); exists {
+			if override, ok := value.(string); ok && override != "" {
+				resourceID = override
+			}
+		}
 		entry := models.AuditLog{
 			OrganizationID: organizationID, UserID: userID, Role: role,
 			Action:       strings.ToLower(c.Request.Method) + "." + resourceType,
@@ -42,6 +52,11 @@ func (s *Server) auditMutations() gin.HandlerFunc {
 	}
 }
 
+func setAuditResource(c *gin.Context, resourceType, resourceID string) {
+	c.Set("audit_resource_type", resourceType)
+	c.Set("audit_resource_id", resourceID)
+}
+
 func auditResource(path string) (string, string) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 {
@@ -50,6 +65,11 @@ func auditResource(path string) (string, string) {
 	resource := parts[2]
 	if resource == "agent" && len(parts) > 3 {
 		return "agent:" + parts[3], ""
+	}
+	if resource == "grid" && len(parts) > 4 && parts[3] == "history" {
+		if _, err := strconv.ParseUint(parts[4], 10, 64); err == nil {
+			return "grid_history", parts[4]
+		}
 	}
 	if len(parts) > 3 {
 		if _, err := strconv.ParseUint(parts[3], 10, 64); err == nil {

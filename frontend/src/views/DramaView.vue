@@ -23,6 +23,7 @@ const episodeTitleInput = ref<HTMLInputElement | null>(null)
 const propNameInput = ref<HTMLInputElement | null>(null)
 const episodeForm = ref({ title: '', image_config_id: 0, video_config_id: 0, audio_config_id: 0 })
 const propForm = ref({ name: '', description: '' })
+const styleLabels: Record<string, string> = { realistic: '写实', anime: '动漫', cinematic: '电影感' }
 
 const id = computed(() => Number(route.params.id))
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
@@ -33,6 +34,7 @@ const projectSummary = computed(() => {
 const imageConfigs = computed(() => configs.value.filter((config) => config.service_type === 'image' && config.is_active !== false))
 const videoConfigs = computed(() => configs.value.filter((config) => config.service_type === 'video' && config.is_active !== false))
 const audioConfigs = computed(() => configs.value.filter((config) => config.service_type === 'audio' && config.is_active !== false))
+const projectStyle = computed(() => styleLabels[drama.value?.style || ''] || drama.value?.style || '未设置风格')
 
 function notify(text: string) {
   message.value = text
@@ -149,7 +151,7 @@ onMounted(load)
   <div v-else-if="error" class="page"><div class="load-error"><h2>项目加载失败</h2><p class="muted">{{ error }}</p><button class="btn" @click="load">重新加载</button></div></div>
   <div v-else-if="drama" class="page">
     <div class="page-head">
-      <div><h1 class="page-title">{{ drama.title }}</h1><p class="page-desc project-description">{{ projectSummary }} · {{ drama.style }}</p></div>
+      <div><h1 class="page-title">{{ drama.title }}</h1><p class="page-desc project-description">{{ projectSummary }} · {{ projectStyle }}</p></div>
       <div class="toolbar project-head-actions"><button class="btn" @click="router.push('/')">返回项目</button><button class="btn" @click="router.push(`/drama/${id}/assets`)">素材库</button></div>
     </div>
 

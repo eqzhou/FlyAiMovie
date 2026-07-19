@@ -271,13 +271,14 @@ func TestViduRejectsMissingImageAndDoesNotFallbackOnHTTPError(t *testing.T) {
 }
 
 func TestProviderHTTPErrorIsBounded(t *testing.T) {
+	secret := "provider-echoed-secret"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(strings.Repeat("x", 32)))
+		_, _ = w.Write([]byte(secret + strings.Repeat("x", 32)))
 	}))
 	defer server.Close()
 	_, err := (&AliyunVideoAdapter{}).Generate(context.Background(), AIConfig{BaseURL: server.URL, APIKey: "x"}, VideoGenInput{Prompt: "x"})
-	if err == nil || !strings.Contains(err.Error(), "HTTP 400") {
+	if err == nil || !strings.Contains(err.Error(), "HTTP 400") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("err=%v", err)
 	}
 }

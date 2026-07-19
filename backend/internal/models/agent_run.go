@@ -6,6 +6,7 @@ type AgentRun struct {
 	AgentType         string  `gorm:"not null;index" json:"agent_type"`
 	DramaID           uint    `gorm:"not null;index" json:"drama_id"`
 	EpisodeID         uint    `gorm:"not null;index" json:"episode_id"`
+	RetryOfID         *uint   `gorm:"index" json:"retry_of_id,omitempty"`
 	Status            string  `gorm:"not null;index" json:"status"`
 	Input             string  `json:"input"`
 	OutputJSON        string  `json:"output_json"`

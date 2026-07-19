@@ -7,9 +7,21 @@ const actor = {
   csrf_token: 'csrf-e2e',
 }
 
-async function mockAccountAPI(page: Page, options: { signedIn?: boolean; role?: 'owner' | 'admin' | 'editor' | 'viewer' } = {}) {
+async function mockAccountAPI(page: Page, options: {
+  signedIn?: boolean
+  role?: 'owner' | 'admin' | 'editor' | 'viewer'
+  failCharacterLibraryRequests?: number
+  failCharacterLibraryCreates?: number
+  failProviderRequests?: number
+  delayPromptHistory?: boolean
+  delayPromptDraft?: boolean
+} = {}) {
   let signedIn = options.signedIn ?? false
+  let remainingCharacterLibraryFailures = options.failCharacterLibraryRequests ?? 0
+  let remainingCharacterCreateFailures = options.failCharacterLibraryCreates ?? 0
+  let remainingProviderFailures = options.failProviderRequests ?? 0
   const currentActor = { ...actor, role: options.role || actor.role }
+  await page.route('**/static/audio/voice-preview.mp3', (route) => route.fulfill({ status: 200, contentType: 'audio/mpeg', body: '' }))
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -27,23 +39,71 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean; role?: 
     else if (path === '/api/v1/auth/invitations/invite-token') data = { email: 'new@example.com', role: 'editor', organization: actor.organization, expires_at: '2099-01-01T00:00:00Z' }
     else if (path === '/api/v1/auth/invitations/invite-token/accept') data = actor
     else if (path === '/api/v1/ai-configs') data = [
-      { id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
+      { id: 10, name: 'Mock Image', service_type: 'image', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true, is_default: true },
       { id: 11, name: 'Mock Video', service_type: 'video', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
       { id: 12, name: 'Mock Audio', service_type: 'audio', provider: 'mock', model: 'mock', base_url: 'http://localhost', api_key_set: true, is_active: true },
     ]
     else if (path === '/api/v1/ai-configs/10/test') data = { status: 'ok', provider: 'mock', model: 'mock', latency_ms: 1, detail: 'Mock 服务可用' }
+    else if (path === '/api/v1/ai-configs/test') data = { status: 'ok', provider: 'mock', model: 'mock-draft', latency_ms: 2, detail: '当前配置可用' }
+    else if (path === '/api/v1/ai-providers' && remainingProviderFailures > 0) {
+      remainingProviderFailures -= 1
+      status = 503
+      return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, message: '厂商目录暂时不可用' }) })
+    }
     else if (path === '/api/v1/ai-providers') data = [{ provider: 'mock', service_type: 'image' }]
     else if (path === '/api/v1/agent-configs') data = [{ id: 20, agent_type: 'script_rewriter', name: 'Script Rewriter', model: 'mock', is_active: true }]
+    else if (path === '/api/v1/prompt-templates/preview') {
+      const payload = request.postDataJSON() as { content?: string }
+      if (payload.content?.includes('{{secret}}')) {
+        status = 400
+        return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, message: 'unknown prompt variable "secret"' }) })
+      }
+      if (options.delayPromptDraft && payload.content?.includes('旧内容')) {
+        await new Promise(resolve => setTimeout(resolve, 350))
+        data = { rendered: '草稿预览：旧内容', variables: [] }
+      } else if (options.delayPromptDraft && payload.content?.includes('新内容')) {
+        data = { rendered: '草稿预览：新内容', variables: [] }
+      } else {
+        data = { rendered: '草稿预览：示例短剧', variables: ['drama_title'] }
+      }
+    }
     else if (path === '/api/v1/prompt-templates') data = [
       { id: 80, key: 'script_rewriter', name: '剧本改写', category: 'agent_system', description: '将故事素材整理为短剧剧本', content: '为 {{drama_title}} 执行 {{user_instruction}}', variables_json: '["drama_title","user_instruction"]', version: 3, is_active: true },
       { id: 81, key: 'grid_prompt_generator', name: '宫格提示词', category: 'agent_system', description: '生成连续画面', content: '{{episode_title}}', variables_json: '["episode_title"]', version: 1, is_active: true },
     ]
     else if (path === '/api/v1/prompt-templates/80/preview') data = { rendered: '为 归途 执行 重写对白', version: 3 }
+    else if (path === '/api/v1/prompt-templates/80/revisions') {
+      if (options.delayPromptHistory) await new Promise(resolve => setTimeout(resolve, 350))
+      data = [
+      { id: 803, template_id: 80, version: 3, name: '剧本改写', category: 'agent_system', content: options.delayPromptHistory ? 'A-version' : '为 {{drama_title}} 执行 {{user_instruction}}', is_active: true, created_at: '2026-07-18T10:00:00Z' },
+      { id: 802, template_id: 80, version: 2, name: '剧本改写', category: 'agent_system', content: '旧版 {{drama_title}}', is_active: true, created_at: '2026-07-17T10:00:00Z' },
+      { id: 801, template_id: 80, version: 1, name: '剧本改写', category: 'agent_system', content: '初始 {{drama_title}}', is_active: true, created_at: '2026-07-16T10:00:00Z' },
+      ]
+    }
+    else if (path === '/api/v1/prompt-templates/81/revisions') data = [
+      { id: 811, template_id: 81, version: 1, name: '宫格提示词', category: 'agent_system', content: 'B-version', is_active: true, created_at: '2026-07-18T11:00:00Z' },
+    ]
+    else if (path === '/api/v1/ai-voices') data = [
+      { voice_id: 'female-shaonv', voice_name: '少女', language: '中文', provider: 'mock', capabilities: 'mock', is_active: true },
+      { voice_id: 'retired-voice', voice_name: '旧音色', language: '中文', provider: 'mock', capabilities: 'mock', is_active: false },
+    ]
+    else if (path === '/api/v1/ai-voices/sync') data = { count: 2, message: 'Mock voices seeded' }
+    else if (path === '/api/v1/ai-voices/female-shaonv/preview') data = { voice_id: 'female-shaonv', provider: 'mock', audio_url: '/static/audio/voice-preview.mp3' }
     else if (path === '/api/v1/organization/quota') data = { daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 2, active_jobs: 0, daily_budget_cny: 10, budget_warning_percent: 80, budget_used_cny: 1.25, budget_warning: false }
     else if (path === '/api/v1/organization/cache') data = { objects: 3, references: 4, bytes: 2048, orphaned: 1 }
     else if (path === '/api/v1/organization/cache/purge') data = { purged: { deleted_objects: 1 }, cleanup: { completed: 1, failed: 0 } }
     else if (path === '/api/v1/organization/members') data = [{ user_id: 1, email: actor.user.email, display_name: actor.user.display_name, role: 'owner' }]
     else if (path === '/api/v1/organization/members/invitations') data = []
+    else if (path === '/api/v1/character-library' && request.method() === 'GET' && remainingCharacterLibraryFailures > 0) {
+      remainingCharacterLibraryFailures -= 1
+      status = 503
+      return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, message: '角色库暂时不可用' }) })
+    }
+    else if (path === '/api/v1/character-library' && request.method() === 'POST' && remainingCharacterCreateFailures > 0) {
+      remainingCharacterCreateFailures -= 1
+      status = 503
+      return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, message: '模板保存失败' }) })
+    }
     else if (path === '/api/v1/character-library') data = [{ id: 40, name: '跨项目主角', role: '主角', appearance: '短发，黑色外套', voice_style: '沉稳', image_url: '' }]
     else if (path === '/api/v1/dramas') data = { items: [{ id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }] }] }
     else if (path === '/api/v1/dramas/2') data = {
@@ -62,10 +122,16 @@ async function mockAccountAPI(page: Page, options: { signedIn?: boolean; role?: 
 test('desktop: login, settings and asset library workflows are reachable', async ({ page }) => {
   let updatedConfig: Request | undefined
   let updatedPrompt: Request | undefined
+  let restoredPromptVersion: Request | undefined
+  let voicePreview: Request | undefined
+  let draftConfigTest: Request | undefined
   await mockAccountAPI(page)
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/ai-configs/10' && request.method() === 'PUT') updatedConfig = request
     if (new URL(request.url()).pathname === '/api/v1/prompt-templates/80' && request.method() === 'PUT') updatedPrompt = request
+    if (new URL(request.url()).pathname === '/api/v1/prompt-templates/80/revisions/1/restore' && request.method() === 'POST') restoredPromptVersion = request
+    if (new URL(request.url()).pathname === '/api/v1/ai-voices/female-shaonv/preview' && request.method() === 'POST') voicePreview = request
+    if (new URL(request.url()).pathname === '/api/v1/ai-configs/test' && request.method() === 'POST') draftConfigTest = request
   })
   await page.goto('/login')
   await page.getByLabel('邮箱').fill('owner@example.com')
@@ -81,19 +147,41 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(page.getByText('Mock Image')).toBeVisible()
   await expect(page.getByText('生成配额')).toHaveCount(0)
 
+  await page.setViewportSize({ width: 1172, height: 650 })
   const mockConfigRow = page.getByRole('row', { name: /Mock Image/ })
   await mockConfigRow.getByRole('button', { name: '编辑' }).click()
   const editServiceDialog = page.getByRole('dialog', { name: '编辑 AI 服务' })
   await expect(editServiceDialog.getByLabel('模型')).toHaveValue('mock')
+  await expect(editServiceDialog.getByLabel('启用服务')).toBeChecked()
+  await expect(editServiceDialog.getByLabel('设为默认')).toBeChecked()
+  await editServiceDialog.getByLabel('Base URL').fill('http://changed.localhost')
+  await editServiceDialog.getByRole('button', { name: '测试当前配置' }).click()
+  await expect(editServiceDialog.getByRole('alert')).toContainText('更改类型、厂商或 Base URL 后，请重新填写 API Key')
+  expect(draftConfigTest).toBeUndefined()
+  await editServiceDialog.getByLabel('Base URL').fill('http://localhost')
   await editServiceDialog.getByLabel('名称').fill('Mock Image Updated')
+  await editServiceDialog.getByLabel('模型').fill('mock-draft')
+  await editServiceDialog.getByRole('button', { name: '测试当前配置' }).click()
+  await expect(editServiceDialog).toContainText('当前配置可用 · 2 ms')
+  expect(draftConfigTest?.postDataJSON()).toMatchObject({ id: 10, name: 'Mock Image Updated', model: 'mock-draft', api_key: '' })
+  await editServiceDialog.evaluate((dialog) => { dialog.scrollTop = dialog.scrollHeight })
+  const serviceDialogBox = await editServiceDialog.boundingBox()
+  const serviceDialogTitleBox = await editServiceDialog.getByRole('heading', { name: '编辑 AI 服务' }).boundingBox()
+  expect(serviceDialogBox).not.toBeNull()
+  expect(serviceDialogTitleBox).not.toBeNull()
+  expect(serviceDialogTitleBox!.y).toBeGreaterThanOrEqual(0)
+  await editServiceDialog.getByLabel('设为默认').uncheck()
   await editServiceDialog.getByRole('button', { name: '保存修改' }).click()
-  expect(updatedConfig?.postDataJSON()).toMatchObject({ name: 'Mock Image Updated', model: 'mock' })
+  expect(updatedConfig?.postDataJSON()).toMatchObject({ name: 'Mock Image Updated', model: 'mock-draft', is_default: false, is_active: true })
+  await page.setViewportSize({ width: 1440, height: 1000 })
 
   await mockConfigRow.getByRole('button', { name: '测试连接' }).click()
   await expect(page.getByText('Mock 服务可用 · 1 ms')).toBeVisible()
 
   await page.getByRole('button', { name: '添加 AI 服务' }).click()
   const serviceDialog = page.getByRole('dialog', { name: '添加 AI 服务' })
+  await expect(serviceDialog.getByLabel('启用服务')).toBeChecked()
+  await expect(serviceDialog.getByLabel('设为默认')).toBeChecked()
   await serviceDialog.getByLabel('类型').selectOption('video')
   await expect(serviceDialog.getByLabel('厂商')).toContainText('OpenAI Sora')
   await serviceDialog.getByLabel('类型').selectOption('text')
@@ -121,6 +209,24 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await promptDialog.getByRole('button', { name: '保存修改' }).click()
   expect(updatedPrompt?.postDataJSON()).toMatchObject({ content: '新模板 {{drama_title}}' })
 
+  await promptRow.getByRole('button', { name: '版本历史' }).click()
+  const historyDialog = page.getByRole('dialog', { name: '提示词版本历史' })
+  await expect(historyDialog.getByText('v3', { exact: true })).toBeVisible()
+  await expect(historyDialog.getByText('初始 {{drama_title}}', { exact: true })).toBeVisible()
+  await historyDialog.getByRole('button', { name: '恢复 v1' }).click()
+  expect(restoredPromptVersion).toBeDefined()
+  await expect(page.getByRole('status').getByText('已恢复为新版本', { exact: true })).toBeVisible()
+
+  await settingsNavigation.getByRole('tab', { name: '音色库' }).click()
+  await expect(page.getByRole('row', { name: /少女/ })).toContainText('启用')
+  await expect(page.getByRole('row', { name: /旧音色/ })).toContainText('失效')
+  await page.getByRole('searchbox', { name: '搜索音色' }).fill('少女')
+  await expect(page.getByRole('row', { name: /旧音色/ })).toHaveCount(0)
+  await page.getByLabel('试听文本').fill('这是音色试听文本')
+  await page.getByRole('row', { name: /少女/ }).getByRole('button', { name: '试听少女' }).click()
+  expect(voicePreview?.postDataJSON()).toEqual({ text: '这是音色试听文本' })
+  await expect(page.getByLabel('少女试听音频')).toHaveAttribute('src', '/static/audio/voice-preview.mp3')
+
   await settingsNavigation.getByRole('tab', { name: '组织与权限' }).click()
   await expect(page.getByText('生成配额')).toBeVisible()
   await expect(page.getByText('本地缓存')).toBeVisible()
@@ -134,6 +240,19 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await page.goto('/drama/2/assets')
   await expect(page.getByRole('heading', { name: '素材项目 · 素材库' })).toBeVisible()
   await expect(page.getByText('车站参考图')).toBeVisible()
+})
+
+test('desktop: one settings source can fail without blanking other sections', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, failProviderRequests: 1 })
+  await page.goto('/settings')
+
+  await expect(page.getByText('Mock Image')).toBeVisible()
+  const warning = page.getByRole('alert')
+  await expect(warning).toContainText('厂商目录暂时不可用')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  await expect(page.getByRole('row', { name: /剧本改写/ })).toBeVisible()
+  await warning.getByRole('button', { name: '重试加载' }).click()
+  await expect(warning).toHaveCount(0)
 })
 
 test('desktop: project creation marks and validates required fields', async ({ page }) => {
@@ -168,13 +287,129 @@ test('desktop: project creation marks and validates required fields', async ({ p
 
 test('desktop: viewers can preview prompts without mutation controls', async ({ page }) => {
   await mockAccountAPI(page, { signedIn: true, role: 'viewer' })
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: '新建项目' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /删除项目/ })).toHaveCount(0)
   await page.goto('/settings')
   await page.getByRole('tab', { name: '提示词' }).click()
   await expect(page.getByRole('button', { name: '新建提示词' })).toHaveCount(0)
   const promptRow = page.getByRole('row', { name: /剧本改写/ })
   await expect(promptRow.getByRole('button', { name: '预览' })).toBeVisible()
+  await promptRow.getByRole('button', { name: '版本历史' }).click()
+  const historyDialog = page.getByRole('dialog', { name: '提示词版本历史' })
+  await expect(historyDialog.getByText('v3', { exact: true })).toBeVisible()
+  await expect(historyDialog.getByRole('button', { name: /恢复 v/ })).toHaveCount(0)
+  await historyDialog.getByRole('button', { name: '关闭' }).click()
+  await expect(promptRow.getByRole('button', { name: '复制' })).toHaveCount(0)
   await expect(promptRow.getByRole('button', { name: '编辑' })).toHaveCount(0)
   await expect(promptRow.getByRole('button', { name: '恢复默认' })).toHaveCount(0)
+
+  await page.getByRole('tab', { name: '音色库' }).click()
+  await expect(page.getByRole('row', { name: /少女/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /试听少女/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '同步音色' })).toHaveCount(0)
+})
+
+test('desktop: prompt workspace supports complete variables and template duplication', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  const promptRow = page.getByRole('row', { name: /剧本改写/ })
+
+  await promptRow.getByRole('button', { name: '预览' }).click()
+  const previewDialog = page.getByRole('dialog', { name: '预览提示词' })
+  await expect(previewDialog.getByLabel('项目标题')).toHaveValue('示例短剧')
+  await expect(previewDialog.getByLabel('用户要求')).toHaveValue('保持人物与画面连续')
+  await previewDialog.getByRole('button', { name: '关闭' }).click()
+
+  await promptRow.getByRole('button', { name: '复制' }).click()
+  const duplicateDialog = page.getByRole('dialog', { name: '新建提示词' })
+  await expect(duplicateDialog.getByRole('textbox', { name: '名称 *', exact: true })).toHaveValue('剧本改写副本')
+  await expect(duplicateDialog.getByRole('textbox', { name: '标识 *', exact: true })).toHaveValue('script_rewriter_copy')
+  await expect(duplicateDialog.getByRole('button', { name: '插入变量 镜头标题' })).toBeVisible()
+  await expect(duplicateDialog.getByRole('button', { name: '插入变量 宫格行数' })).toBeVisible()
+  await duplicateDialog.getByRole('textbox', { name: '模板内容 *', exact: true }).fill('镜头：')
+  await duplicateDialog.getByRole('button', { name: '插入变量 镜头标题' }).click()
+  await expect(duplicateDialog.getByRole('textbox', { name: '模板内容 *', exact: true })).toHaveValue('镜头：{{shot_title}}')
+  await duplicateDialog.getByRole('textbox', { name: '模板内容 *', exact: true }).fill('为 {{drama_title}} 生成画面')
+  await duplicateDialog.getByRole('button', { name: '检查并预览' }).click()
+  await expect(duplicateDialog.getByText('草稿预览：示例短剧', { exact: true })).toBeVisible()
+  await duplicateDialog.getByRole('textbox', { name: '模板内容 *', exact: true }).fill('{{secret}}')
+  await duplicateDialog.getByRole('button', { name: '检查并预览' }).click()
+  await expect(duplicateDialog.getByRole('alert')).toContainText('unknown prompt variable')
+  await duplicateDialog.getByRole('button', { name: '取消' }).click()
+})
+
+test('desktop: prompt templates can be searched and filtered', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+
+  await page.getByRole('searchbox', { name: '搜索提示词' }).fill('宫格')
+  await expect(page.getByRole('row', { name: /宫格提示词/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /剧本改写/ })).toHaveCount(0)
+  await page.getByLabel('提示词分类').selectOption('image')
+  await expect(page.getByText('没有匹配的提示词模板')).toBeVisible()
+  await page.getByLabel('提示词分类').selectOption('all')
+  await page.getByRole('searchbox', { name: '搜索提示词' }).fill('')
+  await expect(page.getByRole('row', { name: /剧本改写/ })).toBeVisible()
+})
+
+test('desktop: prompt history ignores a stale response from a previously closed template', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, delayPromptHistory: true })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+
+  await page.getByRole('row', { name: /剧本改写/ }).getByRole('button', { name: '版本历史' }).click()
+  await page.getByRole('dialog', { name: '提示词版本历史' }).getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('row', { name: /宫格提示词/ }).getByRole('button', { name: '版本历史' }).click()
+  const history = page.getByRole('dialog', { name: '提示词版本历史' })
+  await expect(history.getByText('B-version', { exact: true })).toBeVisible()
+  await page.waitForTimeout(450)
+  await expect(history.getByText('A-version', { exact: true })).toHaveCount(0)
+  await expect(history).toContainText('宫格提示词')
+})
+
+test('desktop: prompt draft preview ignores a stale response after content changes', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, delayPromptDraft: true })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  await page.getByRole('row', { name: /剧本改写/ }).getByRole('button', { name: '复制' }).click()
+  const dialog = page.getByRole('dialog', { name: '新建提示词' })
+  const content = dialog.getByRole('textbox', { name: '模板内容 *', exact: true })
+
+  await content.fill('旧内容')
+  await dialog.getByRole('button', { name: '检查并预览' }).click()
+  await content.fill('新内容')
+  await dialog.getByRole('button', { name: '检查并预览' }).click()
+  await expect(dialog.getByText('草稿预览：新内容', { exact: true })).toBeVisible()
+  await page.waitForTimeout(450)
+  await expect(dialog.getByText('草稿预览：旧内容', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText('草稿预览：新内容', { exact: true })).toBeVisible()
+})
+
+test('mobile: prompt editor variable palette stays usable', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '提示词' }).click()
+  await page.getByRole('row', { name: /剧本改写/ }).getByRole('button', { name: '复制' }).click()
+  const dialog = page.getByRole('dialog', { name: '新建提示词' })
+  await expect(dialog.getByRole('button', { name: '插入变量 视频提示词' })).toBeVisible()
+  const box = await dialog.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844)
+})
+
+test('desktop: editors can preview voices without managing the catalog', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, role: 'editor' })
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '音色库' }).click()
+  await expect(page.getByLabel('试听文本')).toBeVisible()
+  await expect(page.getByRole('button', { name: '试听少女' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '同步音色' })).toHaveCount(0)
 })
 
 test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
@@ -207,11 +442,13 @@ test('desktop: project detail uses focused content views and creation dialogs', 
 
 test('desktop: character library keeps forms in focused dialogs', async ({ page }) => {
   let created: Request | undefined
+  let updated: Request | undefined
   let imported: Request | undefined
   await mockAccountAPI(page, { signedIn: true })
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
     if (path === '/api/v1/character-library' && request.method() === 'POST') created = request
+    if (path === '/api/v1/character-library/40' && request.method() === 'PUT') updated = request
     if (path === '/api/v1/character-library/40/import' && request.method() === 'POST') imported = request
   })
   await page.goto('/character-library')
@@ -219,6 +456,18 @@ test('desktop: character library keeps forms in focused dialogs', async ({ page 
   await expect(page.getByRole('heading', { name: '角色库' })).toBeVisible()
   await expect(page.getByRole('row', { name: /跨项目主角/ })).toBeVisible()
   await expect(page.getByLabel('角色定位')).toHaveCount(0)
+
+  await page.getByRole('searchbox', { name: '搜索角色模板' }).fill('不存在')
+  await expect(page.getByText('没有匹配的角色模板')).toBeVisible()
+  await page.getByRole('searchbox', { name: '搜索角色模板' }).fill('主角')
+
+  const editableRow = page.getByRole('row', { name: /跨项目主角/ })
+  await editableRow.getByRole('button', { name: '编辑' }).click()
+  const editDialog = page.getByRole('dialog', { name: '编辑角色模板' })
+  await expect(editDialog.getByLabel(/名称.*\*/)).toHaveValue('跨项目主角')
+  await editDialog.getByLabel('角色定位').fill('核心主角')
+  await editDialog.getByRole('button', { name: '保存修改' }).click()
+  expect(updated?.postDataJSON()).toMatchObject({ name: '跨项目主角', role: '核心主角' })
 
   await page.getByRole('button', { name: '新建角色模板' }).click()
   const createDialog = page.getByRole('dialog', { name: '新建角色模板' })
@@ -238,6 +487,24 @@ test('desktop: character library keeps forms in focused dialogs', async ({ page 
   await importDialog.getByRole('button', { name: '确认导入' }).click()
   await expect(importDialog).toHaveCount(0)
   expect(imported?.postDataJSON()).toMatchObject({ drama_id: 2, episode_id: 20 })
+})
+
+test('desktop: character library reports load and submit failures in context', async ({ page }) => {
+  await mockAccountAPI(page, { signedIn: true, failCharacterLibraryRequests: 1, failCharacterLibraryCreates: 1 })
+  await page.goto('/character-library')
+
+  const loadError = page.getByRole('alert')
+  await expect(loadError).toContainText('角色库暂时不可用')
+  await loadError.getByRole('button', { name: '重试加载' }).click()
+  await expect(page.getByRole('row', { name: /跨项目主角/ })).toBeVisible()
+
+  await page.getByRole('button', { name: '新建角色模板' }).click()
+  const dialog = page.getByRole('dialog', { name: '新建角色模板' })
+  await dialog.getByLabel(/名称.*\*/).fill('失败保留模板')
+  await dialog.getByRole('button', { name: '创建模板' }).click()
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('alert')).toContainText('模板保存失败')
+  await expect(dialog.getByLabel(/名称.*\*/)).toHaveValue('失败保留模板')
 })
 
 test('desktop: invitation preview and acceptance submit the expected payload', async ({ page }) => {

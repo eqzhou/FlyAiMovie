@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -58,9 +57,12 @@ func (a *GenericVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in Vid
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s video error %d: %s", a.ProviderName, resp.StatusCode, string(data))
+		return nil, fmt.Errorf("%s video request failed (HTTP %d)", a.ProviderName, resp.StatusCode)
+	}
+	data, err := readProviderResponse(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	var parsed map[string]any
 	_ = json.Unmarshal(data, &parsed)
@@ -77,7 +79,7 @@ func (a *GenericVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in Vid
 	if videoURL != "" {
 		return &VideoGenResult{IsAsync: false, VideoURL: videoURL}, nil
 	}
-	return nil, fmt.Errorf("unable to parse video response: %s", string(data))
+	return nil, fmt.Errorf("unable to parse video response")
 }
 
 func (a *GenericVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID string) (*VideoPollResult, error) {
@@ -97,9 +99,12 @@ func (a *GenericVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID str
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return &VideoPollResult{Status: "failed", Error: string(data)}, nil
+		return &VideoPollResult{Status: "failed", Error: fmt.Sprintf("video poll request failed (HTTP %d)", resp.StatusCode)}, nil
+	}
+	data, err := readProviderResponse(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	var parsed map[string]any
 	_ = json.Unmarshal(data, &parsed)

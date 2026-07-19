@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
@@ -74,5 +75,63 @@ func TestBatchGenerationRejectsStoryboardsFromAnotherEpisode(t *testing.T) {
 		if response.Code != http.StatusConflict {
 			t.Fatalf("%s status=%d body=%s", request.path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestStoryboardFrameUsesOrganizationPromptTemplate(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"模板短剧","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+	episodeID := uintField(t, episode, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"重逢","description":"两人在雨中站台相遇","image_prompt":"quiet rain","video_prompt":"slow push in"}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	upsertPromptTemplate(t, "storyboard_image", "image", "{{drama_title}} :: {{shot_title}} :: {{shot_description}}", `["drama_title","shot_title","shot_description"]`)
+	upsertPromptTemplate(t, "grid_composition", "grid", "{{drama_title}} grid {{grid_rows}}x{{grid_cols}} {{user_instruction}}", `["drama_title","grid_rows","grid_cols","user_instruction"]`)
+
+	generated := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-frame", `{"frame_type":"first_frame","config_id":`+itoa(imageConfigID)+`}`, nil)
+	if generated.Code != http.StatusOK {
+		t.Fatalf("frame status=%d body=%s", generated.Code, generated.Body.String())
+	}
+	var rec models.ImageGeneration
+	if err := db.DB.Where("storyboard_id = ?", storyboardID).Order("id desc").First(&rec).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rec.Prompt != "opening frame, 模板短剧 :: 重逢 :: 两人在雨中站台相遇" {
+		t.Fatalf("prompt=%q", rec.Prompt)
+	}
+
+	grid := performRequest(router, http.MethodPost, "/api/v1/grid/prompt", `{"episode_id":`+itoa(episodeID)+`,"rows":1,"cols":1,"mode":"first_frame"}`, nil)
+	if grid.Code != http.StatusOK {
+		t.Fatalf("grid prompt status=%d body=%s", grid.Code, grid.Body.String())
+	}
+	if !strings.Contains(grid.Body.String(), "模板短剧 grid 1x1") {
+		t.Fatalf("grid body=%s", grid.Body.String())
+	}
+}
+
+func upsertPromptTemplate(t *testing.T, key, category, content, variablesJSON string) {
+	t.Helper()
+	var template models.PromptTemplate
+	err := db.DB.Where("organization_id = ? AND key = ? AND deleted_at IS NULL", 0, key).First(&template).Error
+	if err == nil {
+		if err := db.DB.Model(&template).Updates(map[string]any{
+			"category": category, "content": content, "variables_json": variablesJSON,
+			"version": template.Version + 1, "is_active": true, "updated_at": "now",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	template = models.PromptTemplate{
+		OrganizationID: 0, Key: key, Name: key, Category: category, Content: content, VariablesJSON: variablesJSON,
+		Version: 1, IsActive: true, CreatedAt: "now", UpdatedAt: "now",
+	}
+	if err := db.DB.Create(&template).Error; err != nil {
+		t.Fatal(err)
 	}
 }

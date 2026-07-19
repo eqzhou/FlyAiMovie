@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"image"
 	"image/color"
 	"image/png"
@@ -25,9 +26,24 @@ import (
 	"gorm.io/gorm"
 )
 
+func newTrustedProviderTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	certificate := server.Certificate()
+	caPath := filepath.Join(t.TempDir(), "provider-ca.pem")
+	payload := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+	if err := os.WriteFile(caPath, payload, 0o600); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	t.Setenv("AI_PROVIDER_CA_FILE", caPath)
+	t.Setenv("AI_PROVIDER_PRIVATE_HOSTS", "127.0.0.1")
+	return server
+}
+
 func TestVideoServiceForwardsStructuredReferenceImages(t *testing.T) {
 	database := generationDatabase(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	server := newTrustedProviderTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -424,13 +440,17 @@ func TestTTSVoiceSampleAndLocalFileHelpers(t *testing.T) {
 	if _, err := os.Stat(abs); err != nil {
 		t.Fatal(err)
 	}
+	previewURL, err := service.GenerateVoicePreviewOrganization(context.Background(), 6, "自定义试听文本", "mock-voice", &config.ID)
+	if err != nil || previewURL == "" {
+		t.Fatalf("voice preview=%q err=%v", previewURL, err)
+	}
 	if !HasTTSContent("林岚：出发") || HasTTSContent("环境音：风声") {
 		t.Fatal("unexpected TTS content classification")
 	}
 	if _, err := EnsureLocalFile(store, ""); err == nil {
 		t.Fatal("empty local path accepted")
 	}
-	if _, err := service.generateForStoryboard(context.Background(), nil, &config.ID, 6); err == nil {
+	if _, err := service.generateForStoryboard(context.Background(), nil, &config.ID, 6, nil, 0, ""); err == nil {
 		t.Fatal("nil storyboard accepted")
 	}
 	if _, err := service.GenerateForStoryboardOrganization(context.Background(), 6, 999, &config.ID); err == nil {
@@ -567,7 +587,7 @@ func TestAsyncImagePollingCompletesPersistentJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(providerImage)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	server := newTrustedProviderTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.Method + " " + request.URL.Path {
 		case "POST /api/v3/images/generations":
 			_, _ = w.Write([]byte(`{"id":"async-image-1"}`))
@@ -640,7 +660,7 @@ func TestAsyncVideoPollingCompletesPersistentJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create provider video: %v: %s", err, output)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	server := newTrustedProviderTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.Method + " " + request.URL.Path {
 		case "POST /api/v3/contents/generations/tasks":
 			_, _ = w.Write([]byte(`{"id":"async-video-1"}`))

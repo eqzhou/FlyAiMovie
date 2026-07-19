@@ -73,7 +73,7 @@ func (a *ViduVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoG
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("vidu video error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("vidu video request failed with HTTP %d", resp.StatusCode)
 	}
 	var parsed map[string]any
 	_ = json.Unmarshal(data, &parsed)
@@ -84,7 +84,7 @@ func (a *ViduVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoG
 		}
 	}
 	if taskID == "" {
-		return nil, fmt.Errorf("vidu: no task id: %s", string(data))
+		return nil, fmt.Errorf("vidu response missing task id")
 	}
 	return &VideoGenResult{IsAsync: true, TaskID: taskID}, nil
 }
@@ -118,7 +118,7 @@ func (a *ViduVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID string
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("vidu poll error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("vidu poll failed with HTTP %d", resp.StatusCode)
 	}
 	var parsed map[string]any
 	_ = json.Unmarshal(data, &parsed)

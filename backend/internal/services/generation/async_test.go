@@ -144,6 +144,132 @@ func TestPollClaimedRunsQueuedTTSJob(t *testing.T) {
 	}
 }
 
+func TestRunTTSJobUsesConfigSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is required for mock tts")
+	}
+	database := generationDatabase(t)
+	now := response.Now()
+	currentConfig := models.AIServiceConfig{OrganizationID: 13, ServiceType: "audio", Provider: "mock", Name: "current-audio", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&currentConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	episode := models.Episode{OrganizationID: 13, DramaID: 5, EpisodeNumber: 1, AudioConfigID: &currentConfig.ID, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&episode).Error; err != nil {
+		t.Fatal(err)
+	}
+	storyboard := models.Storyboard{OrganizationID: 13, EpisodeID: episode.ID, StoryboardNumber: 1, Dialogue: "旁白：开始", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	missingSnapshotID := currentConfig.ID + 999
+	jobService := jobs.New(database)
+	job, err := jobService.CreateQueuedOrganization(13, "tts.generate", "storyboard_tts", storyboard.ID, "mock", &missingSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := jobService.ClaimWaiting("tts-snapshot", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	(&AsyncRunner{Jobs: jobService, TTS: &TTSService{Store: storage.NewLocal(t.TempDir())}}).runTTSJob(claimed[0])
+	current, err := jobService.Get(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != jobs.StatusFailed || !strings.Contains(current.LastError, fmt.Sprint(missingSnapshotID)) {
+		t.Fatalf("job ignored config snapshot: %+v", current)
+	}
+}
+
+func TestCanceledClaimedJobsCannotWriteMediaResults(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is required for mock tts")
+	}
+	database := generationDatabase(t)
+	now := response.Now()
+	config := models.AIServiceConfig{OrganizationID: 14, ServiceType: "audio", Provider: "mock", Name: "mock-audio", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&config).Error; err != nil {
+		t.Fatal(err)
+	}
+	imageConfig := models.AIServiceConfig{OrganizationID: 14, ServiceType: "image", Provider: "mock", Name: "mock-image", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	videoConfig := models.AIServiceConfig{OrganizationID: 14, ServiceType: "video", Provider: "mock", Name: "mock-video", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&imageConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&videoConfig).Error; err != nil {
+		t.Fatal(err)
+	}
+	episode := models.Episode{OrganizationID: 14, DramaID: 6, EpisodeNumber: 1, AudioConfigID: &config.ID, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&episode).Error; err != nil {
+		t.Fatal(err)
+	}
+	storyboard := models.Storyboard{OrganizationID: 14, EpisodeID: episode.ID, StoryboardNumber: 1, Dialogue: "旁白：开始", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	jobService := jobs.New(database)
+	ttsJob, err := jobService.CreateQueuedOrganization(14, "tts.generate", "storyboard_tts", storyboard.ID, "mock", &config.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := jobService.ClaimWaiting("tts-canceled", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	if err := jobService.Cancel(ttsJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	runner := &AsyncRunner{Jobs: jobService, TTS: &TTSService{Store: storage.NewLocal(t.TempDir())}}
+	runner.runTTSJob(claimed[0])
+	if err := database.First(&storyboard, storyboard.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storyboard.TTSAudioURL != "" {
+		t.Fatalf("canceled TTS wrote audio: %s", storyboard.TTSAudioURL)
+	}
+
+	image := models.ImageGeneration{OrganizationID: 14, Status: "processing", TaskID: "stale-image", ConfigID: &imageConfig.ID, CreatedAt: now, UpdatedAt: now}
+	video := models.VideoGeneration{OrganizationID: 14, Status: "processing", TaskID: "stale-video", ConfigID: &videoConfig.ID, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&image).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	imageJob, _ := jobService.CreateQueuedOrganization(14, "image.generate", "image_generation", image.ID, "mock", &imageConfig.ID)
+	videoJob, _ := jobService.CreateQueuedOrganization(14, "video.generate", "video_generation", video.ID, "mock", &videoConfig.ID)
+	claimedMedia, err := jobService.ClaimWaiting("media-canceled", 2)
+	if err != nil || len(claimedMedia) != 2 {
+		t.Fatalf("media claim=%v err=%v", claimedMedia, err)
+	}
+	if err := jobService.Cancel(imageJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobService.Cancel(videoJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	runner.Images = &ImageService{Jobs: jobService}
+	runner.Videos = &VideoService{Jobs: jobService}
+	for _, claimedJob := range claimedMedia {
+		switch claimedJob.TargetType {
+		case "image_generation":
+			runner.pollImageJob(claimedJob)
+		case "video_generation":
+			runner.pollVideoJob(claimedJob)
+		}
+	}
+	if err := database.First(&image, image.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.First(&video, video.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if image.Status != "canceled" || video.Status != "canceled" {
+		t.Fatalf("canceled poll mutated media: image=%s video=%s", image.Status, video.Status)
+	}
+}
+
 func TestPollClaimedFailsMissingAndUnsupportedTargets(t *testing.T) {
 	database := generationDatabase(t)
 	jobService := jobs.New(database)
@@ -256,7 +382,7 @@ func TestRequeueJobReturnsRunningJobToProviderWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	(&AsyncRunner{}).requeueJob(job.ID, errors.New("temporary provider error"))
+	(&AsyncRunner{}).requeueJob(*job, errors.New("temporary provider error"))
 	current, err := jobService.Get(job.ID)
 	if err != nil {
 		t.Fatal(err)

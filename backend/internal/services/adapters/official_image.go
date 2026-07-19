@@ -78,14 +78,13 @@ func (a *GeminiImageAdapter) Generate(ctx context.Context, cfg AIConfig, in Imag
 		base += "/v1beta"
 	}
 	endpoint := officialBase(base, "/models/"+url.PathEscape(model)+":generateContent")
-	endpoint += "?key=" + url.QueryEscape(cfg.APIKey)
 	body := map[string]any{"contents": []any{map[string]any{"parts": []any{map[string]any{"text": in.Prompt}}}}, "generationConfig": map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}}}
-	data, code, err := officialHTTP(ctx, http.MethodPost, endpoint, "", body, nil)
+	data, code, err := officialHTTP(ctx, http.MethodPost, endpoint, "", body, map[string]string{"X-Goog-Api-Key": cfg.APIKey})
 	if err != nil {
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("gemini image error %d: %s", code, data)
+		return nil, fmt.Errorf("gemini image request failed with HTTP %d", code)
 	}
 	var p struct {
 		Candidates []struct {
@@ -142,7 +141,7 @@ func (a *MiniMaxImageAdapter) Generate(ctx context.Context, cfg AIConfig, in Ima
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("minimax image error %d: %s", code, data)
+		return nil, fmt.Errorf("minimax image request failed with HTTP %d", code)
 	}
 	var p map[string]any
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -201,7 +200,7 @@ func (a *VolcengineImageAdapter) Generate(ctx context.Context, cfg AIConfig, in 
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("volcengine image error %d: %s", code, data)
+		return nil, fmt.Errorf("volcengine image request failed with HTTP %d", code)
 	}
 	var p map[string]any
 	if err = json.Unmarshal(data, &p); err != nil {
@@ -226,7 +225,7 @@ func (a *VolcengineImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskID 
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("volcengine poll error %d: %s", code, data)
+		return nil, fmt.Errorf("volcengine image poll failed with HTTP %d", code)
 	}
 	var p map[string]any
 	_ = json.Unmarshal(data, &p)
@@ -246,7 +245,11 @@ func (a *VolcengineImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskID 
 			imageURL = value(m, "url", "image_url")
 		}
 	}
-	return &ImagePollResult{Status: status, ImageURL: imageURL, Error: value(p, "error", "message")}, nil
+	result := &ImagePollResult{Status: status, ImageURL: imageURL}
+	if status == "failed" {
+		result.Error = "volcengine reported image generation failure"
+	}
+	return result, nil
 }
 
 // DashScopeImageAdapter implements Aliyun's async text-to-image contract.
@@ -267,7 +270,7 @@ func (a *DashScopeImageAdapter) Generate(ctx context.Context, cfg AIConfig, in I
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("dashscope image error %d: %s", code, data)
+		return nil, fmt.Errorf("dashscope image request failed with HTTP %d", code)
 	}
 	var p map[string]any
 	_ = json.Unmarshal(data, &p)
@@ -309,7 +312,7 @@ func (a *DashScopeImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskID s
 		return nil, err
 	}
 	if code >= 300 {
-		return nil, fmt.Errorf("dashscope poll error %d: %s", code, data)
+		return nil, fmt.Errorf("dashscope image poll failed with HTTP %d", code)
 	}
 	var p map[string]any
 	if err = json.Unmarshal(data, &p); err != nil {
@@ -330,7 +333,10 @@ func (a *DashScopeImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskID s
 			st = "processing"
 		}
 	}
-	r := &ImagePollResult{Status: st, Error: value(out, "message", "code")}
+	r := &ImagePollResult{Status: st}
+	if st == "failed" {
+		r.Error = "dashscope reported image generation failure"
+	}
 	if x, e := dashscopeResult(p); e == nil {
 		r.ImageURL = x.ImageURL
 	}

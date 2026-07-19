@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, ArrowRight, Plus, RefreshCw, Settings2, WandSparkles } from 'lucide-vue-next'
 import {
   agentAPI, characterAPI, composeAPI, dramaAPI, episodeAPI, gridAPI,
   mergeAPI, sceneAPI, settingsAPI, storyboardAPI
-  , assetAPI, jobsAPI, uploadAPI
+  , assetAPI, jobsAPI, productionAPI, uploadAPI
 } from '../api'
+import { authStore } from '../auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,13 +21,21 @@ const voices = ref<any[]>([])
 const configs = ref<any[]>([])
 const promptTemplates = ref<any[]>([])
 const gridHist = ref<any[]>([])
-const tab = ref<'script' | 'cast' | 'grid' | 'boards' | 'export'>('script')
+type WorkbenchStage = 'script' | 'cast' | 'grid' | 'boards' | 'export'
+const workbenchStages: WorkbenchStage[] = ['script', 'cast', 'grid', 'boards', 'export']
+const initialStage = workbenchStages.includes(String(route.query.stage) as WorkbenchStage)
+  ? String(route.query.stage) as WorkbenchStage
+  : 'script'
+const tab = ref<WorkbenchStage>(initialStage)
 const rawContent = ref('')
 const busy = ref('')
 const log = ref('')
 const toast = ref('')
 const loading = ref(true)
 const loadError = ref('')
+const assetRefreshWarning = ref('')
+const settingsLoadWarning = ref('')
+const refreshWarning = computed(() => [assetRefreshWarning.value, settingsLoadWarning.value].filter(Boolean).join('；'))
 const pollTimer = ref<number | null>(null)
 
 // grid state
@@ -34,11 +44,21 @@ const gridCols = ref(2)
 const gridMode = ref('first_frame')
 const gridPrompt = ref('')
 const gridCells = ref<string[]>([])
+type GridCellAssignment = { cell_index: number; storyboard_id: number; frame_type: string }
+type GridCellTarget = { storyboard_id: number; frame_type: string }
+const gridAssignments = ref<GridCellAssignment[]>([])
+const gridCellsVerified = ref(false)
+const gridCellTargets = ref<Record<number, GridCellTarget>>({})
+const gridCellErrors = ref<Record<number, string>>({})
+const assigningGridCell = ref<number | null>(null)
+let gridContextVersion = 0
 const gridImage = ref('')
 const gridHistoryId = ref<number | null>(null)
 const selectedShotIds = ref<number[]>([])
+const shotSelectionInitialized = ref(false)
 const assets = ref<any[]>([])
 const jobs = ref<any[]>([])
+const productions = ref<any[]>([])
 const assetTargetShot = ref<Record<number, number>>({})
 const assetTargetFrame = ref<Record<number, string>>({})
 
@@ -48,8 +68,17 @@ const characterForm = ref<any | null>(null)
 const sceneForm = ref<any | null>(null)
 const sceneTransfer = ref<any | null>(null)
 const storyboardForm = ref<any | null>(null)
+const selectedStoryboardId = ref<number | null>(null)
 const promptEditor = ref<any | null>(null)
 const episodeConfigForm = ref<any | null>(null)
+const showProductionModal = ref(false)
+const productionError = ref('')
+const characterError = ref('')
+const sceneError = ref('')
+const storyboardError = ref('')
+const characterNameInput = ref<HTMLInputElement | null>(null)
+const sceneLocationInput = ref<HTMLInputElement | null>(null)
+const storyboardTitleInput = ref<HTMLInputElement | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
@@ -57,6 +86,39 @@ const promptEditorTemplates = computed(() => promptEditor.value
   ? promptTemplates.value.filter((template) => template.is_active !== false && template.category === promptEditor.value.category)
   : [])
 const hasActiveJobs = computed(() => jobs.value.some((job) => !['succeeded', 'failed', 'canceled'].includes(job.status)))
+const currentProduction = computed(() => productions.value[0] || null)
+const selectedStoryboard = computed(() => storyboards.value.find((item) => item.id === selectedStoryboardId.value) || storyboards.value[0] || null)
+const hasActiveProduction = computed(() => currentProduction.value?.status === 'queued')
+const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
+const gridSelectionError = computed(() => {
+  if (gridMode.value !== 'first_last') return ''
+  const capacity = gridRows.value * gridCols.value
+  if (capacity % 2 !== 0) return '首尾参考需要偶数宫格'
+  const required = capacity / 2
+  return selectedShotIds.value.length === required
+    ? ''
+    : `首尾参考需选择 ${required} 个镜头，当前已选 ${selectedShotIds.value.length} 个`
+})
+const productionServices = computed(() => ['text', 'image', 'video', 'audio'].map((type) => {
+  const candidates = configs.value.filter((item) => item.service_type === type && item.is_active !== false)
+  const boundConfigID = type === 'text' ? 0 : Number(episode.value?.[`${type}_config_id`] || 0)
+  const config = type === 'text'
+    ? candidates.find((item) => item.is_default) || candidates[0]
+    : candidates.find((item) => Number(item.id) === boundConfigID)
+  return { type, label: ({ text: '文本', image: '图片', video: '视频', audio: '音频' } as Record<string, string>)[type], config }
+}))
+const missingProductionServices = computed(() => productionServices.value.filter((item) => !item.config))
+const productionReady = computed(() => missingProductionServices.value.length === 0)
+const productionUsesExternalService = computed(() => productionServices.value.some((item) => item.config && item.config.provider !== 'mock'))
+const stages = computed(() => [
+  { id: 'script', label: '剧本', detail: status.value?.has_script ? '已就绪' : '待完成', complete: Boolean(status.value?.has_script) },
+  { id: 'cast', label: '角色与场景', detail: `${status.value?.characters || 0} 角色 · ${status.value?.scenes || 0} 场景`, complete: Boolean(status.value?.characters && status.value?.scenes) },
+  { id: 'grid', label: '宫格帧', detail: `${status.value?.storyboards || 0} 个镜头`, complete: Boolean(status.value?.storyboards) },
+  { id: 'boards', label: '分镜与视频', detail: `${status.value?.with_video || 0} 个视频`, complete: Boolean(status.value?.with_video) },
+  { id: 'export', label: '合成导出', detail: episode.value?.video_url ? '成片完成' : `${status.value?.composed || 0} 个已合成`, complete: Boolean(episode.value?.video_url) },
+])
+const currentStageIndex = computed(() => Math.max(0, stages.value.findIndex((stage) => stage.id === tab.value)))
+const nextStage = computed(() => stages.value[currentStageIndex.value + 1] || null)
 
 const progressPct = computed(() => {
   if (!status.value) return 0
@@ -81,6 +143,119 @@ function listOf(value: unknown): any[] {
   return Array.isArray(value) ? value.filter(Boolean) : []
 }
 
+function parseJSONList<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value.filter(Boolean) as T[]
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed.filter(Boolean) as T[] : []
+  } catch {
+    return []
+  }
+}
+
+function defaultGridAssignments(history: any, cells: string[]): GridCellAssignment[] {
+  const storyboardIds = parseJSONList<number>(history.storyboard_ids).map(Number).filter((id) => id > 0)
+  if (history.mode === 'first_last') {
+    const half = Math.floor(storyboardIds.length / 2)
+    if (!half) return []
+    return cells.slice(0, storyboardIds.length).map((_, index) => ({
+      cell_index: index,
+      storyboard_id: storyboardIds[index % half],
+      frame_type: index >= Math.floor(cells.length / 2) ? 'last_frame' : 'first_frame',
+    }))
+  }
+  return cells.slice(0, storyboardIds.length).map((_, index) => ({
+    cell_index: index,
+    storyboard_id: storyboardIds[index],
+    frame_type: 'first_frame',
+  }))
+}
+
+function resetGridOutput() {
+  gridContextVersion += 1
+  gridHistoryId.value = null
+  gridImage.value = ''
+  gridCells.value = []
+  gridAssignments.value = []
+  gridCellsVerified.value = false
+  gridCellTargets.value = {}
+  gridCellErrors.value = {}
+  assigningGridCell.value = null
+}
+
+function selectGridMode(mode: string) {
+  if (busy.value) return
+  if (gridMode.value === mode) return
+  resetGridOutput()
+  gridMode.value = mode
+}
+
+function updateGridDimension(field: 'rows' | 'cols', raw: number) {
+  if (busy.value) return
+  const value = Math.max(1, Math.min(4, Number.isFinite(raw) ? Math.round(raw) : 2))
+  const target = field === 'rows' ? gridRows : gridCols
+  if (target.value === value) return
+  resetGridOutput()
+  target.value = value
+}
+
+function setGridAssignments(assignments: GridCellAssignment[]) {
+  const normalized = assignments
+    .filter((item) => Number.isInteger(Number(item.cell_index)) && Number(item.cell_index) >= 0 && Number(item.storyboard_id) > 0)
+    .map((item) => ({
+      cell_index: Number(item.cell_index),
+      storyboard_id: Number(item.storyboard_id),
+      frame_type: ['first_frame', 'last_frame', 'composed'].includes(item.frame_type) ? item.frame_type : 'first_frame',
+    }))
+  gridAssignments.value = normalized
+  gridCellTargets.value = Object.fromEntries(normalized.map((item) => [item.cell_index, {
+    storyboard_id: item.storyboard_id,
+    frame_type: item.frame_type,
+  }]))
+}
+
+function loadGridHistory(history: any) {
+  if (busy.value || assigningGridCell.value !== null) return
+  gridContextVersion += 1
+  const cells = parseJSONList<string>(history.cells_json).filter((url) => typeof url === 'string' && url.trim())
+  gridImage.value = history.image_url || ''
+  gridHistoryId.value = Number(history.id) || null
+  gridRows.value = Number(history.rows) || 2
+  gridCols.value = Number(history.cols) || 2
+  gridMode.value = history.mode || 'first_frame'
+  gridPrompt.value = history.prompt || gridPrompt.value
+  gridCells.value = cells
+  gridCellsVerified.value = history.cells_verified === true
+  gridCellErrors.value = {}
+  assigningGridCell.value = null
+  const stored = parseJSONList<GridCellAssignment>(history.assignments_json)
+  setGridAssignments(stored.length ? stored : defaultGridAssignments(history, cells))
+}
+
+function gridCellTarget(index: number): GridCellTarget {
+  return gridCellTargets.value[index] || { storyboard_id: 0, frame_type: 'first_frame' }
+}
+
+function updateGridCellTarget(index: number, patch: Partial<GridCellTarget>) {
+  gridCellTargets.value = {
+    ...gridCellTargets.value,
+    [index]: { ...gridCellTarget(index), ...patch },
+  }
+  gridCellErrors.value = { ...gridCellErrors.value, [index]: '' }
+}
+
+function gridFrameLabel(frameType: string) {
+  return ({ first_frame: '首帧', last_frame: '尾帧', composed: '分镜板' } as Record<string, string>)[frameType] || frameType
+}
+
+function gridAssignmentLabel(index: number) {
+  const assignment = gridAssignments.value.find((item) => item.cell_index === index)
+  const storyboard = storyboards.value.find((item) => item.id === assignment?.storyboard_id)
+  if (!assignment || !storyboard) return '尚未分配'
+  return `镜头 #${storyboard.storyboard_number} · ${gridFrameLabel(assignment.frame_type)}`
+}
+
 async function load() {
   const loadedDrama = await dramaAPI.get(dramaId.value)
   const loadedEpisode = (loadedDrama.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
@@ -92,15 +267,20 @@ async function load() {
   episode.value = loadedEpisode
   rawContent.value = loadedEpisode.content || ''
   await refreshAssets()
-  try {
-    voices.value = listOf(await settingsAPI.voices())
-  } catch { /* optional */ }
-  try {
-    configs.value = listOf(await settingsAPI.aiConfigs())
-  } catch { /* optional */ }
-  try {
-    promptTemplates.value = listOf(await settingsAPI.promptTemplates())
-  } catch { promptTemplates.value = [] }
+  const settingsResults = await Promise.allSettled([
+    settingsAPI.voices(),
+    settingsAPI.aiConfigs(),
+    settingsAPI.promptTemplates(),
+  ])
+  if (settingsResults[0].status === 'fulfilled') voices.value = listOf(settingsResults[0].value)
+  if (settingsResults[1].status === 'fulfilled') configs.value = listOf(settingsResults[1].value)
+  if (settingsResults[2].status === 'fulfilled') promptTemplates.value = listOf(settingsResults[2].value)
+	const settingsLabels = ['音色', 'AI 配置', '提示词']
+	settingsLoadWarning.value = settingsResults.flatMap((result, index) => {
+		if (result.status === 'fulfilled') return []
+		const detail = result.reason instanceof Error ? result.reason.message : '服务暂时不可用'
+		return [`${settingsLabels[index]}加载失败：${detail}`]
+	}).join('；')
 }
 
 async function loadWorkbench() {
@@ -122,33 +302,57 @@ async function refreshAssets() {
   const currentEpisode = episode.value
   if (!currentEpisode) return
   const episodeId = currentEpisode.id
-  characters.value = listOf(await episodeAPI.characters(episodeId))
-  scenes.value = listOf(await episodeAPI.scenes(episodeId))
-  storyboards.value = listOf(await episodeAPI.storyboards(episodeId))
-  status.value = await episodeAPI.pipelineStatus(episodeId)
-  try {
-    gridHist.value = listOf(await gridAPI.history({ episode_id: episodeId }))
-  } catch { gridHist.value = [] }
-  try {
-    assets.value = listOf(await assetAPI.list({ episode_id: episodeId }))
-  } catch { assets.value = [] }
-  try {
-    jobs.value = listOf(await jobsAPI.list({ limit: 50 }))
-  } catch { jobs.value = [] }
-  if (!selectedShotIds.value.length && storyboards.value.length) {
-    selectedShotIds.value = storyboards.value.map((s: any) => s.id)
+  const results = await Promise.allSettled([
+    episodeAPI.characters(episodeId),
+    episodeAPI.scenes(episodeId),
+    episodeAPI.storyboards(episodeId),
+    episodeAPI.pipelineStatus(episodeId),
+    gridAPI.history({ episode_id: episodeId }),
+    assetAPI.list({ episode_id: episodeId }),
+    jobsAPI.list({ limit: 50 }),
+    productionAPI.list(episodeId, 10),
+    dramaAPI.get(dramaId.value),
+  ])
+  const labels = ['角色', '场景', '分镜', '制作进度', '宫格历史', '素材', '任务', '自动制作', '剧集']
+  const failures: string[] = []
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      const detail = result.reason instanceof Error ? result.reason.message : '服务暂时不可用'
+      failures.push(`${labels[index]}加载失败：${detail}`)
+    }
+  })
+  if (results[0].status === 'fulfilled') characters.value = listOf(results[0].value)
+  if (results[1].status === 'fulfilled') scenes.value = listOf(results[1].value)
+  if (results[2].status === 'fulfilled') {
+    const nextStoryboards = listOf(results[2].value)
+    storyboards.value = nextStoryboards
+    const selectedExists = nextStoryboards.some((item) => item.id === selectedStoryboardId.value)
+    if (!selectedExists) selectedStoryboardId.value = nextStoryboards[0]?.id || null
+    if (!shotSelectionInitialized.value) {
+      selectedShotIds.value = nextStoryboards.map((item) => item.id)
+      shotSelectionInitialized.value = true
+    } else {
+      selectedShotIds.value = selectedShotIds.value.filter((id) => nextStoryboards.some((item) => item.id === id))
+    }
   }
-  // refresh episode video_url
-  const refreshedDrama = await dramaAPI.get(dramaId.value)
-  const refreshedEpisode = (refreshedDrama.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
-  drama.value = refreshedDrama
-  if (refreshedEpisode) episode.value = refreshedEpisode
+  if (results[3].status === 'fulfilled') status.value = results[3].value
+  if (results[4].status === 'fulfilled') gridHist.value = listOf(results[4].value)
+  if (results[5].status === 'fulfilled') assets.value = listOf(results[5].value)
+  if (results[6].status === 'fulfilled') jobs.value = listOf(results[6].value)
+  if (results[7].status === 'fulfilled') productions.value = listOf(results[7].value)
+  if (results[8].status === 'fulfilled') {
+    const refreshedDrama = results[8].value as any
+    const refreshedEpisode = (refreshedDrama.episodes || []).find((item: any) => item.episode_number === episodeNumber.value)
+    drama.value = refreshedDrama
+    if (refreshedEpisode) episode.value = refreshedEpisode
+  }
+  assetRefreshWarning.value = failures.join('；')
 }
 
 function startPoll() {
   stopPoll()
   pollTimer.value = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && hasActiveJobs.value) refreshAssets().catch(() => {})
+    if (document.visibilityState === 'visible' && (hasActiveJobs.value || hasActiveProduction.value)) refreshAssets().catch(() => {})
   }, 5000)
 }
 function stopPoll() {
@@ -190,6 +394,70 @@ async function saveEpisodeConfig() {
   } finally {
     busy.value = ''
   }
+}
+
+function openProduction() {
+  productionError.value = productionReady.value ? '' : `请先绑定${missingProductionServices.value.map((item) => item.label).join('、')}服务`
+  showProductionModal.value = true
+}
+
+async function startProduction() {
+  if (!productionReady.value) {
+    productionError.value = `请先绑定${missingProductionServices.value.map((item) => item.label).join('、')}服务`
+    return
+  }
+  busy.value = 'production-start'
+  productionError.value = ''
+  try {
+    const run = await productionAPI.create(dramaId.value, episode.value.id)
+    productions.value = [run, ...productions.value.filter((item) => item.id !== run.id)]
+    showProductionModal.value = false
+    show('自动制作已开始')
+    startPoll()
+  } catch (error) {
+    productionError.value = error instanceof Error ? error.message : '自动制作启动失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function cancelProduction() {
+  const run = currentProduction.value
+  if (!run) return
+  busy.value = 'production-cancel'
+  try {
+    const updated = await productionAPI.cancel(run.id)
+    productions.value = [updated, ...productions.value.filter((item) => item.id !== updated.id)]
+    show('自动制作已取消')
+  } catch (error: any) {
+    show(error.message || '取消失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function retryProduction() {
+  const run = currentProduction.value
+  if (!run) return
+  busy.value = 'production-retry'
+  try {
+    const updated = await productionAPI.retry(run.id)
+    productions.value = [updated, ...productions.value.filter((item) => item.id !== updated.id)]
+    show('自动制作已重新排队')
+    startPoll()
+  } catch (error: any) {
+    show(error.message || '重试失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+function productionStageLabel(stage?: string) {
+  return ({ script: '剧本生成', extract: '角色场景提取', storyboards: '分镜拆解', frames: '首帧生成', videos: '视频生成', tts: '对白配音', compose: '镜头合成', merge: '成片导出', completed: '制作完成' } as Record<string, string>)[stage || ''] || '准备中'
+}
+
+function productionStatusLabel(status?: string) {
+  return ({ queued: '制作中', succeeded: '已完成', failed: '失败', canceled: '已取消' } as Record<string, string>)[status || ''] || status || '等待中'
 }
 
 async function runAgent(type: string, message: string) {
@@ -272,15 +540,23 @@ async function uploadBoundImage(kind: 'character' | 'scene', item: any, event: E
   }
 }
 
-function editCharacter(character?: any) {
+async function editCharacter(character?: any) {
+  characterError.value = ''
   characterForm.value = character
     ? { id: character.id, name: character.name, role: character.role || '', appearance: character.appearance || '', description: character.description || '', personality: character.personality || '' }
     : { name: '', role: '', appearance: '', description: '', personality: '' }
+  await nextTick()
+  characterNameInput.value?.focus()
 }
 
 async function saveCharacter() {
   const form = characterForm.value
-  if (!form?.name?.trim()) return show('请输入角色名')
+  characterError.value = ''
+  if (!form?.name?.trim()) {
+    characterError.value = '请输入角色名'
+    characterNameInput.value?.focus()
+    return
+  }
   busy.value = 'character-save'
   try {
     const data = { ...form, drama_id: dramaId.value, episode_id: episode.value.id }
@@ -289,7 +565,7 @@ async function saveCharacter() {
     characterForm.value = null
     show(form.id ? '角色已更新' : '角色已添加')
     await refreshAssets()
-  } catch (e: any) { show(e.message) } finally { busy.value = '' }
+  } catch (e: any) { characterError.value = e.message || '角色保存失败' } finally { busy.value = '' }
 }
 
 async function removeCharacter(character: any) {
@@ -301,15 +577,23 @@ async function removeCharacter(character: any) {
   } catch (e: any) { show(e.message) }
 }
 
-function editScene(scene?: any) {
+async function editScene(scene?: any) {
+  sceneError.value = ''
   sceneForm.value = scene
     ? { id: scene.id, location: scene.location, time: scene.time || '', prompt: scene.prompt || '' }
     : { location: '', time: '', prompt: '' }
+  await nextTick()
+  sceneLocationInput.value?.focus()
 }
 
 async function saveScene() {
   const form = sceneForm.value
-  if (!form?.location?.trim()) return show('请输入场景地点')
+  sceneError.value = ''
+  if (!form?.location?.trim()) {
+    sceneError.value = '请输入场景地点'
+    sceneLocationInput.value?.focus()
+    return
+  }
   busy.value = 'scene-save'
   try {
     const data = { ...form, drama_id: dramaId.value, episode_id: episode.value.id }
@@ -318,7 +602,7 @@ async function saveScene() {
     sceneForm.value = null
     show(form.id ? '场景已更新' : '场景已添加')
     await refreshAssets()
-  } catch (e: any) { show(e.message) } finally { busy.value = '' }
+  } catch (e: any) { sceneError.value = e.message || '场景保存失败' } finally { busy.value = '' }
 }
 
 async function removeScene(scene: any) {
@@ -389,6 +673,7 @@ async function genFrame(sb: any, frameType = 'first_frame') {
 }
 
 async function batchFrames(frameType = 'first_frame') {
+  if (!selectedShotIds.value.length) return show('请至少选择一个镜头')
   busy.value = 'batch-frames'
   try {
     await storyboardAPI.batchFrames({
@@ -419,6 +704,7 @@ async function genVideo(sb: any) {
 }
 
 async function batchVideos() {
+  if (!selectedShotIds.value.length) return show('请至少选择一个镜头')
   busy.value = 'batch-videos'
   try {
     await storyboardAPI.batchVideos({
@@ -448,6 +734,7 @@ async function genTTS(sb: any) {
 }
 
 async function batchTTS() {
+  if (!selectedShotIds.value.length) return show('请至少选择一个镜头')
   busy.value = 'batch-tts'
   try {
     const res = await storyboardAPI.batchTTS({
@@ -561,6 +848,10 @@ async function buildGridPrompt() {
 }
 
 async function generateGrid() {
+  if (gridSelectionError.value) {
+    show(gridSelectionError.value)
+    return
+  }
   if (!gridPrompt.value.trim()) {
     await buildGridPrompt()
   }
@@ -570,9 +861,9 @@ async function generateGrid() {
     const shotCapacity = gridMode.value === 'first_last' ? Math.floor(gridCapacity / 2) : gridCapacity
     const selected = selectedShotIds.value.slice(0, shotCapacity)
     const storyboardIds = gridMode.value === 'first_last' ? [...selected, ...selected] : selected
-    if (gridMode.value === 'first_last' && (gridCapacity % 2 || !selected.length)) {
-      throw new Error('首尾参考需要偶数宫格，并至少选择一个镜头')
-    }
+    resetGridOutput()
+    busy.value = 'grid-gen'
+    const contextVersion = gridContextVersion
     const res = await gridAPI.generate({
       prompt: gridPrompt.value,
       drama_id: dramaId.value,
@@ -582,6 +873,7 @@ async function generateGrid() {
       cols: gridCols.value,
       storyboard_ids: storyboardIds,
     })
+    if (gridContextVersion !== contextVersion) return
     const img = res.image || res
     const hist = res.history
     gridImage.value = img.image_url || ''
@@ -590,7 +882,9 @@ async function generateGrid() {
       // poll image status
       for (let i = 0; i < 30; i++) {
         await new Promise((r) => setTimeout(r, 2000))
+        if (gridContextVersion !== contextVersion) return
         const st = await gridAPI.status(img.id)
+        if (gridContextVersion !== contextVersion) return
         if (st.image_url) {
           gridImage.value = st.image_url
           break
@@ -612,15 +906,18 @@ async function splitGrid() {
     show('请先生成宫格图')
     return
   }
+  if (gridSelectionError.value) {
+    show(gridSelectionError.value)
+    return
+  }
   busy.value = 'grid-split'
   try {
+    const contextVersion = gridContextVersion
+    const historyID = gridHistoryId.value
     const gridCapacity = gridRows.value * gridCols.value
     const shotCapacity = gridMode.value === 'first_last' ? Math.floor(gridCapacity / 2) : gridCapacity
     const selected = selectedShotIds.value.slice(0, shotCapacity)
     const storyboardIds = gridMode.value === 'first_last' ? [...selected, ...selected] : selected
-    if (gridMode.value === 'first_last' && (gridCapacity % 2 || !selected.length)) {
-      throw new Error('首尾参考需要偶数宫格，并至少选择一个镜头')
-    }
     const res = await gridAPI.split({
       image_url: gridImage.value,
       rows: gridRows.value,
@@ -629,7 +926,11 @@ async function splitGrid() {
       frame_type: gridMode.value === 'first_last' ? 'first_last' : 'first_frame',
       history_id: gridHistoryId.value || undefined,
     })
+    if (gridContextVersion !== contextVersion || gridHistoryId.value !== historyID) return
     gridCells.value = res.cells || []
+    gridCellsVerified.value = res.cells_verified === true
+    gridCellErrors.value = {}
+    setGridAssignments(listOf(res.assignments) as GridCellAssignment[])
     show(`已切分 ${res.count} 格并写回分镜`)
     await refreshAssets()
   } catch (e: any) {
@@ -639,7 +940,42 @@ async function splitGrid() {
   }
 }
 
-function addStoryboard() {
+async function assignGridCell(index: number) {
+  const target = gridCellTarget(index)
+  if (!gridHistoryId.value) {
+    show('请先载入或切分已保存的宫格')
+    return
+  }
+  if (!target.storyboard_id) {
+    show('请选择目标镜头')
+    return
+  }
+  const historyID = gridHistoryId.value
+  const contextVersion = gridContextVersion
+  assigningGridCell.value = index
+  gridCellErrors.value = { ...gridCellErrors.value, [index]: '' }
+  try {
+    const result = await gridAPI.assignCell(historyID, {
+      cell_index: index,
+      storyboard_id: target.storyboard_id,
+      frame_type: target.frame_type,
+    })
+    if (gridContextVersion !== contextVersion || gridHistoryId.value !== historyID) return
+    setGridAssignments(listOf(result.assignments).length ? result.assignments : [result])
+    const storyboard = storyboards.value.find((item) => item.id === target.storyboard_id)
+    show(`切片 ${index + 1} 已写入镜头 #${storyboard?.storyboard_number || target.storyboard_id} ${gridFrameLabel(target.frame_type)}`)
+    await refreshAssets()
+  } catch (error) {
+    if (gridContextVersion !== contextVersion || gridHistoryId.value !== historyID) return
+    const message = error instanceof Error ? error.message : '切片分配失败'
+    gridCellErrors.value = { ...gridCellErrors.value, [index]: message }
+  } finally {
+    if (gridContextVersion === contextVersion && gridHistoryId.value === historyID) assigningGridCell.value = null
+  }
+}
+
+async function addStoryboard() {
+  storyboardError.value = ''
   storyboardForm.value = {
     title: '',
     duration: 12,
@@ -650,11 +986,18 @@ function addStoryboard() {
     video_prompt: '',
     reference_images: '',
   }
+  await nextTick()
+  storyboardTitleInput.value?.focus()
 }
 
 async function saveStoryboard() {
   const form = storyboardForm.value
-  if (!form?.title?.trim()) return show('请输入分镜标题')
+  storyboardError.value = ''
+  if (!form?.title?.trim()) {
+    storyboardError.value = '请输入分镜标题'
+    storyboardTitleInput.value?.focus()
+    return
+  }
   busy.value = 'storyboard-save'
   try {
     await storyboardAPI.create({
@@ -667,7 +1010,7 @@ async function saveStoryboard() {
     show('分镜已添加')
     await refreshAssets()
   } catch (error: any) {
-    show(error.message)
+    storyboardError.value = error.message || '分镜保存失败'
   } finally {
     busy.value = ''
   }
@@ -679,6 +1022,7 @@ async function removeStoryboard(storyboard: any) {
   try {
     await storyboardAPI.del(storyboard.id)
     selectedShotIds.value = selectedShotIds.value.filter((id) => id !== storyboard.id)
+    if (selectedStoryboardId.value === storyboard.id) selectedStoryboardId.value = null
     show('分镜已删除')
     await refreshAssets()
   } catch (error: any) {
@@ -733,6 +1077,14 @@ function promptRuntimeVariables(editor: any) {
   }
 }
 
+function selectedPromptVariables(editor: any) {
+  const template = promptTemplates.value.find((item) => Number(item.id) === Number(editor.template_id))
+  let names: string[] = []
+  try { names = JSON.parse(template?.variables_json || '[]') } catch { names = [] }
+  const runtime = promptRuntimeVariables(editor)
+  return Object.fromEntries(names.map((name) => [name, runtime[name as keyof typeof runtime] || '']))
+}
+
 async function applySelectedPromptTemplate() {
   const editor = promptEditor.value
   if (!editor) return
@@ -744,7 +1096,7 @@ async function applySelectedPromptTemplate() {
   editor.error = ''
   busy.value = 'prompt-preview'
   try {
-    const result = await settingsAPI.previewPromptTemplate(editor.template_id, promptRuntimeVariables(editor))
+    const result = await settingsAPI.previewPromptTemplate(editor.template_id, selectedPromptVariables(editor))
     editor.value = result.rendered
   } catch (error) {
     editor.error = error instanceof Error ? error.message : '模板应用失败'
@@ -766,9 +1118,9 @@ async function savePromptEditor() {
 }
 
 function toggleShot(id: number) {
-  const i = selectedShotIds.value.indexOf(id)
-  if (i >= 0) selectedShotIds.value.splice(i, 1)
-  else selectedShotIds.value.push(id)
+  selectedShotIds.value = selectedShotIds.value.includes(id)
+    ? selectedShotIds.value.filter((item) => item !== id)
+    : [...selectedShotIds.value, id]
 }
 
 function shotStatusDot(sb: any) {
@@ -777,6 +1129,22 @@ function shotStatusDot(sb: any) {
   if (sb.status === 'failed') return 'fail'
   return ''
 }
+
+function storyboardStatusLabel(value?: string) {
+  return ({ pending: '待制作', processing: '制作中', generated: '已生成', composed: '已合成', completed: '已完成', failed: '失败' } as Record<string, string>)[value || ''] || value || '待制作'
+}
+
+function selectStage(stage: string) {
+  if (!workbenchStages.includes(stage as WorkbenchStage)) return
+  tab.value = stage as WorkbenchStage
+  router.replace({ query: { ...route.query, stage } })
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+watch(() => route.query.stage, (stage) => {
+  const value = String(stage || '') as WorkbenchStage
+  if (workbenchStages.includes(value) && value !== tab.value) tab.value = value
+})
 
 onMounted(loadWorkbench)
 onUnmounted(stopPoll)
@@ -790,15 +1158,39 @@ onUnmounted(stopPoll)
         <p class="page-desc">制作工作台 · 剧本 → 角色场景 → 宫格帧 → 分镜视频 → 合成导出</p>
       </div>
       <div class="row">
-        <button class="btn" @click="openEpisodeConfig">生成配置</button>
-        <button class="btn" @click="loadWorkbench">刷新</button>
-        <button class="btn" @click="router.push(`/drama/${dramaId}`)">返回项目</button>
+        <button v-if="canEdit" class="btn btn-primary" :disabled="hasActiveProduction || !!busy" @click="openProduction"><WandSparkles :size="16" aria-hidden="true" />自动制作</button>
+        <button v-if="canEdit" class="btn" @click="openEpisodeConfig"><Settings2 :size="16" aria-hidden="true" />生成配置</button>
+        <button class="btn" @click="loadWorkbench"><RefreshCw :size="16" aria-hidden="true" />刷新</button>
+        <button class="btn" @click="router.push(`/drama/${dramaId}`)"><ArrowLeft :size="16" aria-hidden="true" />返回项目</button>
       </div>
     </div>
 
-    <div class="panel" style="margin-bottom:16px">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <div class="row" style="gap:8px">
+    <div v-if="refreshWarning" class="inline-alert" role="alert">
+      <div><strong>部分内容暂未更新</strong><span>{{ refreshWarning }}</span></div>
+      <button class="btn" type="button" @click="loadWorkbench">重试加载</button>
+    </div>
+
+    <section v-if="currentProduction" class="automation-status" aria-label="自动制作状态">
+      <div class="automation-main">
+        <div class="automation-heading">
+          <span class="automation-mark" :class="currentProduction.status"></span>
+          <div><strong>{{ productionStageLabel(currentProduction.stage) }}</strong><span>{{ productionStatusLabel(currentProduction.status) }} · 第 {{ currentProduction.attempt }} 次</span></div>
+        </div>
+        <div class="automation-progress"><div class="progress-bar"><i :style="{ width: `${currentProduction.progress || 0}%` }"></i></div><strong>{{ currentProduction.progress || 0 }}%</strong></div>
+      </div>
+      <div class="automation-footer">
+        <span :class="{ 'job-error': currentProduction.last_error }">{{ currentProduction.last_error || currentProduction.status_message || '等待任务调度' }}</span>
+        <div class="mini-actions">
+          <button v-if="hasActiveProduction && canEdit" class="btn btn-danger" :disabled="!!busy" @click="cancelProduction">取消自动制作</button>
+          <button v-if="['failed','canceled'].includes(currentProduction.status) && canEdit" class="btn" :disabled="!!busy || currentProduction.attempt >= currentProduction.max_attempts" @click="retryProduction">重试自动制作</button>
+          <button class="btn" @click="router.push('/jobs')">查看任务</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="production-overview" aria-label="制作进度">
+      <div class="production-summary">
+        <div class="production-stats">
           <span class="stat-chip">剧本 <strong>{{ status?.has_script ? '✓' : '—' }}</strong></span>
           <span class="stat-chip">角色 <strong>{{ status?.characters || 0 }}</strong></span>
           <span class="stat-chip">场景 <strong>{{ status?.scenes || 0 }}</strong></span>
@@ -807,33 +1199,45 @@ onUnmounted(stopPoll)
           <span class="stat-chip">配音 <strong>{{ status?.with_tts || 0 }}</strong></span>
           <span class="stat-chip">合成 <strong>{{ status?.composed || 0 }}</strong></span>
         </div>
-        <div style="min-width:140px">
-          <div class="muted" style="font-size:12px;margin-bottom:4px">流水线 {{ progressPct }}%</div>
+        <div class="production-progress">
+          <div class="production-progress-label"><span>制作进度</span><strong>{{ progressPct }}%</strong></div>
           <div class="progress-bar"><i :style="{ width: progressPct + '%' }"></i></div>
         </div>
       </div>
-    </div>
+
+      <div class="stage-tabs" role="tablist" aria-label="制作阶段">
+        <button
+          v-for="(stage, index) in stages"
+          :key="stage.id"
+          class="stage-tab"
+          :class="{ active: tab === stage.id, complete: stage.complete }"
+          role="tab"
+          :aria-label="stage.label"
+          :aria-selected="tab === stage.id"
+          @click="selectStage(stage.id)"
+        >
+          <span class="stage-index" aria-hidden="true">{{ stage.complete ? '✓' : index + 1 }}</span>
+          <span class="stage-copy"><strong>{{ stage.label }}</strong><small>{{ stage.detail }}</small></span>
+        </button>
+      </div>
+    </section>
 
     <div class="wb-shell">
-      <aside class="wb-side">
-        <button class="side-item" :class="{ active: tab==='script' }" @click="tab='script'">1. 剧本</button>
-        <button class="side-item" :class="{ active: tab==='cast' }" @click="tab='cast'">2. 角色 / 场景</button>
-        <button class="side-item" :class="{ active: tab==='grid' }" @click="tab='grid'">3. 宫格帧</button>
-        <button class="side-item" :class="{ active: tab==='boards' }" @click="tab='boards'">4. 分镜 / 视频</button>
-        <button class="side-item" :class="{ active: tab==='export' }" @click="tab='export'">5. 合成导出</button>
-      </aside>
-
       <div class="wb-main">
+        <div class="stage-commandbar">
+          <div><span>阶段 {{ currentStageIndex + 1 }} / {{ stages.length }}</span><strong>{{ stages[currentStageIndex].label }}</strong></div>
+          <button v-if="nextStage" class="btn stage-next" @click="selectStage(nextStage.id)">下一步：{{ nextStage.label }}<ArrowRight :size="15" aria-hidden="true" /></button>
+        </div>
         <!-- SCRIPT -->
         <div v-if="tab==='script'" class="panel">
-          <div class="toolbar">
+          <div v-if="canEdit" class="toolbar">
             <button class="btn btn-primary" :disabled="!!busy" @click="saveContent">保存原文</button>
             <button class="btn" :disabled="!!busy" @click="runAgent('script_rewriter', '请将当前集内容改写为格式化剧本并保存')">AI 改写剧本</button>
           </div>
           <div class="split-2">
             <div class="field">
               <label>原始内容 / 大纲</label>
-              <textarea v-model="rawContent" rows="18" placeholder="粘贴小说、大纲或分场内容…" />
+              <textarea v-model="rawContent" rows="18" :readonly="!canEdit" placeholder="粘贴小说、大纲或分场内容…" />
             </div>
             <div class="field">
               <label>格式化剧本</label>
@@ -845,24 +1249,13 @@ onUnmounted(stopPoll)
         <!-- CAST -->
         <div v-else-if="tab==='cast'" class="row">
           <div class="col panel">
-            <div class="toolbar">
+            <div v-if="canEdit" class="toolbar">
               <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('extractor', '请提取本集角色与场景并去重保存')">AI 提取</button>
               <button class="btn" :disabled="!!busy" @click="runAgent('voice_assigner', '请为所有角色分配音色')">AI 分配音色</button>
               <button class="btn" :disabled="!!busy || !characters.length" @click="batchCharImages">批量角色图</button>
               <button class="btn" :disabled="!!busy" @click="editCharacter()">添加角色</button>
             </div>
             <h3>角色</h3>
-            <div v-if="characterForm" class="field-grid" style="margin-bottom:12px">
-              <div class="field"><label>角色名</label><input v-model="characterForm.name" /></div>
-              <div class="field"><label>定位</label><input v-model="characterForm.role" /></div>
-              <div class="field"><label>外貌</label><textarea v-model="characterForm.appearance" rows="2" /></div>
-              <div class="field"><label>性格</label><textarea v-model="characterForm.personality" rows="2" /></div>
-              <div class="field" style="grid-column:1/-1"><label>说明</label><textarea v-model="characterForm.description" rows="2" /></div>
-              <div class="toolbar" style="grid-column:1/-1">
-                <button class="btn btn-primary" :disabled="!!busy" @click="saveCharacter">保存角色</button>
-                <button class="btn" @click="characterForm=null">取消</button>
-              </div>
-            </div>
             <div class="list">
               <div v-for="c in characters" :key="c.id" class="list-item">
                 <div class="row" style="justify-content:space-between;align-items:flex-start">
@@ -886,8 +1279,8 @@ onUnmounted(stopPoll)
                     </div>
                   </div>
                   <div class="row" style="flex-direction:column;align-items:flex-end;gap:8px">
-                    <img v-if="c.image_url" class="thumb" :src="c.image_url" />
-                    <div class="mini-actions">
+                    <img v-if="c.image_url" class="thumb" :src="c.image_url" :alt="`${c.name} 角色形象`" />
+                    <div v-if="canEdit" class="mini-actions">
                       <button class="btn" :disabled="!!busy" @click="genCharImage(c)">形象</button>
                       <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('character', c, $event)" /></label>
                       <button class="btn" :disabled="!!busy" @click="assignCharId = assignCharId===c.id ? null : c.id">音色</button>
@@ -904,16 +1297,7 @@ onUnmounted(stopPoll)
           <div class="col panel">
             <div class="toolbar" style="justify-content:space-between">
               <h3 style="margin:0">场景</h3>
-              <button class="btn" :disabled="!!busy" @click="editScene()">添加场景</button>
-            </div>
-            <div v-if="sceneForm" class="field-grid" style="margin-bottom:12px">
-              <div class="field"><label>地点</label><input v-model="sceneForm.location" /></div>
-              <div class="field"><label>时间</label><input v-model="sceneForm.time" /></div>
-              <div class="field" style="grid-column:1/-1"><label>画面提示词</label><textarea v-model="sceneForm.prompt" rows="3" /></div>
-              <div class="toolbar" style="grid-column:1/-1">
-                <button class="btn btn-primary" :disabled="!!busy" @click="saveScene">保存场景</button>
-                <button class="btn" @click="sceneForm=null">取消</button>
-              </div>
+              <button v-if="canEdit" class="btn" :disabled="!!busy" @click="editScene()">添加场景</button>
             </div>
             <div class="list">
               <div v-for="sc in scenes" :key="sc.id" class="list-item">
@@ -923,13 +1307,13 @@ onUnmounted(stopPoll)
                     <p class="muted" style="margin:0;font-size:12px">{{ sc.prompt }}</p>
                   </div>
                   <div class="row">
-                    <img v-if="sc.image_url" class="thumb" :src="sc.image_url" />
-                    <button class="btn" :disabled="!!busy" @click="genSceneImage(sc)">生成场景</button>
-                    <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('scene', sc, $event)" /></label>
-                    <button class="btn" :disabled="!!busy" @click="editScene(sc)">编辑</button>
-                    <button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
-                    <button class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
-                    <button class="btn btn-danger" :disabled="!!busy" @click="removeScene(sc)">删除</button>
+                    <img v-if="sc.image_url" class="thumb" :src="sc.image_url" :alt="`${sc.location} 场景图`" />
+                    <button v-if="canEdit" class="btn" :disabled="!!busy" @click="genSceneImage(sc)">生成场景</button>
+                    <label v-if="canEdit" class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('scene', sc, $event)" /></label>
+                    <button v-if="canEdit" class="btn" :disabled="!!busy" @click="editScene(sc)">编辑</button>
+                    <button v-if="canEdit" class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
+                    <button v-if="canEdit" class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
+                    <button v-if="canEdit" class="btn btn-danger" :disabled="!!busy" @click="removeScene(sc)">删除</button>
                   </div>
                 </div>
               </div>
@@ -950,44 +1334,55 @@ onUnmounted(stopPoll)
 
         <!-- GRID -->
         <div v-else-if="tab==='grid'" class="panel">
-          <div class="toolbar">
+          <div v-if="canEdit" class="toolbar">
             <div class="seg">
-              <button :class="{ active: gridMode==='first_frame' }" @click="gridMode='first_frame'">首帧宫格</button>
-              <button :class="{ active: gridMode==='first_last' }" @click="gridMode='first_last'">首尾参考</button>
-              <button :class="{ active: gridMode==='multi_ref' }" @click="gridMode='multi_ref'">多参一致</button>
+              <button :disabled="!!busy" :class="{ active: gridMode==='first_frame' }" @click="selectGridMode('first_frame')">首帧宫格</button>
+              <button :disabled="!!busy" :class="{ active: gridMode==='first_last' }" @click="selectGridMode('first_last')">首尾参考</button>
+              <button :disabled="!!busy" :class="{ active: gridMode==='multi_ref' }" @click="selectGridMode('multi_ref')">多参一致</button>
             </div>
             <label class="muted" style="font-size:12px">行
-              <input type="number" min="1" max="4" v-model.number="gridRows" style="width:52px;margin-left:4px" />
+              <input type="number" min="1" max="4" :value="gridRows" :disabled="!!busy" style="width:52px;margin-left:4px" @change="updateGridDimension('rows', Number(($event.target as HTMLInputElement).value))" />
             </label>
             <label class="muted" style="font-size:12px">列
-              <input type="number" min="1" max="4" v-model.number="gridCols" style="width:52px;margin-left:4px" />
+              <input type="number" min="1" max="4" :value="gridCols" :disabled="!!busy" style="width:52px;margin-left:4px" @change="updateGridDimension('cols', Number(($event.target as HTMLInputElement).value))" />
             </label>
             <button class="btn" :disabled="!!busy" @click="buildGridPrompt">生成提示词</button>
             <button class="btn" :disabled="!!busy" @click="openGridPromptEditor">套用提示词模板</button>
-            <button class="btn btn-primary" :disabled="!!busy" @click="generateGrid">生成宫格图</button>
-            <button class="btn" :disabled="!!busy || !gridImage" @click="splitGrid">切分写回分镜</button>
+            <button class="btn btn-primary" :disabled="!!busy || !!gridSelectionError" :title="gridSelectionError || undefined" @click="generateGrid">生成宫格图</button>
+            <button class="btn" :disabled="!!busy || !gridImage || !!gridCells.length" @click="splitGrid">{{ gridCells.length ? '已切分，可在下方重新分配' : '切分写回分镜' }}</button>
             <button class="btn" :disabled="!!busy" @click="runAgent('grid_prompt_generator', '请为本集镜头生成宫格首帧提示词')">Agent 提示词</button>
+            <span v-if="gridSelectionError" class="muted grid-selection-hint" role="status">{{ gridSelectionError }}</span>
           </div>
           <div class="field">
             <label for="grid-prompt">宫格提示词</label>
-            <textarea id="grid-prompt" v-model="gridPrompt" rows="8" placeholder="可先点击「生成提示词」" />
+            <textarea id="grid-prompt" v-model="gridPrompt" rows="8" :readonly="!canEdit" placeholder="可先点击「生成提示词」" />
           </div>
           <div class="split-2">
             <div>
               <div class="muted" style="margin-bottom:8px;font-size:12px">预览</div>
-              <img v-if="gridImage" class="grid-preview" :src="gridImage" />
+              <img v-if="gridImage" class="grid-preview" :src="gridImage" alt="宫格图预览" />
               <div v-else class="empty">尚未生成宫格图</div>
               <div v-if="gridCells.length" class="cell-grid" style="margin-top:12px">
-                <img v-for="(u,i) in gridCells" :key="i" :src="u" />
+                <div v-if="!gridCellsVerified" class="inline-alert grid-cell-legacy" role="status"><div><strong>历史切片仅供查看</strong><span>这份历史生成于安全归属记录之前。请生成新宫格并重新切分后再分配。</span></div></div>
+                <div v-for="(u,i) in gridCells" :key="`${gridHistoryId || 'draft'}-${i}`" class="grid-cell-card" role="group" :aria-label="`宫格切片 ${i + 1}`">
+                  <div class="grid-cell-visual"><span>#{{ i + 1 }}</span><img :src="u" :alt="`宫格切片 ${i + 1}`" /></div>
+                  <p class="grid-cell-assignment">{{ gridAssignmentLabel(i) }}</p>
+                  <p v-if="gridCellErrors[i]" class="grid-cell-error" role="alert">{{ gridCellErrors[i] }}</p>
+                  <div v-if="canEdit" class="grid-cell-controls">
+                    <label><span>目标镜头</span><select :value="gridCellTarget(i).storyboard_id" aria-label="目标镜头" :disabled="!gridCellsVerified || assigningGridCell !== null" @change="updateGridCellTarget(i, { storyboard_id: Number(($event.target as HTMLSelectElement).value) })"><option :value="0">请选择</option><option v-for="sb in storyboards" :key="sb.id" :value="sb.id">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</option></select></label>
+                    <label><span>写入位置</span><select :value="gridCellTarget(i).frame_type" aria-label="写入位置" :disabled="!gridCellsVerified || assigningGridCell !== null" @change="updateGridCellTarget(i, { frame_type: ($event.target as HTMLSelectElement).value })"><option value="first_frame">首帧</option><option value="last_frame">尾帧</option><option value="composed">分镜板</option></select></label>
+                    <button class="btn" type="button" :disabled="assigningGridCell !== null || !gridHistoryId || !gridCellsVerified || !gridCellTarget(i).storyboard_id" @click="assignGridCell(i)">{{ assigningGridCell === i ? '分配中…' : '重新分配' }}</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div>
               <div class="muted" style="margin-bottom:8px;font-size:12px">写入分镜（勾选）</div>
               <div class="list">
                 <label v-for="sb in storyboards" :key="sb.id" class="list-item" style="display:flex;gap:10px;align-items:center;cursor:pointer">
-                  <input type="checkbox" :checked="selectedShotIds.includes(sb.id)" @change="toggleShot(sb.id)" />
+                  <input v-if="canEdit" type="checkbox" :checked="selectedShotIds.includes(sb.id)" @change="toggleShot(sb.id)" />
                   <span style="flex:1">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</span>
-                  <img v-if="sb.first_frame_image" class="thumb" style="width:48px;height:48px" :src="sb.first_frame_image" />
+                  <img v-if="sb.first_frame_image" class="thumb" style="width:48px;height:48px" :src="sb.first_frame_image" :alt="`镜头 ${sb.storyboard_number} 首帧`" />
                 </label>
                 <div v-if="!storyboards.length" class="empty">请先拆解分镜</div>
               </div>
@@ -996,7 +1391,7 @@ onUnmounted(stopPoll)
                 <div class="list">
                   <div v-for="h in gridHist" :key="h.id" class="list-item" style="font-size:12px">
                     #{{ h.id }} · {{ h.mode }} · {{ h.rows }}x{{ h.cols }} · {{ h.status }}
-                    <button v-if="h.image_url" class="btn" style="margin-top:6px" @click="gridImage=h.image_url; gridHistoryId=h.id">载入</button>
+                    <button v-if="h.image_url" class="btn" style="margin-top:6px" :disabled="!!busy || assigningGridCell !== null" :aria-label="`载入宫格 #${h.id}`" @click="loadGridHistory(h)">载入</button>
                   </div>
                   <div v-if="!gridHist.length" class="muted">暂无历史</div>
                 </div>
@@ -1007,104 +1402,78 @@ onUnmounted(stopPoll)
 
         <!-- BOARDS -->
         <div v-else-if="tab==='boards'" class="panel">
-          <div class="toolbar">
+          <div v-if="canEdit" class="toolbar">
             <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('storyboard_breaker', '请根据当前剧本完整拆解分镜并保存')">AI 拆解分镜</button>
-            <button class="btn" :disabled="!!busy" @click="addStoryboard">添加分镜</button>
-            <button class="btn" :disabled="!!busy" @click="batchFrames('first_frame')">批量首帧</button>
-            <button class="btn" :disabled="!!busy" @click="batchFrames('last_frame')">批量尾帧</button>
-            <button class="btn" :disabled="!!busy" @click="batchFrames('composed')">批量分镜板</button>
-            <button class="btn" :disabled="!!busy" @click="batchVideos">批量视频</button>
-            <button class="btn" :disabled="!!busy" @click="batchTTS">批量配音</button>
+            <button class="btn" :disabled="!!busy" @click="addStoryboard"><Plus :size="15" aria-hidden="true" />添加分镜</button>
+            <button class="btn" :disabled="!!busy || !selectedShotIds.length" @click="batchFrames('first_frame')">批量首帧</button>
+            <button class="btn" :disabled="!!busy || !selectedShotIds.length" @click="batchFrames('last_frame')">批量尾帧</button>
+            <button class="btn" :disabled="!!busy || !selectedShotIds.length" @click="batchFrames('composed')">批量分镜板</button>
+            <button class="btn" :disabled="!!busy || !selectedShotIds.length" @click="batchVideos">批量视频</button>
+            <button class="btn" :disabled="!!busy || !selectedShotIds.length" @click="batchTTS">批量配音</button>
           </div>
-          <div v-if="storyboardForm" class="storyboard-form field-grid">
-            <div class="field">
-              <label for="storyboard-title">分镜标题</label>
-              <input id="storyboard-title" v-model="storyboardForm.title" maxlength="200" />
-            </div>
-            <div class="field">
-              <label for="storyboard-duration">时长（秒）</label>
-              <input id="storyboard-duration" v-model.number="storyboardForm.duration" type="number" min="1" max="3600" />
-            </div>
-            <div class="field">
-              <label for="storyboard-shot-type">景别</label>
-              <input id="storyboard-shot-type" v-model="storyboardForm.shot_type" maxlength="200" />
-            </div>
-            <div class="field">
-              <label for="storyboard-dialogue">对白</label>
-              <textarea id="storyboard-dialogue" v-model="storyboardForm.dialogue" rows="2" maxlength="10000" />
-            </div>
-            <div class="field" style="grid-column:1/-1">
-              <label for="storyboard-description">镜头描述</label>
-              <textarea id="storyboard-description" v-model="storyboardForm.description" rows="3" maxlength="10000" />
-            </div>
-            <div class="field">
-              <label for="storyboard-image-prompt">图片提示词</label>
-              <textarea id="storyboard-image-prompt" v-model="storyboardForm.image_prompt" rows="3" maxlength="10000" />
-            </div>
-            <div class="field">
-              <label for="storyboard-video-prompt">视频提示词</label>
-              <textarea id="storyboard-video-prompt" v-model="storyboardForm.video_prompt" rows="3" maxlength="10000" />
-            </div>
-            <div class="field" style="grid-column:1/-1">
-              <label for="storyboard-reference-images">多参考图 URL（每行一个，最多 8 张）</label>
-              <textarea id="storyboard-reference-images" v-model="storyboardForm.reference_images" rows="3" maxlength="10000" />
-            </div>
-            <div class="toolbar" style="grid-column:1/-1">
-              <button class="btn btn-primary" :disabled="!!busy" @click="saveStoryboard">保存分镜</button>
-              <button class="btn" :disabled="!!busy" @click="storyboardForm=null">取消</button>
-            </div>
-          </div>
-          <div class="shot-grid">
-            <div v-for="sb in storyboards" :key="sb.id" class="shot-card">
-              <div class="row" style="justify-content:space-between;align-items:center">
-                <h4>
-                  <span class="status-dot" :class="shotStatusDot(sb)"></span>
-                  #{{ sb.storyboard_number }} {{ sb.title || '镜头' }}
-                </h4>
-                <span class="muted" style="font-size:11px">{{ sb.duration }}s · {{ sb.status }}</span>
-              </div>
-              <p class="muted" style="margin:0;font-size:12px">{{ sb.shot_type }} / {{ sb.angle }} / {{ sb.movement }}</p>
-              <p style="margin:8px 0 0;font-size:12px;color:var(--text)">{{ sb.description || sb.action }}</p>
-              <p class="muted" style="margin:6px 0 0;font-size:12px">对白：{{ sb.dialogue || '（无）' }}</p>
-              <div class="frame-row">
-                <div class="frame-box">
-                  <span class="frame-label">首帧</span>
-                  <img v-if="sb.first_frame_image" :src="sb.first_frame_image" />
-                  <span v-else class="muted" style="font-size:11px">空</span>
-                </div>
-                <div class="frame-box">
-                  <span class="frame-label">尾帧</span>
-                  <img v-if="sb.last_frame_image" :src="sb.last_frame_image" />
-                  <span v-else class="muted" style="font-size:11px">空</span>
-                </div>
-                <div class="frame-box">
-                  <span class="frame-label">分镜板</span>
-                  <img v-if="sb.composed_image" :src="sb.composed_image" />
-                  <span v-else class="muted" style="font-size:11px">空</span>
+          <div v-if="storyboards.length" class="storyboard-workspace">
+            <aside class="storyboard-rail">
+              <div class="storyboard-rail-head"><strong>镜头列表</strong><span>{{ storyboards.length }} 个镜头</span></div>
+              <div class="storyboard-rail-list" role="list" aria-label="镜头列表">
+                <div v-for="sb in storyboards" :key="sb.id" class="storyboard-rail-row" role="listitem">
+                  <button
+                    class="storyboard-rail-item"
+                    type="button"
+                    :class="{ active: selectedStoryboard?.id === sb.id }"
+                    :aria-current="selectedStoryboard?.id === sb.id ? 'true' : undefined"
+                    :aria-label="`镜头 ${sb.storyboard_number} ${sb.title || ''}`"
+                    @click="selectedStoryboardId = sb.id"
+                  >
+                    <span class="storyboard-rail-index"><i class="status-dot" :class="shotStatusDot(sb)"></i>#{{ sb.storyboard_number }}</span>
+                    <strong>{{ sb.title || '未命名镜头' }}</strong>
+                    <small>{{ sb.duration }}s · {{ sb.shot_type || '未设置景别' }}</small>
+                  </button>
+                  <label v-if="canEdit" class="storyboard-batch-check" :title="`选择镜头 ${sb.storyboard_number}`">
+                    <input type="checkbox" :checked="selectedShotIds.includes(sb.id)" :aria-label="`选择镜头 ${sb.storyboard_number}`" @change="toggleShot(sb.id)" />
+                  </label>
                 </div>
               </div>
-              <video v-if="sb.video_url" class="media" style="width:100%;margin-top:6px" :src="sb.video_url" controls />
-              <audio v-if="sb.tts_audio_url" :src="sb.tts_audio_url" controls style="width:100%;margin-top:6px" />
-              <div class="mini-actions">
-                <button class="btn" :disabled="!!busy" @click="genFrame(sb,'first_frame')">首帧</button>
-                <button class="btn" :disabled="!!busy" @click="genFrame(sb,'last_frame')">尾帧</button>
-                <button class="btn" :disabled="!!busy" @click="genFrame(sb,'composed')">分镜板</button>
-                <button class="btn" :disabled="!!busy" @click="genVideo(sb)">视频</button>
-                <button class="btn" :disabled="!!busy" @click="genTTS(sb)">配音</button>
-                <button class="btn" :disabled="!!busy" @click="composeShot(sb)">合成</button>
-                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'image_prompt','图片提示词')">改图词</button>
-                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'video_prompt','视频提示词')">改视频词</button>
-                <button class="btn" :disabled="!!busy" @click="openPromptEditor(sb,'dialogue','对白')">改对白</button>
-                <button class="btn btn-danger" :disabled="!!busy" @click="removeStoryboard(sb)">删除</button>
+            </aside>
+
+            <section v-if="selectedStoryboard" class="storyboard-inspector" role="region" aria-label="当前镜头">
+              <div class="storyboard-inspector-head">
+                <div><span class="muted">镜头 {{ selectedStoryboard.storyboard_number }}</span><h3>#{{ selectedStoryboard.storyboard_number }} {{ selectedStoryboard.title || '镜头' }}</h3></div>
+                <span class="job-status" :class="selectedStoryboard.status">{{ selectedStoryboard.duration }}s · {{ storyboardStatusLabel(selectedStoryboard.status) }}</span>
               </div>
-            </div>
+              <div class="storyboard-copy-grid">
+                <div><span>镜头参数</span><p>{{ selectedStoryboard.shot_type || '未设置' }} / {{ selectedStoryboard.angle || '未设置' }} / {{ selectedStoryboard.movement || '未设置' }}</p></div>
+                <div><span>镜头描述</span><p>{{ selectedStoryboard.description || selectedStoryboard.action || '暂无描述' }}</p></div>
+                <div class="storyboard-dialogue"><span>对白</span><p>{{ selectedStoryboard.dialogue || '（无）' }}</p></div>
+              </div>
+              <div class="storyboard-media-grid">
+                <div class="storyboard-media-cell"><span>首帧</span><img v-if="selectedStoryboard.first_frame_image" :src="selectedStoryboard.first_frame_image" :alt="`镜头 ${selectedStoryboard.storyboard_number} 首帧`" /><div v-else class="media-placeholder">未生成</div></div>
+                <div class="storyboard-media-cell"><span>尾帧</span><img v-if="selectedStoryboard.last_frame_image" :src="selectedStoryboard.last_frame_image" :alt="`镜头 ${selectedStoryboard.storyboard_number} 尾帧`" /><div v-else class="media-placeholder">未生成</div></div>
+                <div class="storyboard-media-cell"><span>分镜板</span><img v-if="selectedStoryboard.composed_image" :src="selectedStoryboard.composed_image" :alt="`镜头 ${selectedStoryboard.storyboard_number} 分镜板`" /><div v-else class="media-placeholder">未生成</div></div>
+                <div class="storyboard-media-cell storyboard-video-cell"><span>视频</span><video v-if="selectedStoryboard.video_url" :src="selectedStoryboard.video_url" controls /><div v-else class="media-placeholder">未生成</div></div>
+              </div>
+              <audio v-if="selectedStoryboard.tts_audio_url" class="storyboard-audio" :src="selectedStoryboard.tts_audio_url" controls />
+              <div v-if="canEdit" class="storyboard-primary-actions">
+                <button class="btn" :disabled="!!busy" @click="genFrame(selectedStoryboard,'first_frame')">生成首帧</button>
+                <button class="btn" :disabled="!!busy" @click="genFrame(selectedStoryboard,'last_frame')">生成尾帧</button>
+                <button class="btn" :disabled="!!busy" @click="genFrame(selectedStoryboard,'composed')">生成分镜板</button>
+                <button class="btn btn-primary" :disabled="!!busy" @click="genVideo(selectedStoryboard)">生成视频</button>
+                <button class="btn" :disabled="!!busy" @click="genTTS(selectedStoryboard)">生成配音</button>
+                <button class="btn" :disabled="!!busy" @click="composeShot(selectedStoryboard)">合成镜头</button>
+              </div>
+              <div v-if="canEdit" class="storyboard-secondary-actions">
+                <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'image_prompt','图片提示词')">改图词</button>
+                <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'video_prompt','视频提示词')">改视频词</button>
+                <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'dialogue','对白')">改对白</button>
+                <button class="btn btn-danger" :disabled="!!busy" @click="removeStoryboard(selectedStoryboard)">删除镜头</button>
+              </div>
+            </section>
           </div>
           <div v-if="!storyboards.length" class="empty" style="margin-top:12px">尚未拆解分镜</div>
         </div>
 
         <!-- EXPORT -->
         <div v-else class="panel">
-          <div class="toolbar">
+          <div v-if="canEdit" class="toolbar">
             <button class="btn" :disabled="!!busy" @click="composeAll">批量合成镜头</button>
             <button class="btn btn-primary" :disabled="!!busy" @click="mergeAll">拼接导出成片</button>
           </div>
@@ -1135,9 +1504,9 @@ onUnmounted(stopPoll)
                     <span>{{ asset.name }}</span>
                     <span class="muted">{{ asset.type }} · {{ asset.category || '未分类' }}</span>
                   </div>
-                  <img v-if="asset.mime_type?.startsWith('image/')" class="thumb" :src="asset.url" style="margin-top:8px" />
+                  <img v-if="asset.mime_type?.startsWith('image/')" class="thumb" :src="asset.url" :alt="asset.name" style="margin-top:8px" />
                   <a :href="asset.url" target="_blank" class="muted" style="font-size:12px;display:block;margin-top:6px">打开素材</a>
-                  <div v-if="asset.type === 'image' || asset.mime_type?.startsWith('image/')" class="row" style="margin-top:8px;align-items:center">
+                  <div v-if="canEdit && (asset.type === 'image' || asset.mime_type?.startsWith('image/'))" class="row" style="margin-top:8px;align-items:center">
                     <select v-model.number="assetTargetShot[asset.id]" aria-label="目标分镜">
                       <option :value="undefined">选择分镜</option>
                       <option v-for="sb in storyboards" :key="sb.id" :value="sb.id">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</option>
@@ -1162,8 +1531,8 @@ onUnmounted(stopPoll)
                     <span class="muted">{{ job.status }}</span>
                   </div>
                   <div class="muted" style="font-size:12px;margin-top:6px">进度 {{ job.progress || 0 }}% · {{ job.last_error || '无错误' }}</div>
-                  <button v-if="!['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger" style="margin-top:8px" @click="cancelJob(job)">取消任务</button>
-                  <button v-if="['failed','canceled'].includes(job.status)" class="btn" style="margin-top:8px" @click="retryJob(job)">重试任务</button>
+                  <button v-if="canEdit && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger" style="margin-top:8px" @click="cancelJob(job)">取消任务</button>
+                  <button v-if="canEdit && ['failed','canceled'].includes(job.status)" class="btn" style="margin-top:8px" @click="retryJob(job)">重试任务</button>
                 </div>
                 <div v-if="!jobs.length" class="empty">暂无任务记录</div>
               </div>
@@ -1176,6 +1545,55 @@ onUnmounted(stopPoll)
           <pre class="log-box">{{ log }}</pre>
         </div>
       </div>
+    </div>
+
+    <div v-if="characterForm" class="modal-mask" @click.self="characterForm=null">
+      <form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="characterForm.id ? 'edit-character-title' : 'add-character-title'" @keydown.esc="characterForm=null" @submit.prevent="saveCharacter">
+        <h3 :id="characterForm.id ? 'edit-character-title' : 'add-character-title'">{{ characterForm.id ? '编辑角色' : '添加角色' }}</h3>
+        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
+        <div class="field-grid">
+          <div class="field"><label for="workbench-character-name">角色名 <span class="required-mark">*</span></label><input id="workbench-character-name" ref="characterNameInput" v-model="characterForm.name" maxlength="120" required /></div>
+          <div class="field"><label for="workbench-character-role">定位</label><input id="workbench-character-role" v-model="characterForm.role" maxlength="120" /></div>
+          <div class="field"><label for="workbench-character-appearance">外貌</label><textarea id="workbench-character-appearance" v-model="characterForm.appearance" rows="3" maxlength="4000" /></div>
+          <div class="field"><label for="workbench-character-personality">性格</label><textarea id="workbench-character-personality" v-model="characterForm.personality" rows="3" maxlength="4000" /></div>
+          <div class="field settings-span"><label for="workbench-character-description">说明</label><textarea id="workbench-character-description" v-model="characterForm.description" rows="3" maxlength="4000" /></div>
+        </div>
+        <p v-if="characterError" class="form-error" role="alert">{{ characterError }}</p>
+        <div class="modal-actions"><button class="btn" type="button" @click="characterForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'character-save' ? '保存中…' : '保存角色' }}</button></div>
+      </form>
+    </div>
+
+    <div v-if="sceneForm" class="modal-mask" @click.self="sceneForm=null">
+      <form class="modal settings-modal" role="dialog" aria-modal="true" :aria-labelledby="sceneForm.id ? 'edit-scene-title' : 'add-scene-title'" @keydown.esc="sceneForm=null" @submit.prevent="saveScene">
+        <h3 :id="sceneForm.id ? 'edit-scene-title' : 'add-scene-title'">{{ sceneForm.id ? '编辑场景' : '添加场景' }}</h3>
+        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
+        <div class="field-grid">
+          <div class="field"><label for="workbench-scene-location">地点 <span class="required-mark">*</span></label><input id="workbench-scene-location" ref="sceneLocationInput" v-model="sceneForm.location" maxlength="200" required /></div>
+          <div class="field"><label for="workbench-scene-time">时间</label><input id="workbench-scene-time" v-model="sceneForm.time" maxlength="120" /></div>
+          <div class="field settings-span"><label for="workbench-scene-prompt">画面提示词</label><textarea id="workbench-scene-prompt" v-model="sceneForm.prompt" rows="5" maxlength="10000" /></div>
+        </div>
+        <p v-if="sceneError" class="form-error" role="alert">{{ sceneError }}</p>
+        <div class="modal-actions"><button class="btn" type="button" @click="sceneForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'scene-save' ? '保存中…' : '保存场景' }}</button></div>
+      </form>
+    </div>
+
+    <div v-if="storyboardForm" class="modal-mask" @click.self="storyboardForm=null">
+      <form class="modal settings-modal settings-modal-wide storyboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-storyboard-title" @keydown.esc="storyboardForm=null" @submit.prevent="saveStoryboard">
+        <h3 id="add-storyboard-title">添加分镜</h3>
+        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
+        <div class="field-grid">
+          <div class="field"><label for="storyboard-title">分镜标题 <span class="required-mark">*</span></label><input id="storyboard-title" ref="storyboardTitleInput" v-model="storyboardForm.title" maxlength="200" required /></div>
+          <div class="field"><label for="storyboard-duration">时长（秒）</label><input id="storyboard-duration" v-model.number="storyboardForm.duration" type="number" min="1" max="3600" /></div>
+          <div class="field"><label for="storyboard-shot-type">景别</label><input id="storyboard-shot-type" v-model="storyboardForm.shot_type" maxlength="200" /></div>
+          <div class="field"><label for="storyboard-dialogue">对白</label><textarea id="storyboard-dialogue" v-model="storyboardForm.dialogue" rows="2" maxlength="10000" /></div>
+          <div class="field settings-span"><label for="storyboard-description">镜头描述</label><textarea id="storyboard-description" v-model="storyboardForm.description" rows="3" maxlength="10000" /></div>
+          <div class="field"><label for="storyboard-image-prompt">图片提示词</label><textarea id="storyboard-image-prompt" v-model="storyboardForm.image_prompt" rows="3" maxlength="10000" /></div>
+          <div class="field"><label for="storyboard-video-prompt">视频提示词</label><textarea id="storyboard-video-prompt" v-model="storyboardForm.video_prompt" rows="3" maxlength="10000" /></div>
+          <div class="field settings-span"><label for="storyboard-reference-images">多参考图 URL（每行一个，最多 8 张）</label><textarea id="storyboard-reference-images" v-model="storyboardForm.reference_images" rows="3" maxlength="10000" /></div>
+        </div>
+        <p v-if="storyboardError" class="form-error" role="alert">{{ storyboardError }}</p>
+        <div class="modal-actions"><button class="btn" type="button" @click="storyboardForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'storyboard-save' ? '保存中…' : '保存分镜' }}</button></div>
+      </form>
     </div>
 
     <div v-if="promptEditor" class="modal-mask" @click.self="promptEditor=null">
@@ -1198,6 +1616,25 @@ onUnmounted(stopPoll)
         <div class="modal-actions">
           <button class="btn" type="button" @click="promptEditor=null">取消</button>
           <button class="btn btn-primary" type="button" :disabled="!!busy" @click="savePromptEditor">{{ promptEditor.target === 'grid' ? '应用' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showProductionModal" class="modal-mask" @click.self="showProductionModal=false">
+      <div class="modal production-modal" role="dialog" aria-modal="true" aria-labelledby="production-modal-title" @keydown.esc="showProductionModal=false">
+        <h3 id="production-modal-title">自动制作本集</h3>
+        <div class="production-modal-flow" aria-label="自动制作阶段">
+          <span v-for="label in ['剧本', '角色场景', '分镜', '首帧', '视频', '配音', '合成', '成片']" :key="label">{{ label }}</span>
+        </div>
+        <div class="production-service-list" aria-label="本次使用服务">
+          <span v-for="service in productionServices" :key="service.type" :class="{ missing: !service.config }"><small>{{ service.label }}</small><strong>{{ service.config?.name || '未绑定' }}</strong><em>{{ service.config?.provider || '请先配置' }}</em></span>
+        </div>
+        <p v-if="productionUsesExternalService" class="production-cost-note">包含外部 AI 服务，可能产生厂商费用。</p>
+        <p class="muted">将使用本集绑定的图片、视频和音频服务。制作期间仍可返回手动调整，失败后可从当前阶段重试。</p>
+        <p v-if="productionError" class="auth-error" role="alert">{{ productionError }}</p>
+        <div class="modal-actions">
+          <button class="btn" type="button" @click="showProductionModal=false">取消</button>
+          <button class="btn btn-primary" type="button" :disabled="!!busy || !productionReady" @click="startProduction">{{ busy === 'production-start' ? '正在启动…' : '开始制作' }}</button>
         </div>
       </div>
     </div>

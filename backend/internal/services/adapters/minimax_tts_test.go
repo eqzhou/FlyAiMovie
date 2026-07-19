@@ -80,8 +80,8 @@ func TestMiniMaxTTSGenerateErrors(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "http json error", code: http.StatusUnauthorized, body: `{"message":"invalid api key"}`, want: "HTTP 401: invalid api key"},
-		{name: "business error", code: http.StatusOK, body: `{"data":{},"base_resp":{"status_code":1004,"status_msg":"invalid voice"}}`, want: "provider status 1004: invalid voice"},
+		{name: "http json error", code: http.StatusUnauthorized, body: `{"message":"invalid api key"}`, want: "provider request failed with HTTP 401"},
+		{name: "business error", code: http.StatusOK, body: `{"data":{},"base_resp":{"status_code":1004,"status_msg":"invalid voice"}}`, want: "provider status 1004"},
 		{name: "empty audio", code: http.StatusOK, body: `{"data":{"audio":""},"base_resp":{"status_code":0}}`, want: "response contains no audio"},
 		{name: "invalid audio", code: http.StatusOK, body: `{"data":{"audio":"not-hex"},"base_resp":{"status_code":0}}`, want: "audio is not valid hex"},
 	} {

@@ -140,7 +140,7 @@ func claimLegacyResources(tx *gorm.DB, organizationID uint) error {
 		&models.EpisodeScene{}, &models.Scene{}, &models.Storyboard{}, &models.StoryboardCharacter{},
 		&models.AIServiceConfig{}, &models.AIVoice{}, &models.AgentConfig{}, &models.ImageGeneration{},
 		&models.VideoGeneration{}, &models.VideoMerge{}, &models.Prop{}, &models.Asset{},
-		&models.GridHistory{}, &models.GenerationJob{},
+		&models.GridHistory{}, &models.GenerationJob{}, &models.ProductionRun{},
 		&models.AuditLog{}, &models.OrganizationQuota{},
 	}
 	for _, resource := range resources {

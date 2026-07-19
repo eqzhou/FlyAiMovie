@@ -110,12 +110,16 @@ func (r *AsyncRunner) pollClaimed() {
 		return
 	}
 	owner := "worker-" + uuid.NewString()
-	claimed, err := r.Jobs.ClaimWaiting(owner, 40)
-	if err != nil {
-		log.Printf("claim jobs: %v", err)
-		return
-	}
-	for _, job := range claimed {
+	for processed := 0; processed < 40; processed++ {
+		claimed, err := r.Jobs.ClaimWaiting(owner, 1)
+		if err != nil {
+			log.Printf("claim jobs: %v", err)
+			return
+		}
+		if len(claimed) == 0 {
+			return
+		}
+		job := claimed[0]
 		switch job.TargetType {
 		case "image_generation":
 			if r.Images == nil {
@@ -154,6 +158,61 @@ type composeShotPayload struct {
 	OutputRel    string `json:"output_rel"`
 }
 
+type storyboardComposeWrite struct {
+	organizationID uint
+	storyboardID   uint
+	url            string
+	asset          models.Asset
+}
+
+type episodeMergeWrite struct {
+	organizationID uint
+	episode        models.Episode
+	url            string
+	asset          models.Asset
+	mergeID        uint
+}
+
+type composeWrites struct {
+	storyboards []storyboardComposeWrite
+	merge       *episodeMergeWrite
+}
+
+func (writes *composeWrites) apply(database *gorm.DB) error {
+	for _, write := range writes.storyboards {
+		if err := scopedDB(database, write.organizationID).Model(&models.Storyboard{}).Where("id = ?", write.storyboardID).Updates(map[string]any{"composed_video_url": write.url, "status": "composed", "updated_at": response.Now()}).Error; err != nil {
+			return err
+		}
+		if err := registerAssetWithDB(database, write.asset); err != nil {
+			return err
+		}
+	}
+	if writes.merge != nil {
+		write := writes.merge
+		timestamp := response.Now()
+		if err := scopedDB(database, write.organizationID).Model(&models.Episode{}).Where("id = ?", write.episode.ID).Updates(map[string]any{"video_url": write.url, "status": "completed", "updated_at": timestamp}).Error; err != nil {
+			return err
+		}
+		merge := models.VideoMerge{OrganizationID: write.organizationID, EpisodeID: &write.episode.ID, DramaID: &write.episode.DramaID, Title: write.episode.Title, Status: "completed", MergedURL: write.url, CreatedAt: timestamp, CompletedAt: &timestamp}
+		if err := database.Create(&merge).Error; err != nil {
+			return err
+		}
+		write.mergeID = merge.ID
+		if err := registerAssetWithDB(database, write.asset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func composeWriteTarget(owner []any) *composeWrites {
+	if len(owner) < 3 {
+		return nil
+	}
+	writes, _ := owner[2].(*composeWrites)
+	return writes
+}
+
 func (r *AsyncRunner) runComposeJob(job models.GenerationJob, owner string) {
 	if r.Jobs == nil {
 		return
@@ -167,39 +226,18 @@ func (r *AsyncRunner) runComposeJob(job models.GenerationJob, owner string) {
 		_ = r.Jobs.SetFailedOwned(job.ID, owner, "invalid compose payload")
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		t := time.NewTicker(500 * time.Millisecond)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				current, err := r.Jobs.Get(job.ID)
-				if err != nil || current.Status == jobs.StatusCanceled || current.Status != jobs.StatusRunning || current.LeaseOwner != owner {
-					cancel()
-					return
-				}
-				if err := r.Jobs.RenewLease(job.ID, owner); err != nil {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
+	ctx, finish := r.claimedJobContext(job)
+	defer finish()
+	writes := &composeWrites{}
 	var result string
 	var err error
 	switch job.TargetType {
 	case "storyboard_compose":
-		result, err = r.composeStoryboard(ctx, job.OrganizationID, p.composeShotPayload, owner, job.ID)
+		result, err = r.composeStoryboard(ctx, job.OrganizationID, p.composeShotPayload, owner, job.ID, writes)
 	case "episode_compose":
-		result, err = r.composeEpisode(ctx, job.OrganizationID, p.EpisodeID, p.Shots, owner, job.ID)
+		result, err = r.composeEpisode(ctx, job.OrganizationID, p.EpisodeID, p.Shots, owner, job.ID, writes)
 	case "episode_merge":
-		result, err = r.mergeEpisode(ctx, job.OrganizationID, p.EpisodeID, p.Inputs, p.OutputRel, owner, job.ID)
+		result, err = r.mergeEpisode(ctx, job.OrganizationID, p.EpisodeID, p.Inputs, p.OutputRel, owner, job.ID, writes)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -212,7 +250,7 @@ func (r *AsyncRunner) runComposeJob(job models.GenerationJob, owner string) {
 	if !r.Jobs.IsOwned(job.ID, owner) {
 		return
 	}
-	_ = r.Jobs.SetSucceededOwned(job.ID, owner, result)
+	_ = r.Jobs.SetSucceededOwnedWith(ctx, job.ID, owner, result, writes.apply)
 }
 
 func (r *AsyncRunner) composeStoryboard(ctx context.Context, organizationID uint, payload composeShotPayload, owner ...any) (string, error) {
@@ -281,10 +319,14 @@ func (r *AsyncRunner) composeStoryboard(ctx context.Context, organizationID uint
 		return "", err
 	}
 	rel, url = canonicalPath, canonicalURL
-	if err := scopedDB(db.DB, organizationID).Model(&models.Storyboard{}).Where("id = ?", id).Updates(map[string]any{"composed_video_url": url, "status": "composed", "updated_at": response.Now()}).Error; err != nil {
+	write := storyboardComposeWrite{organizationID: organizationID, storyboardID: id, url: url, asset: models.Asset{OrganizationID: organizationID, StoryboardID: &id, Name: "镜头合成", Type: "video", Category: "composed", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size}}
+	if writes := composeWriteTarget(owner); writes != nil {
+		writes.storyboards = append(writes.storyboards, write)
+	} else if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		return (&composeWrites{storyboards: []storyboardComposeWrite{write}}).apply(tx)
+	}); err != nil {
 		return "", err
 	}
-	registerAsset(models.Asset{OrganizationID: organizationID, StoryboardID: &id, Name: "镜头合成", Type: "video", Category: "composed", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
 	b, _ := json.Marshal(map[string]string{"composed_video_url": url})
 	return string(b), nil
 }
@@ -374,20 +416,17 @@ func (r *AsyncRunner) mergeEpisode(ctx context.Context, organizationID, episodeI
 		return "", err
 	}
 	rel, url = canonicalPath, canonicalURL
-	ts := response.Now()
 	var ep models.Episode
 	if err := scopedDB(db.DB, organizationID).Where("id = ?", episodeID).First(&ep).Error; err != nil {
 		return "", err
 	}
-	if err := scopedDB(db.DB, organizationID).Model(&ep).Updates(map[string]any{"video_url": url, "status": "completed", "updated_at": ts}).Error; err != nil {
+	write := &episodeMergeWrite{organizationID: organizationID, episode: ep, url: url, asset: models.Asset{OrganizationID: organizationID, DramaID: &ep.DramaID, EpisodeID: &ep.ID, Name: ep.Title, Type: "video", Category: "episode", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size}}
+	if writes := composeWriteTarget(owner); writes != nil {
+		writes.merge = write
+	} else if err := db.DB.Transaction(func(tx *gorm.DB) error { return (&composeWrites{merge: write}).apply(tx) }); err != nil {
 		return "", err
 	}
-	merge := models.VideoMerge{OrganizationID: organizationID, EpisodeID: &ep.ID, DramaID: &ep.DramaID, Title: ep.Title, Status: "completed", MergedURL: url, CreatedAt: ts, CompletedAt: &ts}
-	if err := db.DB.Create(&merge).Error; err != nil {
-		return "", err
-	}
-	registerAsset(models.Asset{OrganizationID: organizationID, DramaID: &ep.DramaID, EpisodeID: &ep.ID, Name: ep.Title, Type: "video", Category: "episode", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
-	b, _ := json.Marshal(map[string]any{"merged_url": url, "merge_id": merge.ID})
+	b, _ := json.Marshal(map[string]any{"merged_url": url, "merge_id": write.mergeID})
 	return string(b), nil
 }
 
@@ -414,27 +453,33 @@ func validateOutputRel(rel string) error {
 
 func (r *AsyncRunner) runTTSJob(job models.GenerationJob) {
 	if r.TTS == nil {
-		_ = r.Jobs.SetFailedByTargetOrganization(job.OrganizationID, job.TargetType, job.TargetID, "tts worker unavailable")
+		_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, "tts worker unavailable")
+		return
+	}
+	ctx, finish := r.claimedJobContext(job)
+	defer finish()
+	if ctx.Err() != nil {
 		return
 	}
 	var storyboard models.Storyboard
 	if err := db.DB.Where("organization_id = ? AND id = ? AND deleted_at IS NULL", job.OrganizationID, job.TargetID).First(&storyboard).Error; err != nil {
-		_ = r.Jobs.SetFailedByTargetOrganization(job.OrganizationID, job.TargetType, job.TargetID, err.Error())
+		_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, err.Error())
 		return
 	}
-	var episode models.Episode
-	if err := db.DB.Where("organization_id = ? AND id = ? AND deleted_at IS NULL", job.OrganizationID, storyboard.EpisodeID).First(&episode).Error; err != nil {
-		_ = r.Jobs.SetFailedByTargetOrganization(job.OrganizationID, job.TargetType, job.TargetID, err.Error())
+	if _, err := r.TTS.GenerateForStoryboardOrganizationOwned(ctx, job.OrganizationID, storyboard.ID, job.ConfigID, r.Jobs, job.ID, job.LeaseOwner); err != nil {
+		if ctx.Err() == nil {
+			_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, err.Error())
+		}
 		return
 	}
-	if _, err := r.TTS.GenerateForStoryboardOrganization(context.Background(), job.OrganizationID, storyboard.ID, episode.AudioConfigID); err != nil {
-		_ = r.Jobs.SetFailedByTargetOrganization(job.OrganizationID, job.TargetType, job.TargetID, err.Error())
-		return
-	}
-	_ = r.Jobs.SetSucceededByTargetOrganization(job.OrganizationID, job.TargetType, job.TargetID, `{"status":"completed"}`)
 }
 
 func (r *AsyncRunner) pollImageJob(job models.GenerationJob) {
+	ctx, finish := r.claimedJobContext(job)
+	defer finish()
+	if ctx.Err() != nil {
+		return
+	}
 	var rec models.ImageGeneration
 	if err := scopedDB(db.DB, job.OrganizationID).Where("id = ?", job.TargetID).First(&rec).Error; err != nil {
 		if job.ID != 0 && job.LeaseOwner != "" {
@@ -443,21 +488,30 @@ func (r *AsyncRunner) pollImageJob(job models.GenerationJob) {
 		return
 	}
 	if rec.TaskID == "" {
-		r.Images.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("image task id missing"))
+		r.failClaimedJob(job, "image task id missing")
 		return
 	}
 	cfg, err := ai.GetTaskConfigOrganization(job.OrganizationID, "image", rec.ConfigID)
 	if err != nil {
-		r.Images.failJob(rec.OrganizationID, rec.ID, err)
+		r.failClaimedJob(job, err.Error())
 		return
 	}
-	res, err := adapters.GetImageAdapter(cfg.Provider).Poll(context.Background(), adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model}, rec.TaskID)
+	res, err := adapters.GetImageAdapter(cfg.Provider).Poll(ctx, adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model}, rec.TaskID)
 	if err != nil {
-		r.requeueJob(job.ID, err)
+		if ctx.Err() == nil {
+			r.requeueJob(job, err)
+		}
+		return
+	}
+	if ctx.Err() != nil || (job.ID != 0 && !r.Jobs.IsOwned(job.ID, job.LeaseOwner)) {
 		return
 	}
 	if res.Status == "completed" && res.ImageURL != "" {
-		if err := r.Images.Finalize(context.Background(), &rec, res.ImageURL); err != nil {
+		ownedJobID := job.ID
+		if job.LeaseOwner == "" {
+			ownedJobID = 0
+		}
+		if err := r.Images.FinalizeOwned(ctx, &rec, res.ImageURL, ownedJobID, job.LeaseOwner); err != nil {
 			updateGridHistory(rec.OrganizationID, rec.ID, "", "failed", err.Error())
 			return
 		}
@@ -467,15 +521,24 @@ func (r *AsyncRunner) pollImageJob(job models.GenerationJob) {
 	if res.Status == "failed" {
 		rec.Status, rec.ErrorMsg = "failed", res.Error
 		rec.UpdatedAt = response.Now()
-		scopedDB(db.DB, job.OrganizationID).Save(&rec)
-		r.Images.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("%s", res.Error))
-		updateGridHistory(rec.OrganizationID, rec.ID, "", "failed", res.Error)
+		if r.Jobs != nil && job.ID > 0 && job.LeaseOwner != "" {
+			if err := r.Jobs.SetFailedOwnedWith(context.Background(), job.ID, job.LeaseOwner, res.Error, func(tx *gorm.DB) error { return scopedDB(tx, job.OrganizationID).Save(&rec).Error }); err == nil {
+				updateGridHistory(rec.OrganizationID, rec.ID, "", "failed", res.Error)
+			}
+		} else if err := scopedDB(db.DB, job.OrganizationID).Save(&rec).Error; err == nil {
+			updateGridHistory(rec.OrganizationID, rec.ID, "", "failed", res.Error)
+		}
 		return
 	}
-	r.requeueJob(job.ID, nil)
+	r.requeueJob(job, nil)
 }
 
 func (r *AsyncRunner) pollVideoJob(job models.GenerationJob) {
+	ctx, finish := r.claimedJobContext(job)
+	defer finish()
+	if ctx.Err() != nil {
+		return
+	}
 	var rec models.VideoGeneration
 	if err := scopedDB(db.DB, job.OrganizationID).Where("id = ?", job.TargetID).First(&rec).Error; err != nil {
 		if job.ID != 0 && job.LeaseOwner != "" {
@@ -484,39 +547,98 @@ func (r *AsyncRunner) pollVideoJob(job models.GenerationJob) {
 		return
 	}
 	if rec.TaskID == "" {
-		r.Videos.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("video task id missing"))
+		r.failClaimedJob(job, "video task id missing")
 		return
 	}
 	cfg, err := ai.GetTaskConfigOrganization(job.OrganizationID, "video", rec.ConfigID)
 	if err != nil {
-		r.Videos.failJob(rec.OrganizationID, rec.ID, err)
+		r.failClaimedJob(job, err.Error())
 		return
 	}
-	res, err := adapters.GetVideoAdapter(cfg.Provider).Poll(context.Background(), adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model}, rec.TaskID)
+	res, err := adapters.GetVideoAdapter(cfg.Provider).Poll(ctx, adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model}, rec.TaskID)
 	if err != nil {
-		r.requeueJob(job.ID, err)
+		if ctx.Err() == nil {
+			r.requeueJob(job, err)
+		}
+		return
+	}
+	if ctx.Err() != nil || (job.ID != 0 && !r.Jobs.IsOwned(job.ID, job.LeaseOwner)) {
 		return
 	}
 	if res.Status == "completed" && res.VideoURL != "" {
-		_ = r.Videos.FinalizeAuthorized(context.Background(), &rec, res.VideoURL, res.BearerToken)
+		ownedJobID := job.ID
+		if job.LeaseOwner == "" {
+			ownedJobID = 0
+		}
+		_ = r.Videos.FinalizeAuthorizedOwned(ctx, &rec, res.VideoURL, res.BearerToken, ownedJobID, job.LeaseOwner)
 		return
 	}
 	if res.Status == "failed" {
 		rec.Status, rec.ErrorMsg = "failed", res.Error
 		rec.UpdatedAt = response.Now()
-		scopedDB(db.DB, job.OrganizationID).Save(&rec)
-		r.Videos.failJob(rec.OrganizationID, rec.ID, fmt.Errorf("%s", res.Error))
+		if r.Jobs != nil && job.ID > 0 && job.LeaseOwner != "" {
+			_ = r.Jobs.SetFailedOwnedWith(context.Background(), job.ID, job.LeaseOwner, res.Error, func(tx *gorm.DB) error { return scopedDB(tx, job.OrganizationID).Save(&rec).Error })
+		} else {
+			_ = scopedDB(db.DB, job.OrganizationID).Save(&rec).Error
+		}
 		return
 	}
-	r.requeueJob(job.ID, nil)
+	r.requeueJob(job, nil)
 }
 
-func (r *AsyncRunner) requeueJob(id uint, err error) {
+func (r *AsyncRunner) requeueJob(job models.GenerationJob, err error) {
 	updates := map[string]any{"status": jobs.StatusWaitingProvider, "available_at": time.Now().UTC().Add(4 * time.Second).Format(time.RFC3339), "lease_owner": "", "lease_expires_at": nil, "updated_at": response.Now()}
 	if err != nil {
 		updates["last_error"] = err.Error()
 	}
-	db.DB.Model(&models.GenerationJob{}).Where("id = ? AND status = ?", id, jobs.StatusRunning).Updates(updates)
+	query := db.DB.Model(&models.GenerationJob{}).Where("id = ? AND status = ?", job.ID, jobs.StatusRunning)
+	if job.LeaseOwner != "" {
+		query = query.Where("lease_owner = ?", job.LeaseOwner)
+	}
+	query.Updates(updates)
+}
+
+func (r *AsyncRunner) claimedJobContext(job models.GenerationJob) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if r.Jobs == nil || job.ID == 0 || job.LeaseOwner == "" {
+		return ctx, cancel
+	}
+	if !r.Jobs.IsOwned(job.ID, job.LeaseOwner) {
+		cancel()
+		return ctx, cancel
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				current, err := r.Jobs.Get(job.ID)
+				if err != nil || current.Status != jobs.StatusRunning || current.LeaseOwner != job.LeaseOwner || r.Jobs.RenewLease(job.ID, job.LeaseOwner) != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() {
+		close(done)
+		cancel()
+	}
+}
+
+func (r *AsyncRunner) failClaimedJob(job models.GenerationJob, message string) {
+	if r.Jobs == nil || job.ID == 0 {
+		return
+	}
+	if job.LeaseOwner != "" {
+		_ = r.Jobs.SetFailedOwned(job.ID, job.LeaseOwner, message)
+		return
+	}
+	_ = r.Jobs.SetFailed(job.ID, message)
 }
 
 func (r *AsyncRunner) pollImages() {

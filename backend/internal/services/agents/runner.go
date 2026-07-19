@@ -25,11 +25,42 @@ var ValidAgentTypes = []string{
 	"grid_prompt_generator",
 }
 
+const (
+	maxAgentActions   = 32
+	maxAgentArgsBytes = 64 * 1024
+)
+
+type AgentAction struct {
+	Tool string         `json:"tool"`
+	Args map[string]any `json:"args"`
+}
+
+type AgentPlan struct {
+	Actions []AgentAction `json:"actions"`
+	Summary string        `json:"summary"`
+}
+
 type ChatResult struct {
 	Type        string           `json:"type"`
 	Text        string           `json:"text"`
 	ToolCalls   []map[string]any `json:"toolCalls"`
 	ToolResults []map[string]any `json:"toolResults"`
+}
+
+type RunEvent struct {
+	EventType string
+	ToolName  string
+	Payload   map[string]any
+}
+
+type EventObserver func(RunEvent)
+
+type PromptResolution struct {
+	System     string
+	Source     string
+	TemplateID uint
+	Key        string
+	Version    int
 }
 
 type Runner struct {
@@ -50,6 +81,10 @@ func (r *Runner) IsValid(t string) bool {
 }
 
 func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string, dramaID, episodeID uint, message string) (*ChatResult, error) {
+	return r.RunObserved(ctx, organizationID, agentType, dramaID, episodeID, message, nil)
+}
+
+func (r *Runner) RunObserved(ctx context.Context, organizationID uint, agentType string, dramaID, episodeID uint, message string, observer EventObserver) (*ChatResult, error) {
 	if !r.IsValid(agentType) {
 		return nil, fmt.Errorf("unsupported agent type %q", agentType)
 	}
@@ -62,14 +97,15 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 	var cfg *ai.ServiceConfig
 	var err error
 	if configErr == nil {
-		cfg, err = ai.GetOrganizationConfig(organizationID, "text", &textConfig.ID)
+		if organizationID == 0 {
+			cfg, err = ai.GetActiveConfig("text", &textConfig.ID)
+		} else {
+			cfg, err = ai.GetOrganizationConfig(organizationID, "text", &textConfig.ID)
+		}
 	} else {
 		err = configErr
 	}
 	if err != nil {
-		if res, ok := r.offlineFallback(organizationID, agentType, dramaID, episodeID, message, err); ok {
-			return res, nil
-		}
 		return nil, err
 	}
 	var agentConfig models.AgentConfig
@@ -79,7 +115,11 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 		}
 	}
 
-	system := r.resolveSystemPrompt(organizationID, agentType, dramaID, requestedEpisode, message, agentConfig.SystemPrompt)
+	resolution := r.resolveSystemPrompt(organizationID, agentType, dramaID, requestedEpisode, message, agentConfig.SystemPrompt)
+	system := resolution.System
+	emitRunEvent(observer, RunEvent{EventType: "prompt_resolved", Payload: map[string]any{
+		"source": resolution.Source, "template_id": resolution.TemplateID, "key": resolution.Key, "version": resolution.Version,
+	}})
 	temperature := float32(0.4)
 	if agentConfig.Temperature != nil {
 		temperature = float32(*agentConfig.Temperature)
@@ -108,21 +148,20 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 
 	raw, err := ai.ChatWithMaxTokens(ctx, cfg, system, user, temperature, maxTokens)
 	if err != nil {
-		// Offline / misconfigured text model: deterministic fallbacks
-		if res, ok := r.offlineFallback(organizationID, agentType, dramaID, episodeID, message, err); ok {
-			return res, nil
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		return nil, err
+		if cfg.Provider == "mock" {
+			if res, ok := r.offlineFallback(organizationID, agentType, dramaID, episodeID, message, err); ok {
+				emitResultEvents(observer, res)
+				return res, nil
+			}
+		}
+		return nil, fmt.Errorf("text provider request failed")
 	}
 	raw = stripCodeFence(raw)
 
-	var plan struct {
-		Actions []struct {
-			Tool string         `json:"tool"`
-			Args map[string]any `json:"args"`
-		} `json:"actions"`
-		Summary string `json:"summary"`
-	}
+	var plan AgentPlan
 	// If model fails to return JSON, treat whole text as summary and still try deterministic tools.
 	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
 		plan.Summary = raw
@@ -131,6 +170,9 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 	if len(plan.Actions) == 0 {
 		plan.Actions = r.defaultActions(agentType, episodeID, dramaID)
 	}
+	if err := validateAgentActions(agentType, plan.Actions, 0); err != nil {
+		return invalidAgentPlanResult(err, nil, nil), nil
+	}
 
 	toolCalls := make([]map[string]any, 0)
 	toolResults := make([]map[string]any, 0)
@@ -138,13 +180,9 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		toolCalls = append(toolCalls, map[string]any{"toolName": act.Tool, "args": act.Args})
-		res, err := r.execTool(agentType, organizationID, dramaID, episodeID, act.Tool, act.Args)
-		if err != nil {
-			toolResults = append(toolResults, map[string]any{"toolName": act.Tool, "result": "Error: " + err.Error()})
-		} else {
-			toolResults = append(toolResults, map[string]any{"toolName": act.Tool, "result": res})
-		}
+		call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, act.Tool, act.Args)
+		toolCalls = append(toolCalls, call)
+		toolResults = append(toolResults, result)
 	}
 	if hasToolFailure(toolResults) {
 		return &ChatResult{Type: "failed", Text: "部分制作步骤失败，请查看任务详情后重试。", ToolCalls: toolCalls, ToolResults: toolResults}, nil
@@ -164,16 +202,16 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 			secondTemperature = 0.3
 		}
 		raw2, err2 := ai.ChatWithMaxTokens(ctx, cfg, system, user2, secondTemperature, maxTokens)
+		if err2 != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err2 == nil {
 			raw2 = stripCodeFence(raw2)
-			var plan2 struct {
-				Actions []struct {
-					Tool string         `json:"tool"`
-					Args map[string]any `json:"args"`
-				} `json:"actions"`
-				Summary string `json:"summary"`
-			}
+			var plan2 AgentPlan
 			if json.Unmarshal([]byte(raw2), &plan2) == nil {
+				if err := validateAgentActions(agentType, plan2.Actions, len(toolCalls)); err != nil {
+					return invalidAgentPlanResult(err, toolCalls, toolResults), nil
+				}
 				for _, act := range plan2.Actions {
 					if err := ctx.Err(); err != nil {
 						return nil, err
@@ -181,13 +219,9 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 					if r.isReadOnlyTool(act.Tool) {
 						continue
 					}
-					toolCalls = append(toolCalls, map[string]any{"toolName": act.Tool, "args": act.Args})
-					res, err := r.execTool(agentType, organizationID, dramaID, episodeID, act.Tool, act.Args)
-					if err != nil {
-						toolResults = append(toolResults, map[string]any{"toolName": act.Tool, "result": "Error: " + err.Error()})
-					} else {
-						toolResults = append(toolResults, map[string]any{"toolName": act.Tool, "result": res})
-					}
+					call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, act.Tool, act.Args)
+					toolCalls = append(toolCalls, call)
+					toolResults = append(toolResults, result)
 				}
 				if plan2.Summary != "" {
 					plan.Summary = plan2.Summary
@@ -195,11 +229,20 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 			}
 		}
 		// deterministic fallbacks when model still fails writes
-		r.ensureWrites(organizationID, agentType, dramaID, episodeID, plan.Summary, &toolCalls, &toolResults)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r.ensureWrites(observer, organizationID, agentType, dramaID, episodeID, plan.Summary, &toolCalls, &toolResults)
 	} else if needsWritePass {
 		// The configured model-iteration budget is exhausted. Deterministic
 		// write fallbacks still complete the requested local operation.
-		r.ensureWrites(organizationID, agentType, dramaID, episodeID, plan.Summary, &toolCalls, &toolResults)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r.ensureWrites(observer, organizationID, agentType, dramaID, episodeID, plan.Summary, &toolCalls, &toolResults)
+	}
+	if hasToolFailure(toolResults) {
+		return &ChatResult{Type: "failed", Text: "部分制作步骤失败，请查看任务详情后重试。", ToolCalls: toolCalls, ToolResults: toolResults}, nil
 	}
 
 	if plan.Summary == "" {
@@ -211,6 +254,92 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 		ToolCalls:   toolCalls,
 		ToolResults: toolResults,
 	}, nil
+}
+
+func invalidAgentPlanResult(err error, toolCalls, toolResults []map[string]any) *ChatResult {
+	return &ChatResult{
+		Type:        "failed",
+		Text:        "Agent 输出校验失败：" + err.Error(),
+		ToolCalls:   toolCalls,
+		ToolResults: toolResults,
+	}
+}
+
+func validateAgentActions(agentType string, actions []AgentAction, already int) error {
+	if already < 0 || len(actions) > maxAgentActions-already {
+		return fmt.Errorf("动作数量超过限制（累计最多 %d 个）", maxAgentActions)
+	}
+	for index, action := range actions {
+		if !allowedAgentTool(agentType, action.Tool) {
+			return fmt.Errorf("第 %d 个动作的工具 %q 不属于 Agent %q", index+1, action.Tool, agentType)
+		}
+		args := action.Args
+		if args == nil {
+			args = map[string]any{}
+		}
+		encoded, err := json.Marshal(args)
+		if err != nil {
+			return fmt.Errorf("第 %d 个动作参数无法编码: %w", index+1, err)
+		}
+		if len(encoded) > maxAgentArgsBytes {
+			return fmt.Errorf("第 %d 个动作参数过大（最大 %d KiB）", index+1, maxAgentArgsBytes/1024)
+		}
+	}
+	return nil
+}
+
+func allowedAgentTool(agentType, tool string) bool {
+	switch agentType {
+	case "script_rewriter":
+		return tool == "read_episode_script" || tool == "save_script"
+	case "extractor":
+		switch tool {
+		case "read_script_for_extraction", "read_existing_characters", "read_existing_scenes",
+			"save_dedup_characters", "save_dedup_scenes":
+			return true
+		}
+	case "storyboard_breaker":
+		return tool == "read_storyboard_context" || tool == "save_storyboards"
+	case "voice_assigner":
+		return tool == "list_voices" || tool == "get_characters" || tool == "assign_voice"
+	case "grid_prompt_generator":
+		switch tool {
+		case "read_characters", "read_scenes", "read_shots_for_grid", "generate_grid_prompt":
+			return true
+		}
+	}
+	return false
+}
+
+func emitRunEvent(observer EventObserver, event RunEvent) {
+	if observer != nil {
+		observer(event)
+	}
+}
+
+func emitResultEvents(observer EventObserver, result *ChatResult) {
+	if observer == nil || result == nil {
+		return
+	}
+	for index, call := range result.ToolCalls {
+		toolName, _ := call["toolName"].(string)
+		emitRunEvent(observer, RunEvent{EventType: "tool_call", ToolName: toolName, Payload: call})
+		if index < len(result.ToolResults) {
+			emitRunEvent(observer, RunEvent{EventType: "tool_result", ToolName: toolName, Payload: result.ToolResults[index]})
+		}
+	}
+}
+
+func (r *Runner) executeObservedTool(observer EventObserver, agentType string, organizationID, dramaID, episodeID uint, toolName string, args map[string]any) (map[string]any, map[string]any) {
+	call := map[string]any{"toolName": toolName, "args": args}
+	emitRunEvent(observer, RunEvent{EventType: "tool_call", ToolName: toolName, Payload: call})
+	value, err := r.execTool(agentType, organizationID, dramaID, episodeID, toolName, args)
+	result := map[string]any{"toolName": toolName, "result": value}
+	if err != nil {
+		result["result"] = "Error: " + err.Error()
+	}
+	emitRunEvent(observer, RunEvent{EventType: "tool_result", ToolName: toolName, Payload: result})
+	return call, result
 }
 
 func hasToolFailure(results []map[string]any) bool {
@@ -233,10 +362,7 @@ func (r *Runner) isReadOnlyTool(tool string) bool {
 	}
 }
 
-func (r *Runner) needsWritePass(agentType string, actions []struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-}) bool {
+func (r *Runner) needsWritePass(agentType string, actions []AgentAction) bool {
 	hasWrite := false
 	for _, a := range actions {
 		if !r.isReadOnlyTool(a.Tool) {
@@ -255,7 +381,7 @@ func (r *Runner) needsWritePass(agentType string, actions []struct {
 	}
 }
 
-func (r *Runner) ensureWrites(organizationID uint, agentType string, dramaID, episodeID uint, summary string, toolCalls *[]map[string]any, toolResults *[]map[string]any) {
+func (r *Runner) ensureWrites(observer EventObserver, organizationID uint, agentType string, dramaID, episodeID uint, summary string, toolCalls *[]map[string]any, toolResults *[]map[string]any) {
 	switch agentType {
 	case "script_rewriter":
 		// if summary looks like a script and no save happened, save it
@@ -266,13 +392,9 @@ func (r *Runner) ensureWrites(organizationID uint, agentType string, dramaID, ep
 			}
 		}
 		if !saved && strings.Contains(summary, "##") {
-			res, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_script", map[string]any{"script": summary})
-			*toolCalls = append(*toolCalls, map[string]any{"toolName": "save_script", "args": map[string]any{"script": summary}})
-			if err != nil {
-				*toolResults = append(*toolResults, map[string]any{"toolName": "save_script", "result": err.Error()})
-			} else {
-				*toolResults = append(*toolResults, map[string]any{"toolName": "save_script", "result": res})
-			}
+			call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, "save_script", map[string]any{"script": summary})
+			*toolCalls = append(*toolCalls, call)
+			*toolResults = append(*toolResults, result)
 		}
 	case "voice_assigner":
 		// auto assign from seed voices if no assign happened
@@ -293,13 +415,9 @@ func (r *Runner) ensureWrites(organizationID uint, agentType string, dramaID, ep
 			for i, ch := range chars {
 				v := voices[i%len(voices)]
 				args := map[string]any{"character_id": ch.ID, "voice_id": v.VoiceID, "voice_provider": v.Provider}
-				res, err := r.execTool(agentType, organizationID, dramaID, episodeID, "assign_voice", args)
-				*toolCalls = append(*toolCalls, map[string]any{"toolName": "assign_voice", "args": args})
-				if err != nil {
-					*toolResults = append(*toolResults, map[string]any{"toolName": "assign_voice", "result": err.Error()})
-				} else {
-					*toolResults = append(*toolResults, map[string]any{"toolName": "assign_voice", "result": res})
-				}
+				call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, "assign_voice", args)
+				*toolCalls = append(*toolCalls, call)
+				*toolResults = append(*toolResults, result)
 			}
 		}
 	}
@@ -312,8 +430,9 @@ func (r *Runner) buildSystemPrompt(agentType string) string {
 	return base + "\n\n" + skill + "\n\n" + tools
 }
 
-func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string) string {
+func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string) PromptResolution {
 	base := defaultPrompt(agentType)
+	resolution := PromptResolution{Source: "builtin", Key: agentType}
 	version := 0
 	var template models.PromptTemplate
 	if err := db.DB.Where("organization_id = ? AND key = ? AND category = ? AND is_active = ? AND deleted_at IS NULL", organizationID, agentType, "agent_system", true).First(&template).Error; err == nil {
@@ -337,14 +456,20 @@ func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dram
 		}); err == nil {
 			base = rendered
 			version = template.Version
+			resolution.Source = "organization_template"
+			resolution.TemplateID = template.ID
+			resolution.Key = template.Key
+			resolution.Version = template.Version
 		}
 	} else if strings.TrimSpace(legacyPrompt) != "" {
 		base = legacyPrompt
+		resolution.Source = "agent_config"
 	}
 	if version > 0 {
 		base += fmt.Sprintf("\n\n提示词模板版本: %d", version)
 	}
-	return base + "\n\n" + r.loadSkill(agentType) + "\n\n" + toolCatalog(agentType)
+	resolution.System = base + "\n\n" + r.loadSkill(agentType) + "\n\n" + toolCatalog(agentType)
+	return resolution
 }
 
 func (r *Runner) loadSkill(agentType string) string {
@@ -401,26 +526,13 @@ generate_grid_prompt args: {"mode":"first_frame","rows":2,"cols":2,"grid_prompt"
 	}
 }
 
-func (r *Runner) defaultActions(agentType string, episodeID, dramaID uint) []struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-} {
+func (r *Runner) defaultActions(agentType string, episodeID, dramaID uint) []AgentAction {
 	// deterministic fallback pipeline steps when model JSON fails
-	type act struct {
-		Tool string
-		Args map[string]any
-	}
 	switch agentType {
 	case "script_rewriter":
-		return []struct {
-			Tool string         `json:"tool"`
-			Args map[string]any `json:"args"`
-		}{{Tool: "read_episode_script", Args: map[string]any{}}}
+		return []AgentAction{{Tool: "read_episode_script", Args: map[string]any{}}}
 	case "extractor":
-		return []struct {
-			Tool string         `json:"tool"`
-			Args map[string]any `json:"args"`
-		}{
+		return []AgentAction{
 			{Tool: "read_script_for_extraction", Args: map[string]any{}},
 			{Tool: "read_existing_characters", Args: map[string]any{}},
 			{Tool: "read_existing_scenes", Args: map[string]any{}},
@@ -832,8 +944,12 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 		if len(scenes) == 0 {
 			scenes = []map[string]any{{"location": "主场景", "time": "日", "prompt": "main location, daytime, cinematic"}}
 		}
-		_, _ = r.execTool(agentType, organizationID, dramaID, episodeID, "save_dedup_characters", map[string]any{"characters": chars})
-		_, _ = r.execTool(agentType, organizationID, dramaID, episodeID, "save_dedup_scenes", map[string]any{"scenes": scenes})
+		if _, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_dedup_characters", map[string]any{"characters": chars}); err != nil {
+			return &ChatResult{Type: "failed", Text: "离线角色写入失败，请重试。", ToolResults: []map[string]any{{"toolName": "save_dedup_characters", "result": "Error: " + err.Error()}}}, true
+		}
+		if _, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_dedup_scenes", map[string]any{"scenes": scenes}); err != nil {
+			return &ChatResult{Type: "failed", Text: "离线场景写入失败，请重试。", ToolResults: []map[string]any{{"toolName": "save_dedup_scenes", "result": "Error: " + err.Error()}}}, true
+		}
 		return &ChatResult{Type: "done", Text: fmt.Sprintf("（离线回退）提取角色 %d、场景 %d。文本模型不可用：%v", len(chars), len(scenes), chatErr)}, true
 	case "storyboard_breaker":
 		var ep models.Episode
@@ -896,7 +1012,10 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 	case "voice_assigner":
 		var toolCalls []map[string]any
 		var toolResults []map[string]any
-		r.ensureWrites(organizationID, agentType, dramaID, episodeID, "", &toolCalls, &toolResults)
+		r.ensureWrites(nil, organizationID, agentType, dramaID, episodeID, "", &toolCalls, &toolResults)
+		if hasToolFailure(toolResults) {
+			return &ChatResult{Type: "failed", Text: "离线音色分配失败，请重试。", ToolCalls: toolCalls, ToolResults: toolResults}, true
+		}
 		return &ChatResult{Type: "done", Text: "（离线回退）已尝试为角色分配默认音色。", ToolCalls: toolCalls, ToolResults: toolResults}, true
 	case "grid_prompt_generator":
 		var sbs []models.Storyboard

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { Plus, Trash2 } from 'lucide-vue-next'
 import { dramaAPI } from '../api'
+import { authStore } from '../auth'
 
 const router = useRouter()
 const dramas = ref<any[]>([])
@@ -12,6 +14,8 @@ const err = ref('')
 const formError = ref('')
 const titleInput = ref<HTMLInputElement | null>(null)
 const episodeInput = ref<HTMLInputElement | null>(null)
+const styleLabels: Record<string, string> = { realistic: '写实', anime: '动漫', cinematic: '电影感' }
+const canManageProjects = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 
 async function load() {
   loading.value = true
@@ -84,6 +88,10 @@ function progress(d: any) {
   return Math.min(100, eps * 20 + chars * 5 + scenes * 5)
 }
 
+function styleLabel(value?: string) {
+  return styleLabels[value || ''] || value || '未设置风格'
+}
+
 onMounted(load)
 </script>
 
@@ -94,7 +102,7 @@ onMounted(load)
         <h1 class="page-title">短剧项目</h1>
         <p class="page-desc">{{ dramas.length }} 个项目 · 一句话到成片</p>
       </div>
-      <button class="btn btn-primary" @click="openCreate">新建项目</button>
+      <button v-if="canManageProjects" class="btn btn-primary" @click="openCreate"><Plus :size="16" aria-hidden="true" />新建项目</button>
     </div>
 
     <p v-if="err" class="muted">{{ err }}</p>
@@ -109,11 +117,11 @@ onMounted(load)
         <div>
           <div class="row" style="justify-content:space-between">
             <span class="badge">{{ d.episodes?.length || 0 }} 集</span>
-            <button class="btn btn-ghost" @click.stop="delDrama(d)">删除</button>
+            <button v-if="canManageProjects" class="btn btn-ghost" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
           </div>
           <h3 class="project-title">{{ d.title }}</h3>
           <div class="project-meta">
-            <span v-if="d.style" class="style-tag">{{ d.style }}</span>
+            <span v-if="d.style" class="style-tag">{{ styleLabel(d.style) }}</span>
             <span>角色 {{ d.characters?.length || 0 }}</span>
             <span>场景 {{ d.scenes?.length || 0 }}</span>
           </div>
@@ -123,10 +131,10 @@ onMounted(load)
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
       </div>
-      <div v-if="!dramas.length" class="card empty" @click="openCreate">还没有项目，点击创建</div>
+      <div v-if="!dramas.length" class="card empty" @click="canManageProjects && openCreate()">{{ canManageProjects ? '还没有项目，点击创建' : '暂无项目' }}</div>
     </div>
 
-    <div v-if="showCreate" class="modal-mask" @click.self="closeCreate">
+    <div v-if="showCreate && canManageProjects" class="modal-mask" @click.self="closeCreate">
       <form class="modal" role="dialog" aria-modal="true" aria-labelledby="create-drama-title" novalidate @submit.prevent="create">
         <h3 id="create-drama-title">新建短剧项目</h3>
         <p class="form-required-note"><span class="required-mark" aria-hidden="true">*</span> 为必填项</p>

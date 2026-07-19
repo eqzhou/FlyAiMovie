@@ -60,6 +60,9 @@ func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
 	if !strings.Contains(body, `"media_cache_objects"`) || !strings.Contains(body, `"media_cache_references"`) {
 		t.Fatalf("cache metadata missing from export: %s", body)
 	}
+	if !strings.Contains(body, `"prompt_templates"`) || !strings.Contains(body, `"prompt_template_revisions"`) {
+		t.Fatalf("prompt history missing from export: %s", body)
+	}
 }
 
 func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *testing.T) {
@@ -140,9 +143,10 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	}
 	for model, name := range map[any]string{
 		&models.Organization{}: "organization", &models.Drama{}: "drama", &models.Asset{}: "asset", &models.Membership{}: "membership", &models.Session{}: "session",
-		&models.CharacterTemplate{}: "character template", &models.GenerationJob{}: "job", &models.JobEvent{}: "job event",
+		&models.CharacterTemplate{}: "character template", &models.GenerationJob{}: "job", &models.JobEvent{}: "job event", &models.ProductionRun{}: "production run",
 		&models.AgentRun{}: "agent run", &models.AgentRunEvent{}: "agent event", &models.MediaMigration{}: "media migration",
 		&models.MediaCacheObject{}: "cache object", &models.MediaCacheReference{}: "cache reference",
+		&models.PromptTemplate{}: "prompt template", &models.PromptTemplateRevision{}: "prompt template revision",
 	} {
 		var count int64
 		query := db.DB.Model(model).Where("organization_id = ?", organization.ID)

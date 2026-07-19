@@ -30,35 +30,102 @@ type ImageService struct {
 }
 
 func (s *ImageService) Finalize(ctx context.Context, rec *models.ImageGeneration, sourceURL string) error {
+	return s.finalize(ctx, rec, sourceURL, 0, "")
+}
+
+func (s *ImageService) FinalizeOwned(ctx context.Context, rec *models.ImageGeneration, sourceURL string, jobID uint, owner string) error {
+	return s.finalize(ctx, rec, sourceURL, jobID, owner)
+}
+
+func (s *ImageService) finalize(ctx context.Context, rec *models.ImageGeneration, sourceURL string, jobID uint, owner string) error {
+	if err := s.requireOwned(ctx, jobID, owner); err != nil {
+		return err
+	}
 	local, err := s.Download(ctx, sourceURL, "images")
 	if err != nil {
 		rec.Status, rec.ErrorMsg, rec.UpdatedAt = "failed", err.Error(), response.Now()
-		scopedDB(db.DB, rec.OrganizationID).Save(rec)
-		s.failJob(rec.OrganizationID, rec.ID, err)
+		if jobID > 0 {
+			_ = s.Jobs.SetFailedOwnedWith(context.Background(), jobID, owner, err.Error(), func(tx *gorm.DB) error { return scopedDB(tx, rec.OrganizationID).Save(rec).Error })
+		} else {
+			scopedDB(db.DB, rec.OrganizationID).Save(rec)
+			s.failOwnedJob(jobID, owner, rec.OrganizationID, rec.ID, err)
+		}
+		return err
+	}
+	if err := s.requireOwned(ctx, jobID, owner); err != nil {
 		return err
 	}
 	rec.LocalPath, rec.ImageURL, rec.Status = local, s.Store.PublicURL(local), "completed"
 	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, rec.OrganizationID, "image_generation", rec.ID, "image", rec.LocalPath, rec.ImageURL, "image/png")
 	if cacheErr != nil {
 		rec.Status, rec.ErrorMsg, rec.UpdatedAt = "failed", cacheErr.Error(), response.Now()
+		if jobID > 0 {
+			_ = s.Jobs.SetFailedOwnedWith(context.Background(), jobID, owner, cacheErr.Error(), func(tx *gorm.DB) error { return scopedDB(tx, rec.OrganizationID).Save(rec).Error })
+		} else {
+			s.failOwnedJob(jobID, owner, rec.OrganizationID, rec.ID, cacheErr)
+		}
 		return cacheErr
+	}
+	if err := s.requireOwned(ctx, jobID, owner); err != nil {
+		return err
 	}
 	rec.LocalPath, rec.ImageURL = canonicalPath, canonicalURL
 	now := response.Now()
 	rec.CompletedAt, rec.UpdatedAt = &now, now
+	asset := models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID}
+	result, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
+	if jobID > 0 {
+		return s.Jobs.SetSucceededOwnedWith(ctx, jobID, owner, string(result), func(tx *gorm.DB) error {
+			if err := scopedDB(tx, rec.OrganizationID).Save(rec).Error; err != nil {
+				return err
+			}
+			if err := applyImageSideEffects(tx, rec); err != nil {
+				return err
+			}
+			return registerAssetWithDB(tx, asset)
+		})
+	}
 	if err := scopedDB(db.DB, rec.OrganizationID).Save(rec).Error; err != nil {
 		return err
 	}
 	s.ApplySideEffects(rec)
-	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID})
+	registerAsset(asset)
 	if s.Jobs != nil {
-		result, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
 		_ = s.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "image_generation", rec.ID, string(result))
 	}
 	return nil
 }
 
+func (s *ImageService) requireOwned(ctx context.Context, jobID uint, owner string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if jobID > 0 && (s.Jobs == nil || !s.Jobs.IsOwned(jobID, owner)) {
+		return jobs.ErrTerminalJob
+	}
+	return nil
+}
+
+func (s *ImageService) failOwnedJob(jobID uint, owner string, organizationID, resourceID uint, err error) {
+	if s.Jobs == nil || err == nil {
+		return
+	}
+	if jobID > 0 {
+		_ = s.Jobs.SetFailedOwned(jobID, owner, err.Error())
+		return
+	}
+	s.failJob(organizationID, resourceID, err)
+}
+
 func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration, configID *uint) error {
+	return s.generate(ctx, rec, configID, nil)
+}
+
+func (s *ImageService) GenerateProduction(ctx context.Context, rec *models.ImageGeneration, configID *uint, productionRunID uint) error {
+	return s.generate(ctx, rec, configID, &productionRunID)
+}
+
+func (s *ImageService) generate(ctx context.Context, rec *models.ImageGeneration, configID, productionRunID *uint) error {
 	cfg, err := ai.GetTaskConfigOrganization(rec.OrganizationID, "image", configID)
 	if err != nil {
 		return err
@@ -82,7 +149,12 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 		}
 	}
 	if s.Jobs != nil {
-		job, err := s.Jobs.CreateForTargetOrganization(rec.OrganizationID, "image.generate", "image_generation", rec.ID, cfg.Provider, &cfg.ID)
+		var job *models.GenerationJob
+		if productionRunID != nil {
+			job, err = s.Jobs.CreateForTargetOrganizationProduction(rec.OrganizationID, "image.generate", "image_generation", rec.ID, cfg.Provider, &cfg.ID, *productionRunID)
+		} else {
+			job, err = s.Jobs.CreateForTargetOrganization(rec.OrganizationID, "image.generate", "image_generation", rec.ID, cfg.Provider, &cfg.ID)
+		}
 		if err != nil {
 			return err
 		}
@@ -94,13 +166,13 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 
 	refs, err := parseImageReferenceURLs(rec.ReferenceImages)
 	if err != nil {
-		s.failJob(rec.OrganizationID, rec.ID, err)
+		s.failCurrentGeneration(rec, err)
 		return err
 	}
 	if s.References != nil {
 		refs, err = s.References.ResolveImages(ctx, cfg.Provider, refs)
 		if err != nil {
-			s.failJob(rec.OrganizationID, rec.ID, err)
+			s.failCurrentGeneration(rec, err)
 			return err
 		}
 	}
@@ -109,11 +181,7 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
 	}, adapters.ImageGenInput{Prompt: rec.Prompt, Size: rec.Size, ReferenceImages: refs, FrameType: rec.FrameType})
 	if err != nil {
-		rec.Status = "failed"
-		rec.ErrorMsg = err.Error()
-		rec.UpdatedAt = response.Now()
-		scopedDB(db.DB, rec.OrganizationID).Save(rec)
-		s.failJob(rec.OrganizationID, rec.ID, err)
+		s.failCurrentGeneration(rec, err)
 		return err
 	}
 
@@ -126,25 +194,20 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 		rec.TaskID = result.TaskID
 		rec.Status = "processing"
 		rec.UpdatedAt = response.Now()
-		scopedDB(db.DB, rec.OrganizationID).Save(rec)
 		if s.Jobs != nil && rec.JobID != nil {
-			_ = s.Jobs.SetWaiting(*rec.JobID, result.TaskID)
+			return s.Jobs.SetWaitingCurrentWith(context.Background(), *rec.JobID, result.TaskID, func(tx *gorm.DB) error { return scopedDB(tx, rec.OrganizationID).Save(rec).Error })
 		}
-		return nil
+		return scopedDB(db.DB, rec.OrganizationID).Save(rec).Error
 	}
 	if err != nil {
-		rec.Status = "failed"
-		rec.ErrorMsg = err.Error()
-		scopedDB(db.DB, rec.OrganizationID).Save(rec)
-		s.failJob(rec.OrganizationID, rec.ID, err)
+		s.failCurrentGeneration(rec, err)
 		return err
 	}
 	rec.LocalPath = localRel
 	rec.ImageURL = s.Store.PublicURL(localRel)
 	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, rec.OrganizationID, "image_generation", rec.ID, "image", rec.LocalPath, rec.ImageURL, "image/png")
 	if cacheErr != nil {
-		rec.Status, rec.ErrorMsg = "failed", cacheErr.Error()
-		s.failJob(rec.OrganizationID, rec.ID, cacheErr)
+		s.failCurrentGeneration(rec, cacheErr)
 		return cacheErr
 	}
 	rec.LocalPath, rec.ImageURL = canonicalPath, canonicalURL
@@ -152,16 +215,34 @@ func (s *ImageService) Generate(ctx context.Context, rec *models.ImageGeneration
 	now := response.Now()
 	rec.CompletedAt = &now
 	rec.UpdatedAt = now
-	scopedDB(db.DB, rec.OrganizationID).Save(rec)
-
-	// side-effects: update character/scene/storyboard
-	s.ApplySideEffects(rec)
-	registerAsset(models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID})
-	if s.Jobs != nil {
-		result, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
-		_ = s.Jobs.SetSucceededByTargetOrganization(rec.OrganizationID, "image_generation", rec.ID, string(result))
+	asset := models.Asset{OrganizationID: rec.OrganizationID, DramaID: rec.DramaID, StoryboardID: rec.StoryboardID, Name: "生成图片", Type: "image", Category: rec.ImageType, URL: rec.ImageURL, LocalPath: rec.LocalPath, ContentHash: contentHash, FileSize: size, ImageGenID: &rec.ID}
+	commit := func(database *gorm.DB) error {
+		if err := scopedDB(database, rec.OrganizationID).Save(rec).Error; err != nil {
+			return err
+		}
+		if err := applyImageSideEffects(database, rec); err != nil {
+			return err
+		}
+		return registerAssetWithDB(database, asset)
 	}
-	return nil
+	if s.Jobs != nil {
+		resultJSON, _ := json.Marshal(map[string]string{"image_url": rec.ImageURL})
+		return s.Jobs.SetSucceededCurrentWith(context.Background(), *rec.JobID, string(resultJSON), commit)
+	}
+	return db.DB.Transaction(commit)
+}
+
+func (s *ImageService) failCurrentGeneration(rec *models.ImageGeneration, generationErr error) {
+	if generationErr == nil {
+		return
+	}
+	rec.Status, rec.ErrorMsg, rec.UpdatedAt = "failed", generationErr.Error(), response.Now()
+	if s.Jobs != nil && rec.JobID != nil {
+		_ = s.Jobs.SetFailedCurrentWith(context.Background(), *rec.JobID, generationErr.Error(), func(tx *gorm.DB) error { return scopedDB(tx, rec.OrganizationID).Save(rec).Error })
+		return
+	}
+	_ = scopedDB(db.DB, rec.OrganizationID).Save(rec).Error
+	s.failJob(rec.OrganizationID, rec.ID, generationErr)
 }
 
 func parseImageReferenceURLs(raw string) ([]string, error) {
@@ -199,6 +280,10 @@ func (s *ImageService) failJob(organizationID, resourceID uint, err error) {
 }
 
 func (s *ImageService) ApplySideEffects(rec *models.ImageGeneration) {
+	_ = applyImageSideEffects(db.DB, rec)
+}
+
+func applyImageSideEffects(database *gorm.DB, rec *models.ImageGeneration) error {
 	ts := response.Now()
 	scope := func(q *gorm.DB) *gorm.DB {
 		if rec.OrganizationID != 0 {
@@ -207,14 +292,18 @@ func (s *ImageService) ApplySideEffects(rec *models.ImageGeneration) {
 		return q
 	}
 	if rec.CharacterID != nil {
-		scope(db.DB.Model(&models.Character{})).Where("id = ?", *rec.CharacterID).Updates(map[string]any{
+		if err := scope(database.Model(&models.Character{})).Where("id = ?", *rec.CharacterID).Updates(map[string]any{
 			"image_url": rec.ImageURL, "local_path": rec.LocalPath, "updated_at": ts,
-		})
+		}).Error; err != nil {
+			return err
+		}
 	}
 	if rec.SceneID != nil {
-		scope(db.DB.Model(&models.Scene{})).Where("id = ?", *rec.SceneID).Updates(map[string]any{
+		if err := scope(database.Model(&models.Scene{})).Where("id = ?", *rec.SceneID).Updates(map[string]any{
 			"image_url": rec.ImageURL, "local_path": rec.LocalPath, "status": "completed", "updated_at": ts,
-		})
+		}).Error; err != nil {
+			return err
+		}
 	}
 	if rec.StoryboardID != nil {
 		updates := map[string]any{"updated_at": ts}
@@ -226,13 +315,18 @@ func (s *ImageService) ApplySideEffects(rec *models.ImageGeneration) {
 		default:
 			updates["first_frame_image"] = rec.ImageURL
 		}
-		scope(db.DB.Model(&models.Storyboard{})).Where("id = ?", *rec.StoryboardID).Updates(updates)
+		if err := scope(database.Model(&models.Storyboard{})).Where("id = ?", *rec.StoryboardID).Updates(updates).Error; err != nil {
+			return err
+		}
 	}
 	if rec.PropID != nil {
-		scope(db.DB.Model(&models.Prop{})).Where("id = ?", *rec.PropID).Updates(map[string]any{
+		if err := scope(database.Model(&models.Prop{})).Where("id = ?", *rec.PropID).Updates(map[string]any{
 			"image_url": rec.ImageURL, "local_path": rec.LocalPath, "updated_at": ts,
-		})
+		}).Error; err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (s *ImageService) Download(ctx context.Context, url, subdir string) (string, error) {

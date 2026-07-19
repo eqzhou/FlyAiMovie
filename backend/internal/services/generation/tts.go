@@ -13,9 +13,11 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
+	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 var (
@@ -33,12 +35,15 @@ func (s *TTSService) GenerateForStoryboard(ctx context.Context, storyboardID uin
 	if err := db.DB.First(&sb, storyboardID).Error; err != nil {
 		return "", err
 	}
-	return s.generateForStoryboard(ctx, &sb, audioConfigID, sb.OrganizationID)
+	return s.generateForStoryboard(ctx, &sb, audioConfigID, sb.OrganizationID, nil, 0, "")
 }
 
-func (s *TTSService) generateForStoryboard(ctx context.Context, sb *models.Storyboard, audioConfigID *uint, organizationID uint) (string, error) {
+func (s *TTSService) generateForStoryboard(ctx context.Context, sb *models.Storyboard, audioConfigID *uint, organizationID uint, jobService *jobs.Service, jobID uint, owner string) (string, error) {
 	if sb == nil {
 		return "", fmt.Errorf("storyboard is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	speaker, text, ignorable := parseDialogue(sb.Dialogue)
 	if ignorable {
@@ -102,6 +107,9 @@ func (s *TTSService) generateForStoryboard(ctx context.Context, sb *models.Story
 	if err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var audio []byte
 	if len(res.AudioBytes) > 0 {
 		audio = res.AudioBytes
@@ -114,19 +122,40 @@ func (s *TTSService) generateForStoryboard(ctx context.Context, sb *models.Story
 		return "", err
 	}
 	_ = abs
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	url := s.Store.PublicURL(rel)
 	canonicalPath, canonicalURL, contentHash, size, cacheErr := cacheGeneratedFile(s.Cache, s.Store, organizationID, "storyboard_tts", sb.ID, "audio", rel, url, "audio/mpeg")
 	if cacheErr != nil {
 		return "", cacheErr
 	}
-	rel, url = canonicalPath, canonicalURL
-	query := db.DB.Model(&models.Storyboard{}).Where("id = ?", sb.ID)
-	if organizationID != 0 {
-		query = query.Where("organization_id = ?", organizationID)
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	query.Updates(map[string]any{"tts_audio_url": url, "updated_at": response.Now()})
+	rel, url = canonicalPath, canonicalURL
 	episodeID := sb.EpisodeID
-	registerAsset(models.Asset{OrganizationID: organizationID, EpisodeID: &episodeID, StoryboardID: &sb.ID, Name: "镜头配音", Type: "audio", Category: "tts", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size})
+	asset := models.Asset{OrganizationID: organizationID, EpisodeID: &episodeID, StoryboardID: &sb.ID, Name: "镜头配音", Type: "audio", Category: "tts", URL: url, LocalPath: rel, ContentHash: contentHash, FileSize: size}
+	commit := func(database *gorm.DB) error {
+		query := database.Model(&models.Storyboard{}).Where("id = ?", sb.ID)
+		if organizationID != 0 {
+			query = query.Where("organization_id = ?", organizationID)
+		}
+		if err := query.Updates(map[string]any{"tts_audio_url": url, "updated_at": response.Now()}).Error; err != nil {
+			return err
+		}
+		return registerAssetWithDB(database, asset)
+	}
+	if jobID > 0 {
+		if jobService == nil {
+			return "", jobs.ErrTerminalJob
+		}
+		if err := jobService.SetSucceededOwnedWith(ctx, jobID, owner, `{"status":"completed"}`, commit); err != nil {
+			return "", err
+		}
+	} else if err := db.DB.Transaction(commit); err != nil {
+		return "", err
+	}
 	return url, nil
 }
 
@@ -138,23 +167,34 @@ func (s *TTSService) GenerateForStoryboardOrganization(ctx context.Context, orga
 	if err := db.DB.Where("organization_id = ? AND id = ? AND deleted_at IS NULL", organizationID, storyboardID).First(&sb).Error; err != nil {
 		return "", err
 	}
-	return s.generateForStoryboard(ctx, &sb, audioConfigID, organizationID)
+	return s.generateForStoryboard(ctx, &sb, audioConfigID, organizationID, nil, 0, "")
+}
+
+func (s *TTSService) GenerateForStoryboardOrganizationOwned(ctx context.Context, organizationID, storyboardID uint, audioConfigID *uint, jobService *jobs.Service, jobID uint, owner string) (string, error) {
+	var sb models.Storyboard
+	if err := db.DB.Where("organization_id = ? AND id = ? AND deleted_at IS NULL", organizationID, storyboardID).First(&sb).Error; err != nil {
+		return "", err
+	}
+	return s.generateForStoryboard(ctx, &sb, audioConfigID, organizationID, jobService, jobID, owner)
 }
 
 func (s *TTSService) GenerateVoiceSample(ctx context.Context, characterName, voiceID string, audioConfigID *uint) (string, error) {
-	return s.generateVoiceSample(ctx, 0, characterName, voiceID, audioConfigID)
+	return s.generateVoicePreview(ctx, 0, fmt.Sprintf("你好，我是%s，这是我的音色试听。", characterName), voiceID, audioConfigID)
 }
 
 func (s *TTSService) GenerateVoiceSampleOrganization(ctx context.Context, organizationID uint, characterName, voiceID string, audioConfigID *uint) (string, error) {
-	return s.generateVoiceSample(ctx, organizationID, characterName, voiceID, audioConfigID)
+	return s.generateVoicePreview(ctx, organizationID, fmt.Sprintf("你好，我是%s，这是我的音色试听。", characterName), voiceID, audioConfigID)
 }
 
-func (s *TTSService) generateVoiceSample(ctx context.Context, organizationID uint, characterName, voiceID string, audioConfigID *uint) (string, error) {
+func (s *TTSService) GenerateVoicePreviewOrganization(ctx context.Context, organizationID uint, text, voiceID string, audioConfigID *uint) (string, error) {
+	return s.generateVoicePreview(ctx, organizationID, text, voiceID, audioConfigID)
+}
+
+func (s *TTSService) generateVoicePreview(ctx context.Context, organizationID uint, text, voiceID string, audioConfigID *uint) (string, error) {
 	cfg, err := ai.GetTaskConfigOrganization(organizationID, "audio", audioConfigID)
 	if err != nil {
 		return "", err
 	}
-	text := fmt.Sprintf("你好，我是%s，这是我的音色试听。", characterName)
 	adapter := adapters.GetTTSAdapter(cfg.Provider)
 	res, err := adapter.Generate(ctx, adapters.AIConfig{
 		Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,

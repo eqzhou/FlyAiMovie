@@ -195,6 +195,12 @@ func (s *Server) updateDrama(c *gin.Context) {
 					return
 				}
 			}
+			if k == "thumbnail" && v != "" {
+				if err := validateLocalMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
 			updates[k] = v
 		}
 	}

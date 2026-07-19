@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -48,9 +47,12 @@ func (a *OpenAIImageAdapter) Generate(ctx context.Context, cfg AIConfig, in Imag
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("openai image error %d: %s", resp.StatusCode, string(data))
+		return nil, fmt.Errorf("openai image request failed (HTTP %d)", resp.StatusCode)
+	}
+	data, err := readProviderResponse(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	var parsed struct {
 		Data []struct {

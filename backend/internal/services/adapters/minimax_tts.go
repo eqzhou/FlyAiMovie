@@ -117,26 +117,21 @@ func (a *MiniMaxTTSAdapter) Generate(ctx context.Context, cfg AIConfig, in TTSIn
 		return nil, fmt.Errorf("minimax tts: read response: %w", err)
 	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("minimax tts: HTTP %d: %s", resp.StatusCode, miniMaxErrorMessage(data))
+		return nil, fmt.Errorf("minimax tts: provider request failed with HTTP %d", resp.StatusCode)
 	}
 	var parsed struct {
 		Data struct {
 			Audio string `json:"audio"`
 		} `json:"data"`
 		BaseResp struct {
-			StatusCode int    `json:"status_code"`
-			StatusMsg  string `json:"status_msg"`
+			StatusCode int `json:"status_code"`
 		} `json:"base_resp"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("minimax tts: decode response: %w", err)
 	}
 	if parsed.BaseResp.StatusCode != 0 {
-		msg := strings.TrimSpace(parsed.BaseResp.StatusMsg)
-		if msg == "" {
-			msg = "provider returned an error"
-		}
-		return nil, fmt.Errorf("minimax tts: provider status %d: %s", parsed.BaseResp.StatusCode, msg)
+		return nil, fmt.Errorf("minimax tts: provider status %d", parsed.BaseResp.StatusCode)
 	}
 	audioHex := strings.TrimSpace(parsed.Data.Audio)
 	if audioHex == "" {
@@ -189,34 +184,4 @@ func miniMaxVoiceEndpoint(base string) (string, error) {
 	query.Set("voice_type", "all")
 	u.RawQuery = query.Encode()
 	return u.String(), nil
-}
-
-func miniMaxErrorMessage(data []byte) string {
-	var payload struct {
-		BaseResp struct {
-			StatusCode int    `json:"status_code"`
-			StatusMsg  string `json:"status_msg"`
-		} `json:"base_resp"`
-		Message string `json:"message"`
-		Error   string `json:"error"`
-	}
-	if json.Unmarshal(data, &payload) == nil {
-		if msg := strings.TrimSpace(payload.BaseResp.StatusMsg); msg != "" {
-			return msg
-		}
-		if msg := strings.TrimSpace(payload.Message); msg != "" {
-			return msg
-		}
-		if msg := strings.TrimSpace(payload.Error); msg != "" {
-			return msg
-		}
-	}
-	msg := strings.TrimSpace(string(data))
-	if len(msg) > 2048 {
-		msg = msg[:2048]
-	}
-	if msg == "" {
-		return "provider returned an error"
-	}
-	return msg
 }

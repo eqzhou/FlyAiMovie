@@ -19,6 +19,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/security"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
+	"github.com/eqzhou/flyaimovie/internal/services/production"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
 
@@ -76,6 +77,8 @@ func main() {
 	// background poller for async image/video jobs
 	async := &generation.AsyncRunner{Images: srv.Images, Videos: srv.Videos, TTS: srv.TTS, Jobs: jobs.New(gdb), Store: store, Cache: srv.Cache}
 	async.Start()
+	productionWorker := &production.Worker{Service: srv.Productions}
+	productionWorker.Start()
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	if p := os.Getenv("PORT"); p != "" {
 		addr = cfg.Server.Host + ":" + p
@@ -99,6 +102,7 @@ func main() {
 	}()
 	<-shutdownCtx.Done()
 	async.Stop()
+	productionWorker.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {

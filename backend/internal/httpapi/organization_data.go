@@ -78,12 +78,13 @@ func loadExportRows(out gin.H, organizationID uint) error {
 		{"episode_characters", &[]models.EpisodeCharacter{}}, {"scenes", &[]models.Scene{}}, {"episode_scenes", &[]models.EpisodeScene{}},
 		{"storyboards", &[]models.Storyboard{}}, {"storyboard_characters", &[]models.StoryboardCharacter{}}, {"props", &[]models.Prop{}},
 		{"assets", &[]models.Asset{}}, {"grid_history", &[]models.GridHistory{}}, {"image_generations", &[]models.ImageGeneration{}},
-		{"video_generations", &[]models.VideoGeneration{}}, {"video_merges", &[]models.VideoMerge{}}, {"generation_jobs", &[]models.GenerationJob{}},
+		{"video_generations", &[]models.VideoGeneration{}}, {"video_merges", &[]models.VideoMerge{}}, {"generation_jobs", &[]models.GenerationJob{}}, {"production_runs", &[]models.ProductionRun{}},
 		{"job_events", &[]models.JobEvent{}}, {"agent_runs", &[]models.AgentRun{}}, {"agent_run_events", &[]models.AgentRunEvent{}},
 		{"media_migrations", &[]models.MediaMigration{}},
 		{"media_deletion_tasks", &[]models.MediaDeletionTask{}},
 		{"media_cache_objects", &[]models.MediaCacheObject{}}, {"media_cache_references", &[]models.MediaCacheReference{}},
 		{"agent_configs", &[]models.AgentConfig{}}, {"voices", &[]models.AIVoice{}}, {"audit_logs", &[]models.AuditLog{}}, {"quota", &[]models.OrganizationQuota{}},
+		{"prompt_templates", &[]models.PromptTemplate{}}, {"prompt_template_revisions", &[]models.PromptTemplateRevision{}},
 		{"invitations", &[]models.OrganizationInvitation{}},
 	}
 	for _, query := range queries {
@@ -150,8 +151,9 @@ func purgeOrganization(database *gorm.DB, store *storage.LocalStorage, organizat
 		}
 		resources := []any{
 			&models.AgentRunEvent{}, &models.AgentRun{}, &models.JobEvent{}, &models.MediaMigration{}, &models.MediaCacheReference{}, &models.MediaCacheObject{},
+			&models.PromptTemplateRevision{}, &models.PromptTemplate{},
 			&models.StoryboardCharacter{}, &models.EpisodeCharacter{}, &models.EpisodeScene{}, &models.Asset{}, &models.GridHistory{},
-			&models.ImageGeneration{}, &models.VideoGeneration{}, &models.VideoMerge{}, &models.GenerationJob{}, &models.Storyboard{},
+			&models.ImageGeneration{}, &models.VideoGeneration{}, &models.VideoMerge{}, &models.GenerationJob{}, &models.ProductionRun{}, &models.Storyboard{},
 			&models.CharacterTemplate{}, &models.Character{}, &models.Scene{}, &models.Prop{}, &models.Episode{}, &models.Drama{}, &models.AIServiceConfig{},
 			&models.AIVoice{}, &models.AgentConfig{}, &models.AuditLog{}, &models.OrganizationQuota{}, &models.Session{}, &models.Membership{},
 			&models.OrganizationInvitation{},

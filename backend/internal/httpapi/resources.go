@@ -198,9 +198,12 @@ func (s *Server) characterVoiceSample(c *gin.Context) {
 	}
 	var ep models.Episode
 	if body.EpisodeID > 0 {
-		organizationDB(c).First(&ep, body.EpisodeID)
+		if err := organizationDB(c).Where("id = ? AND drama_id = ?", body.EpisodeID, ch.DramaID).First(&ep).Error; err != nil {
+			response.BadRequest(c, "episode does not belong to character drama")
+			return
+		}
 	}
-	url, err := s.TTS.GenerateVoiceSample(c.Request.Context(), ch.Name, ch.VoiceStyle, ep.AudioConfigID)
+	url, err := s.TTS.GenerateVoiceSampleOrganization(c.Request.Context(), currentOrganizationID(c), ch.Name, ch.VoiceStyle, ep.AudioConfigID)
 	if err != nil {
 		response.BadRequest(c, "TTS 生成失败: "+err.Error())
 		return
@@ -596,6 +599,11 @@ func (s *Server) updateStoryboard(c *gin.Context) {
 		if ok {
 			if k == "reference_images" {
 				if err := validateReferenceMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			} else if (k == "first_frame_image" || k == "last_frame_image" || k == "composed_image" || k == "video_url" || k == "tts_audio_url") && v != "" {
+				if err := validateLocalMediaOwnership(c, v); err != nil {
 					response.BadRequest(c, err.Error())
 					return
 				}

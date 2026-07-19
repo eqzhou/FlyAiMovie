@@ -37,6 +37,29 @@ func TestDownloadAuthorizedSendsBearerAndStoresVideo(t *testing.T) {
 	}
 }
 
+func TestDownloadAuthorizedRejectsCrossAuthorityRedirect(t *testing.T) {
+	var targetAuthorization string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p'}, bytes.Repeat([]byte{1}, 600)...))
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/content", http.StatusFound)
+	}))
+	defer source.Close()
+
+	store := storage.NewLocal(t.TempDir())
+	_, err := downloadAuthorizedWithClient(context.Background(), source.Client(), store, source.URL+"/content", "videos", "video", "secret")
+	if err == nil || !strings.Contains(err.Error(), "redirect changed host") {
+		t.Fatalf("cross-authority redirect was not rejected: %v", err)
+	}
+	if targetAuthorization != "" {
+		t.Fatalf("bearer token reached redirect target: %q", targetAuthorization)
+	}
+}
+
 func TestDownloadRejectsStatusTypeAndDeclaredSize(t *testing.T) {
 	store := storage.NewLocal(t.TempDir())
 	for name, handler := range map[string]http.HandlerFunc{

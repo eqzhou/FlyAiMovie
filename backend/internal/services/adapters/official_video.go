@@ -53,7 +53,11 @@ func (a *MiniMaxVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID str
 	}
 	status := normalizeVideoStatus(firstString(data, "status", "task_status"))
 	if status != "completed" {
-		return &VideoPollResult{Status: status, Error: firstString(data, "error", "message")}, nil
+		result := &VideoPollResult{Status: status}
+		if status == "failed" {
+			result.Error = "minimax reported video generation failure"
+		}
+		return result, nil
 	}
 	if direct := firstString(data, "video_url", "download_url"); direct != "" {
 		return &VideoPollResult{Status: "completed", VideoURL: direct}, nil
@@ -117,7 +121,11 @@ func (a *VolcengineVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID 
 	if videoURL == "" {
 		videoURL = firstString(data, "video_url", "url")
 	}
-	return &VideoPollResult{Status: status, VideoURL: videoURL, Error: firstString(data, "error", "message")}, nil
+	result := &VideoPollResult{Status: status, VideoURL: videoURL}
+	if status == "failed" {
+		result.Error = "volcengine reported video generation failure"
+	}
+	return result, nil
 }
 
 func (a *AliyunVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoGenInput) (*VideoGenResult, error) {
@@ -166,9 +174,9 @@ func (a *AliyunVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID stri
 			videoURL = firstString(result, "video_url", "url")
 		}
 	}
-	errorMessage := firstString(output, "message", "code")
-	if errorMessage == "" {
-		errorMessage = firstString(data, "message", "code")
+	errorMessage := ""
+	if status == "failed" {
+		errorMessage = "aliyun reported video generation failure"
 	}
 	return &VideoPollResult{Status: status, VideoURL: videoURL, Error: errorMessage}, nil
 }
@@ -205,7 +213,7 @@ func providerJSON(ctx context.Context, method, endpoint, apiKey string, headers 
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("provider request failed with HTTP %d", resp.StatusCode)
 	}
 	var data map[string]any
 	if err := json.Unmarshal(raw, &data); err != nil {
@@ -220,7 +228,7 @@ func providerBaseError(provider string, data map[string]any) error {
 	if code == "" || code == "0" {
 		return nil
 	}
-	return fmt.Errorf("%s API error %s: %s", provider, code, firstString(base, "status_msg"))
+	return fmt.Errorf("%s API error %s", provider, code)
 }
 
 func normalizeVideoStatus(status string) string {

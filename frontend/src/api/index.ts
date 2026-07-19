@@ -128,6 +128,8 @@ export const gridAPI = {
   generate: (d: any) => api.post('/grid/generate', d),
   status: (id: number) => api.get(`/grid/status/${id}`),
   split: (d: any) => api.post('/grid/split', d),
+  assignCell: (historyId: number, d: { cell_index: number; storyboard_id: number; frame_type: string }) =>
+    api.post(`/grid/history/${historyId}/assign`, d),
   history: (params?: { episode_id?: number; drama_id?: number }) => {
     const q = new URLSearchParams()
     if (params?.episode_id) q.set('episode_id', String(params.episode_id))
@@ -175,6 +177,18 @@ export const jobsAPI = {
 	 batchCancel: (jobIds: number[]) => api.post('/jobs/batch-cancel', { job_ids: jobIds }),
 }
 
+export const productionAPI = {
+  list: (episodeId?: number, limit = 20) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (episodeId) q.set('episode_id', String(episodeId))
+    return api.get<any[]>(`/productions?${q}`)
+  },
+  get: (id: number) => api.get(`/productions/${id}`),
+  create: (dramaId: number, episodeId: number) => api.post('/productions', { drama_id: dramaId, episode_id: episodeId }),
+  cancel: (id: number) => api.post(`/productions/${id}/cancel`),
+  retry: (id: number) => api.post(`/productions/${id}/retry`),
+}
+
 export const agentAPI = {
   chat: (type: string, data: any) => api.post(`/agent/${type}/chat`, data),
 	 runs: (params?: { episode_id?: number; status?: string; agent_type?: string }) => {
@@ -186,12 +200,14 @@ export const agentAPI = {
 	 },
 	 run: (id: number) => api.get(`/agent-runs/${id}`),
 	 cancelRun: (id: number) => api.post(`/agent-runs/${id}/cancel`),
+	 retryRun: (id: number) => api.post(`/agent-runs/${id}/retry`),
 }
 
 export const settingsAPI = {
   aiConfigs: () => api.get('/ai-configs'),
   createAIConfig: (d: any) => api.post('/ai-configs', d),
   updateAIConfig: (id: number, d: any) => api.put(`/ai-configs/${id}`, d),
+  testAIConfigDraft: (d: any) => api.post<{ status: string; provider: string; model: string; latency_ms: number; detail: string }>('/ai-configs/test', d),
   testAIConfig: (id: number) => api.post<{ status: string; provider: string; model: string; latency_ms: number; detail: string }>(`/ai-configs/${id}/test`, {}),
   deleteAIConfig: (id: number) => api.del(`/ai-configs/${id}`),
   providers: () => api.get('/ai-providers'),
@@ -201,10 +217,14 @@ export const settingsAPI = {
   createPromptTemplate: (d: any) => api.post('/prompt-templates', d),
   updatePromptTemplate: (id: number, d: any) => api.put(`/prompt-templates/${id}`, d),
   deletePromptTemplate: (id: number) => api.del(`/prompt-templates/${id}`),
+  previewPromptDraft: (content: string, variables: Record<string, string>) => api.post<{ rendered: string; variables: string[] }>('/prompt-templates/preview', { content, variables }),
   previewPromptTemplate: (id: number, variables: Record<string, string>) => api.post<{ rendered: string; version: number }>(`/prompt-templates/${id}/preview`, { variables }),
   restorePromptTemplate: (id: number) => api.post(`/prompt-templates/${id}/restore-default`, {}),
-  voices: () => api.get('/ai-voices'),
+  promptTemplateRevisions: (id: number) => api.get<any[]>(`/prompt-templates/${id}/revisions`),
+  restorePromptTemplateRevision: (id: number, version: number) => api.post(`/prompt-templates/${id}/revisions/${version}/restore`, {}),
+  voices: (includeInactive = false) => api.get(`/ai-voices${includeInactive ? '?include_inactive=1' : ''}`),
   syncVoices: () => api.post('/ai-voices/sync'),
+  previewVoice: (voiceId: string, text: string, configId?: number) => api.post<{ voice_id: string; provider: string; audio_url: string }>(`/ai-voices/${encodeURIComponent(voiceId)}/preview`, { text, ...(configId ? { config_id: configId } : {}) }),
 }
 
 export const auditAPI = {

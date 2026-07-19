@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { FlaskConical, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
 
@@ -9,6 +10,7 @@ const router = useRouter()
 const providers = ref<any[]>([])
 const agents = ref<any[]>([])
 const promptTemplates = ref<any[]>([])
+const voiceCatalog = ref<any[]>([])
 const form = ref({
   service_type: 'text',
   provider: 'openai',
@@ -20,11 +22,17 @@ const form = ref({
   is_active: true,
 })
 const toast = ref('')
+const loading = ref(true)
+const loadError = ref('')
+const serviceError = ref('')
+const savingService = ref(false)
+const testingDraftService = ref(false)
+const serviceTestResult = ref('')
 const agentForm = ref<any | null>(null)
-const activeSection = ref<'services' | 'agents' | 'prompts' | 'organization' | 'security'>('services')
+const activeSection = ref<'services' | 'agents' | 'prompts' | 'voices' | 'organization' | 'security'>('services')
 const showServiceModal = ref(false)
 const editingConfigID = ref<number | null>(null)
-const originalProvider = ref('')
+const originalServiceIdentity = ref({ service_type: '', provider: '', base_url: '', api_key_set: false })
 const hydratingServiceForm = ref(false)
 const testingConfigID = ref<number | null>(null)
 const showMemberModal = ref(false)
@@ -32,13 +40,45 @@ const showInviteModal = ref(false)
 const showPasswordModal = ref(false)
 const showDeleteModal = ref(false)
 const promptForm = ref<any | null>(null)
+const promptContentInput = ref<HTMLTextAreaElement | null>(null)
+const promptQuery = ref('')
+const promptCategory = ref('all')
+const promptState = ref('all')
+const promptFormError = ref('')
+const promptDraftPreview = ref('')
+const previewingPromptDraft = ref(false)
+const savingPrompt = ref(false)
 const previewTemplate = ref<any | null>(null)
+const revisionTemplate = ref<any | null>(null)
+const promptRevisions = ref<any[]>([])
+const restoringRevision = ref<number | null>(null)
+const promptHistoryLoading = ref(false)
+const promptHistoryError = ref('')
+const promptActionNotice = ref('')
+let promptHistoryRequestID = 0
+let promptDraftRequestID = 0
+const voiceQuery = ref('')
+const voicePreviewText = ref('欢迎来到 FlyAiMovie，这是音色试听。')
+const previewingVoiceID = ref('')
+const syncingVoices = ref(false)
+const voicePreviewURLs = ref<Record<string, string>>({})
 const previewVariables = ref<Record<string, string>>({})
 const previewResult = ref('')
 const previewError = ref('')
 const builtInPromptKeys = new Set(['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'grid_prompt_generator', 'storyboard_image', 'storyboard_video', 'grid_composition'])
 const promptCategoryLabels: Record<string, string> = { agent_system: 'Agent 系统', grid: '宫格', image: '图片', video: '视频', audio: '音频' }
-const promptVariableLabels: Record<string, string> = { drama_title: '项目标题', episode_title: '剧集标题', user_instruction: '用户要求', character_names: '角色名称', scene_names: '场景名称' }
+const promptVariableLabels: Record<string, string> = {
+  drama_title: '项目标题', episode_title: '剧集标题', user_instruction: '用户要求',
+  character_names: '角色名称', scene_names: '场景名称', shot_title: '镜头标题',
+  shot_description: '镜头描述', image_prompt: '图片提示词', video_prompt: '视频提示词',
+  grid_rows: '宫格行数', grid_cols: '宫格列数', grid_mode: '宫格模式',
+}
+const promptExampleValues: Record<string, string> = {
+  drama_title: '示例短剧', episode_title: '第一集', user_instruction: '保持人物与画面连续',
+  character_names: '林夏、周远', scene_names: '雨夜车站、旧城区', shot_title: '雨中重逢',
+  shot_description: '主角穿过站台，在列车灯光中停下', image_prompt: '电影感雨夜站台，人物清晰',
+  video_prompt: '缓慢推镜，雨水与衣摆自然运动', grid_rows: '3', grid_cols: '3', grid_mode: '首帧',
+}
 const providerChoices: Record<string, Array<{ value: string; label: string; base: string }>> = {
   text: [
     { value: 'openai', label: 'OpenAI / Compatible', base: 'https://api.openai.com' },
@@ -72,6 +112,7 @@ const quota = ref({ daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 
 const cache = ref({ objects: 0, references: 0, bytes: 0, orphaned: 0 })
 const canManageQuota = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
 const canManageSettings = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
+const canPreviewVoices = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const members = ref<any[]>([])
 const memberForm = ref({ email: '', display_name: '', password: '', role: 'editor' })
 const inviteForm = ref({ email: '', role: 'editor', ttl_hours: 72 })
@@ -80,6 +121,33 @@ const invitations = ref<any[]>([])
 const passwordForm = ref({ current: '', next: '', confirm: '' })
 const deleteForm = ref({ password: '', confirmation: '' })
 const availableProviders = computed(() => providerChoices[form.value.service_type] || [])
+const filteredVoices = computed(() => {
+  const keyword = voiceQuery.value.trim().toLocaleLowerCase('zh-CN')
+  if (!keyword) return voiceCatalog.value
+  return voiceCatalog.value.filter((voice) => [voice.voice_name, voice.voice_id, voice.language, voice.provider, voice.capabilities]
+    .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword)))
+})
+const filteredPromptTemplates = computed(() => {
+  const keyword = promptQuery.value.trim().toLocaleLowerCase('zh-CN')
+  return promptTemplates.value.filter((template) => {
+    const matchesQuery = !keyword || [template.name, template.key, template.description, template.content]
+      .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword))
+    const matchesCategory = promptCategory.value === 'all' || template.category === promptCategory.value
+    const matchesState = promptState.value === 'all' || (promptState.value === 'active' ? template.is_active !== false : template.is_active === false)
+    return matchesQuery && matchesCategory && matchesState
+  })
+})
+const serviceTypeLabels: Record<string, string> = { text: '文本', image: '图片', video: '视频', audio: '音频 / TTS' }
+const agentTypeLabels: Record<string, string> = {
+  script_rewriter: '剧本改写', extractor: '角色场景提取', storyboard_breaker: '分镜拆解',
+  voice_assigner: '音色分配', grid_prompt_generator: '宫格提示词',
+}
+
+function serviceTypeLabel(value: string) { return serviceTypeLabels[value] || value }
+function providerLabel(config: any) {
+  return providerChoices[config.service_type]?.find((choice) => choice.value === config.provider)?.label || config.provider
+}
+function agentTypeLabel(value: string) { return agentTypeLabels[value] || value }
 
 function show(m: string) {
   toast.value = m
@@ -87,16 +155,31 @@ function show(m: string) {
 }
 
 async function load() {
-  configs.value = await settingsAPI.aiConfigs()
-  providers.value = await settingsAPI.providers()
-  agents.value = await settingsAPI.agentConfigs()
-  promptTemplates.value = await settingsAPI.promptTemplates()
-  quota.value = await quotaAPI.get()
-  cache.value = await cacheAPI.stats()
+  loading.value = true
+  loadError.value = ''
+  const requests: Array<{ label: string; request: Promise<any>; apply: (value: any) => void }> = [
+    { label: 'AI 服务', request: settingsAPI.aiConfigs(), apply: (value: any) => { configs.value = value } },
+    { label: '厂商目录', request: settingsAPI.providers(), apply: (value: any) => { providers.value = value } },
+    { label: 'Agent', request: settingsAPI.agentConfigs(), apply: (value: any) => { agents.value = value } },
+    { label: '提示词', request: settingsAPI.promptTemplates(), apply: (value: any) => { promptTemplates.value = value } },
+    { label: '音色', request: settingsAPI.voices(true), apply: (value: any) => { voiceCatalog.value = value } },
+    { label: '配额', request: quotaAPI.get(), apply: (value: any) => { quota.value = value } },
+    { label: '缓存', request: cacheAPI.stats(), apply: (value: any) => { cache.value = value } },
+  ]
   if (canManageQuota.value && authStore.state.enabled) {
-    members.value = await memberAPI.list()
-    invitations.value = await memberAPI.invitations()
+    requests.push(
+      { label: '成员', request: memberAPI.list(), apply: (value: any) => { members.value = value } },
+      { label: '邀请', request: memberAPI.invitations(), apply: (value: any) => { invitations.value = value } },
+    )
   }
+  const results = await Promise.allSettled(requests.map((item) => item.request))
+  const failures: string[] = []
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') requests[index].apply(result.value)
+    else failures.push(result.reason instanceof Error ? result.reason.message : `${requests[index].label}加载失败`)
+  })
+  loadError.value = failures.join('；')
+  loading.value = false
 }
 
 async function addMember() {
@@ -190,17 +273,47 @@ function emptyServiceForm() {
   return { service_type: 'text', provider: 'openai', name: '', base_url: 'https://api.openai.com', api_key: '', model: '', is_default: true, is_active: true }
 }
 
+function emptyServiceIdentity() {
+  return { service_type: '', provider: '', base_url: '', api_key_set: false }
+}
+
+function serviceValidationMessage() {
+  if (!form.value.name.trim()) return '名称必填'
+  const original = originalServiceIdentity.value
+  const identityChanged = Boolean(editingConfigID.value && (
+    original.service_type !== form.value.service_type
+    || original.provider !== form.value.provider
+    || original.base_url !== form.value.base_url.trim()
+  ))
+  if (identityChanged && original.api_key_set && !form.value.api_key) {
+    return '更改类型、厂商或 Base URL 后，请重新填写 API Key'
+  }
+  const keyOptional = ['mock', 'openai_local'].includes(form.value.provider)
+  const canReuseStoredKey = Boolean(editingConfigID.value && original.api_key_set && !identityChanged)
+  if (!keyOptional && !canReuseStoredKey && !form.value.api_key) return 'API Key 必填'
+  return ''
+}
+
 function openCreateService() {
+  serviceError.value = ''
+  serviceTestResult.value = ''
   editingConfigID.value = null
-  originalProvider.value = ''
+  originalServiceIdentity.value = emptyServiceIdentity()
   form.value = emptyServiceForm()
   showServiceModal.value = true
 }
 
 async function editService(config: any) {
+  serviceError.value = ''
+  serviceTestResult.value = ''
   hydratingServiceForm.value = true
   editingConfigID.value = config.id
-  originalProvider.value = config.provider
+  originalServiceIdentity.value = {
+    service_type: config.service_type,
+    provider: config.provider,
+    base_url: (config.base_url || '').trim(),
+    api_key_set: Boolean(config.api_key_set),
+  }
   form.value = {
     service_type: config.service_type,
     provider: config.provider,
@@ -217,23 +330,30 @@ async function editService(config: any) {
 }
 
 async function saveService() {
-  const keyOptional = ['mock', 'openai_local'].includes(form.value.provider)
-  const providerChanged = Boolean(editingConfigID.value && originalProvider.value !== form.value.provider)
-  if (!form.value.name || ((!editingConfigID.value || providerChanged) && !keyOptional && !form.value.api_key)) {
-    show(keyOptional ? '名称必填' : '名称和 API Key 必填')
+  serviceError.value = ''
+  const validationMessage = serviceValidationMessage()
+  if (validationMessage) {
+    serviceError.value = validationMessage
     return
   }
-  if (editingConfigID.value) {
-    await settingsAPI.updateAIConfig(editingConfigID.value, form.value)
-  } else {
-    await settingsAPI.createAIConfig(form.value)
+  savingService.value = true
+  try {
+    if (editingConfigID.value) {
+      await settingsAPI.updateAIConfig(editingConfigID.value, form.value)
+    } else {
+      await settingsAPI.createAIConfig(form.value)
+    }
+    form.value = { ...form.value, api_key: '' }
+    showServiceModal.value = false
+    show(editingConfigID.value ? 'AI 服务已更新' : 'AI 服务已添加')
+    editingConfigID.value = null
+    originalServiceIdentity.value = emptyServiceIdentity()
+    await load()
+  } catch (error) {
+    serviceError.value = error instanceof Error ? error.message : 'AI 服务保存失败'
+  } finally {
+    savingService.value = false
   }
-  form.value.api_key = ''
-  showServiceModal.value = false
-  show(editingConfigID.value ? 'AI 服务已更新' : 'AI 服务已添加')
-  editingConfigID.value = null
-  originalProvider.value = ''
-  await load()
 }
 
 async function testService(config: any) {
@@ -245,6 +365,25 @@ async function testService(config: any) {
     show(`连接失败：${error instanceof Error ? error.message : '未知错误'}`)
   } finally {
     testingConfigID.value = null
+  }
+}
+
+async function testDraftService() {
+  serviceError.value = ''
+  serviceTestResult.value = ''
+  const validationMessage = serviceValidationMessage()
+  if (validationMessage) {
+    serviceError.value = validationMessage
+    return
+  }
+  testingDraftService.value = true
+  try {
+    const result = await settingsAPI.testAIConfigDraft({ id: editingConfigID.value || undefined, ...form.value })
+    serviceTestResult.value = `${result.detail} · ${result.latency_ms} ms`
+  } catch (error) {
+    serviceError.value = `连接失败：${error instanceof Error ? error.message : '未知错误'}`
+  } finally {
+    testingDraftService.value = false
   }
 }
 
@@ -262,6 +401,21 @@ watch(() => form.value.provider, (provider) => {
   if (selected) form.value.base_url = selected.base
 })
 
+watch(() => form.value.is_active, (active) => {
+  if (!active) form.value = { ...form.value, is_default: false }
+})
+
+watch(form, () => {
+  if (!hydratingServiceForm.value && !testingDraftService.value) serviceTestResult.value = ''
+}, { deep: true })
+
+watch(() => promptForm.value?.content, () => {
+  promptDraftRequestID += 1
+  promptFormError.value = ''
+  promptDraftPreview.value = ''
+  previewingPromptDraft.value = false
+})
+
 async function remove(id: number) {
   if (!confirm('删除该配置？')) return
   await settingsAPI.deleteAIConfig(id)
@@ -269,8 +423,31 @@ async function remove(id: number) {
 }
 
 async function syncVoices() {
-  const res = await settingsAPI.syncVoices()
-  show(res.message || 'synced')
+  syncingVoices.value = true
+  try {
+    const res = await settingsAPI.syncVoices()
+    voiceCatalog.value = await settingsAPI.voices(true)
+    show(`已同步 ${res.count ?? voiceCatalog.value.length} 个音色`)
+  } catch (error) {
+    show(`同步失败：${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    syncingVoices.value = false
+  }
+}
+
+async function previewVoice(voice: any) {
+  const text = voicePreviewText.value.trim()
+  if (!text) { show('请填写试听文本'); return }
+  previewingVoiceID.value = voice.voice_id
+  try {
+    const result = await settingsAPI.previewVoice(voice.voice_id, text)
+    voicePreviewURLs.value = { ...voicePreviewURLs.value, [voice.voice_id]: result.audio_url }
+    show('试听已生成')
+  } catch (error) {
+    show(`试听失败：${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    previewingVoiceID.value = ''
+  }
 }
 
 function editAgent(agent: any) {
@@ -295,30 +472,106 @@ function promptVariables(template: any): string[] {
 function promptToken(variable: string) { return `{{${variable}}}` }
 function isBuiltInPrompt(template: any) { return builtInPromptKeys.has(template.key) }
 
+function resetPromptDraftFeedback() {
+  promptDraftRequestID += 1
+  promptFormError.value = ''
+  promptDraftPreview.value = ''
+  previewingPromptDraft.value = false
+}
+
 function openCreatePrompt() {
+  resetPromptDraftFeedback()
   promptForm.value = { id: null, key: '', name: '', category: 'image', description: '', content: '', is_active: true }
 }
 
+function duplicatePrompt(template: any) {
+  resetPromptDraftFeedback()
+  promptForm.value = {
+    id: null,
+    key: `${String(template.key || 'prompt').slice(0, 59)}_copy`,
+    name: `${template.name}副本`,
+    category: template.category,
+    description: template.description || '',
+    content: template.content,
+    is_active: template.is_active !== false,
+  }
+}
+
 function editPrompt(template: any) {
+  resetPromptDraftFeedback()
   promptForm.value = { id: template.id, key: template.key, name: template.name, category: template.category, description: template.description || '', content: template.content, is_active: template.is_active !== false }
+}
+
+function promptDraftVariables(content: string) {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const match of content.matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)) {
+    if (!seen.has(match[1])) {
+      seen.add(match[1])
+      names.push(match[1])
+    }
+  }
+  return names
+}
+
+async function previewPromptForm() {
+  if (!promptForm.value || !String(promptForm.value.content || '').trim()) {
+    promptFormError.value = '请先填写模板内容'
+    return
+  }
+  const requestID = ++promptDraftRequestID
+  previewingPromptDraft.value = true
+  promptFormError.value = ''
+  promptDraftPreview.value = ''
+  const content = String(promptForm.value.content)
+  const variables = Object.fromEntries(promptDraftVariables(content).map((name) => [name, promptExampleValues[name] || '示例内容']))
+  try {
+    const result = await settingsAPI.previewPromptDraft(content, variables)
+    if (requestID !== promptDraftRequestID || String(promptForm.value?.content || '') !== content) return
+    promptDraftPreview.value = result.rendered
+  } catch (error) {
+    if (requestID !== promptDraftRequestID || String(promptForm.value?.content || '') !== content) return
+    promptFormError.value = error instanceof Error ? error.message : '模板检查失败'
+  } finally {
+    if (requestID === promptDraftRequestID) previewingPromptDraft.value = false
+  }
+}
+
+async function insertPromptVariable(variable: string) {
+  if (!promptForm.value) return
+  const token = promptToken(variable)
+  const input = promptContentInput.value
+  const content = String(promptForm.value.content || '')
+  const start = input?.selectionStart ?? content.length
+  const end = input?.selectionEnd ?? start
+  promptForm.value = { ...promptForm.value, content: `${content.slice(0, start)}${token}${content.slice(end)}` }
+  await nextTick()
+  promptContentInput.value?.focus()
+  promptContentInput.value?.setSelectionRange(start + token.length, start + token.length)
 }
 
 async function savePrompt() {
   if (!promptForm.value) return
   const data = { key: promptForm.value.key, name: promptForm.value.name, category: promptForm.value.category, description: promptForm.value.description, content: promptForm.value.content, is_active: promptForm.value.is_active }
-  if (!data.key.trim() || !data.name.trim() || !data.content.trim()) { show('标识、名称和模板内容必填'); return }
+  if (!data.key.trim() || !data.name.trim() || !data.content.trim()) { promptFormError.value = '标识、名称和模板内容必填'; return }
+  savingPrompt.value = true
+  promptFormError.value = ''
   try {
     if (promptForm.value.id) await settingsAPI.updatePromptTemplate(promptForm.value.id, data)
     else await settingsAPI.createPromptTemplate(data)
     show(promptForm.value.id ? '提示词已更新' : '提示词已创建')
     promptForm.value = null
     promptTemplates.value = await settingsAPI.promptTemplates()
-  } catch (error) { show(`保存失败：${error instanceof Error ? error.message : '未知错误'}`) }
+  } catch (error) {
+    promptFormError.value = error instanceof Error ? error.message : '保存失败'
+  } finally {
+    savingPrompt.value = false
+  }
 }
 
 function openPreview(template: any) {
   previewTemplate.value = template
-  previewVariables.value = Object.fromEntries(promptVariables(template).map((name) => [name, '']))
+  previewVariables.value = Object.fromEntries(promptVariables(template).map((name) => [name, promptExampleValues[name] || '示例内容']))
   previewResult.value = ''
   previewError.value = ''
 }
@@ -340,6 +593,60 @@ async function restorePrompt(template: any) {
   await settingsAPI.restorePromptTemplate(template.id)
   promptTemplates.value = await settingsAPI.promptTemplates()
   show('已恢复内置模板')
+}
+
+async function openPromptHistory(template: any) {
+  const requestID = ++promptHistoryRequestID
+  const templateID = Number(template.id)
+  revisionTemplate.value = { ...template }
+  promptRevisions.value = []
+  promptHistoryError.value = ''
+  promptHistoryLoading.value = true
+  try {
+    const revisions = await settingsAPI.promptTemplateRevisions(templateID)
+    if (requestID !== promptHistoryRequestID || Number(revisionTemplate.value?.id) !== templateID) return
+    promptRevisions.value = revisions
+  } catch (error) {
+    if (requestID !== promptHistoryRequestID || Number(revisionTemplate.value?.id) !== templateID) return
+    promptHistoryError.value = error instanceof Error ? error.message : '版本历史加载失败'
+  } finally {
+    if (requestID === promptHistoryRequestID && Number(revisionTemplate.value?.id) === templateID) promptHistoryLoading.value = false
+  }
+}
+
+function closePromptHistory() {
+  promptHistoryRequestID += 1
+  revisionTemplate.value = null
+  promptRevisions.value = []
+  promptHistoryError.value = ''
+  promptHistoryLoading.value = false
+}
+
+async function restorePromptRevision(revision: any) {
+  if (!revisionTemplate.value || revision.version === revisionTemplate.value.version) return
+  const templateID = Number(revisionTemplate.value.id)
+  if (revision.template_id && Number(revision.template_id) !== templateID) {
+    promptHistoryError.value = '版本记录与当前模板不匹配，请重新打开版本历史'
+    return
+  }
+  restoringRevision.value = revision.version
+  promptHistoryError.value = ''
+  try {
+    await settingsAPI.restorePromptTemplateRevision(templateID, revision.version)
+    closePromptHistory()
+    await load()
+    promptActionNotice.value = '已恢复为新版本'
+    show('已恢复为新版本')
+  } catch (error) {
+    promptHistoryError.value = error instanceof Error ? error.message : '版本恢复失败'
+  } finally {
+    restoringRevision.value = null
+  }
+}
+
+function formatRevisionTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 async function removePrompt(template: any) {
@@ -373,29 +680,51 @@ onMounted(load)
       <button role="tab" :aria-selected="activeSection === 'services'" :class="{ active: activeSection === 'services' }" @click="activeSection = 'services'">AI 服务</button>
       <button role="tab" :aria-selected="activeSection === 'agents'" :class="{ active: activeSection === 'agents' }" @click="activeSection = 'agents'">Agent</button>
       <button role="tab" :aria-selected="activeSection === 'prompts'" :class="{ active: activeSection === 'prompts' }" @click="activeSection = 'prompts'">提示词</button>
+      <button role="tab" :aria-selected="activeSection === 'voices'" :class="{ active: activeSection === 'voices' }" @click="activeSection = 'voices'">音色库</button>
       <button role="tab" :aria-selected="activeSection === 'organization'" :class="{ active: activeSection === 'organization' }" @click="activeSection = 'organization'">组织与权限</button>
       <button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">安全与数据</button>
     </div>
+    <div v-if="loadError" class="inline-alert" role="alert"><div><strong>部分设置暂未更新</strong><span>{{ loadError }}</span></div><button class="btn" type="button" @click="load">重试加载</button></div>
+    <div v-else-if="loading" class="settings-loading" role="status">正在同步设置…</div>
 
     <section v-if="activeSection === 'services'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>AI 服务</h2><p class="muted">{{ configs.length }} 个已配置服务 · {{ providers.length }} 个内置厂商模板</p></div>
-        <div v-if="canManageSettings" class="toolbar"><button class="btn" @click="syncVoices">同步音色</button><button class="btn btn-primary" @click="openCreateService">添加 AI 服务</button></div>
+        <div v-if="canManageSettings" class="toolbar"><button class="btn btn-primary" @click="openCreateService"><Plus :size="16" aria-hidden="true" />添加 AI 服务</button></div>
       </div>
       <div class="panel">
         <table class="table">
-          <thead><tr><th>名称</th><th>类型</th><th>厂商</th><th>模型</th><th></th></tr></thead>
+          <thead><tr><th>名称</th><th>类型</th><th>厂商</th><th>模型</th><th>状态</th><th></th></tr></thead>
           <tbody>
             <tr v-for="c in configs" :key="c.id">
               <td>{{ c.name }}</td>
-              <td>{{ c.service_type }}</td>
-              <td>{{ c.provider }}</td>
-              <td>{{ c.model }}</td>
-              <td><div v-if="canManageSettings" class="toolbar settings-table-actions"><button class="btn" @click="editService(c)">编辑</button><button class="btn" :disabled="testingConfigID !== null" @click="testService(c)">{{ testingConfigID === c.id ? '测试中…' : '测试连接' }}</button><button class="btn btn-danger" @click="remove(c.id)">删</button></div></td>
+              <td>{{ serviceTypeLabel(c.service_type) }}</td>
+              <td>{{ providerLabel(c) }}</td>
+              <td>{{ c.model || '厂商默认' }}</td>
+              <td><div class="service-status"><span :class="c.is_active ? 'ok' : 'off'">{{ c.is_active ? '启用' : '停用' }}</span><span v-if="c.is_default" class="default">默认</span></div></td>
+              <td><div v-if="canManageSettings" class="toolbar settings-table-actions"><button class="btn" @click="editService(c)"><Pencil :size="14" aria-hidden="true" />编辑</button><button class="btn" :disabled="testingConfigID !== null" @click="testService(c)"><FlaskConical :size="14" aria-hidden="true" />{{ testingConfigID === c.id ? '测试中…' : '测试连接' }}</button><button class="btn btn-danger" :aria-label="`删除 ${c.name}`" title="删除服务" @click="remove(c.id)"><Trash2 :size="14" aria-hidden="true" /></button></div></td>
             </tr>
           </tbody>
         </table>
         <div v-if="!configs.length" class="empty">尚未配置 AI 服务</div>
+      </div>
+    </section>
+
+    <section v-if="activeSection === 'voices'" class="settings-section" role="tabpanel">
+      <div class="settings-section-head">
+        <div><h2>音色库</h2><p class="muted">{{ voiceCatalog.length }} 个音色 · {{ voiceCatalog.filter((voice) => voice.is_active).length }} 个可用</p></div>
+        <button v-if="canManageSettings" class="btn btn-primary" :disabled="syncingVoices" @click="syncVoices"><RefreshCw :size="15" aria-hidden="true" />{{ syncingVoices ? '同步中…' : '同步音色' }}</button>
+      </div>
+      <div class="voice-catalog-toolbar">
+        <label class="library-search"><span class="sr-only">搜索音色</span><input v-model="voiceQuery" type="search" aria-label="搜索音色" placeholder="搜索名称、语言或 Voice ID" /></label>
+        <div v-if="canPreviewVoices" class="field voice-preview-text"><label for="voice-preview-text">试听文本</label><input id="voice-preview-text" v-model="voicePreviewText" maxlength="200" /></div>
+      </div>
+      <div class="panel voice-catalog-panel">
+        <table v-if="filteredVoices.length" class="table voice-catalog-table">
+          <thead><tr><th>音色</th><th>Voice ID</th><th>厂商</th><th>语言</th><th>类型</th><th>状态</th><th></th></tr></thead>
+          <tbody><tr v-for="voice in filteredVoices" :key="`${voice.provider}-${voice.voice_id}`"><td><strong>{{ voice.voice_name || voice.voice_id }}</strong><audio v-if="voicePreviewURLs[voice.voice_id]" :aria-label="`${voice.voice_name || voice.voice_id}试听音频`" :src="voicePreviewURLs[voice.voice_id]" controls preload="metadata" /></td><td><code>{{ voice.voice_id }}</code></td><td>{{ voice.provider }}</td><td>{{ voice.language || '未标注' }}</td><td>{{ voice.capabilities || '通用' }}</td><td><span class="job-status" :class="voice.is_active ? 'succeeded' : 'canceled'">{{ voice.is_active ? '启用' : '失效' }}</span></td><td><button v-if="canPreviewVoices && voice.is_active" class="btn" :disabled="!!previewingVoiceID || !voicePreviewText.trim()" :aria-label="`试听${voice.voice_name || voice.voice_id}`" @click="previewVoice(voice)">{{ previewingVoiceID === voice.voice_id ? '生成中…' : '试听' }}</button></td></tr></tbody>
+        </table>
+        <div v-else class="empty">{{ voiceCatalog.length ? '没有匹配的音色' : '尚未同步音色' }}</div>
       </div>
     </section>
 
@@ -404,20 +733,26 @@ onMounted(load)
         <div><h2>提示词模板</h2><p class="muted">{{ promptTemplates.length }} 个模板 · 组织内生效</p></div>
         <button v-if="canManageSettings" class="btn btn-primary" @click="openCreatePrompt">新建提示词</button>
       </div>
+      <div v-if="promptActionNotice" class="inline-alert" role="status"><div><strong>{{ promptActionNotice }}</strong><span>提示词列表已刷新，新版本已生效。</span></div><button class="btn" type="button" aria-label="关闭提示词操作提示" @click="promptActionNotice = ''">关闭</button></div>
+      <div class="prompt-template-toolbar">
+        <label class="library-search"><span class="sr-only">搜索提示词</span><input v-model="promptQuery" type="search" aria-label="搜索提示词" placeholder="搜索名称、标识或内容" /></label>
+        <label><span class="sr-only">提示词分类</span><select v-model="promptCategory" aria-label="提示词分类"><option value="all">全部分类</option><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></label>
+        <label><span class="sr-only">提示词状态</span><select v-model="promptState" aria-label="提示词状态"><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select></label>
+      </div>
       <div class="panel prompt-template-panel">
-        <table v-if="promptTemplates.length" class="table prompt-template-table">
+        <table v-if="filteredPromptTemplates.length" class="table prompt-template-table">
           <thead><tr><th>名称</th><th>分类</th><th>变量</th><th>版本</th><th>状态</th><th></th></tr></thead>
           <tbody>
-            <tr v-for="template in promptTemplates" :key="template.id">
+            <tr v-for="template in filteredPromptTemplates" :key="template.id">
               <td><strong>{{ template.name }}</strong><p class="muted prompt-template-description">{{ template.description || template.key }}</p></td>
               <td>{{ promptCategoryLabels[template.category] || template.category }}</td>
               <td><div class="prompt-variable-list"><code v-for="variable in promptVariables(template)" :key="variable">{{ variable }}</code><span v-if="!promptVariables(template).length" class="muted">无</span></div></td>
               <td>v{{ template.version }}</td><td>{{ template.is_active ? '启用' : '停用' }}</td>
-              <td><div class="toolbar settings-table-actions"><button class="btn" @click="openPreview(template)">预览</button><button v-if="canManageSettings" class="btn" @click="editPrompt(template)">编辑</button><button v-if="canManageSettings && isBuiltInPrompt(template)" class="btn" @click="restorePrompt(template)">恢复默认</button><button v-if="canManageSettings && !isBuiltInPrompt(template)" class="btn btn-danger" @click="removePrompt(template)">删除</button></div></td>
+              <td><div class="toolbar settings-table-actions"><button class="btn" @click="openPreview(template)">预览</button><button class="btn" @click="openPromptHistory(template)">版本历史</button><button v-if="canManageSettings" class="btn" @click="duplicatePrompt(template)">复制</button><button v-if="canManageSettings" class="btn" @click="editPrompt(template)">编辑</button><button v-if="canManageSettings && isBuiltInPrompt(template)" class="btn" @click="restorePrompt(template)">恢复默认</button><button v-if="canManageSettings && !isBuiltInPrompt(template)" class="btn btn-danger" @click="removePrompt(template)">删除</button></div></td>
             </tr>
           </tbody>
         </table>
-        <div v-else class="empty">尚未创建提示词模板</div>
+        <div v-else class="empty">{{ promptTemplates.length ? '没有匹配的提示词模板' : '尚未创建提示词模板' }}</div>
       </div>
     </section>
 
@@ -426,7 +761,7 @@ onMounted(load)
       <div class="panel">
         <table class="table">
           <thead><tr><th>类型</th><th>名称</th><th>模型</th><th>状态</th><th></th></tr></thead>
-          <tbody><tr v-for="a in agents" :key="a.id"><td>{{ a.agent_type }}</td><td>{{ a.name }}</td><td>{{ a.model || '继承文本默认' }}</td><td>{{ a.is_active ? '启用' : '停用' }}</td><td><button v-if="canManageSettings" class="btn" @click="editAgent(a)">编辑</button></td></tr></tbody>
+          <tbody><tr v-for="a in agents" :key="a.id"><td>{{ agentTypeLabel(a.agent_type) }}</td><td>{{ a.name }}</td><td>{{ a.model || '继承文本默认' }}</td><td><span class="job-status" :class="a.is_active ? 'succeeded' : 'canceled'">{{ a.is_active ? '启用' : '停用' }}</span></td><td><button v-if="canManageSettings" class="btn" @click="editAgent(a)">编辑</button></td></tr></tbody>
         </table>
       </div>
     </section>
@@ -476,13 +811,33 @@ onMounted(load)
       </div>
     </section>
 
-    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="modal-actions"><button type="button" class="btn" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary">{{ editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
+    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="service-toggle-grid"><label class="settings-check"><input v-model="form.is_active" type="checkbox" /> 启用服务</label><label class="settings-check" :class="{ disabled: !form.is_active }"><input v-model="form.is_default" type="checkbox" :disabled="!form.is_active" /> 设为默认</label></div><div class="service-test-row"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="testDraftService"><FlaskConical :size="14" aria-hidden="true" />{{ testingDraftService ? '测试中…' : '测试当前配置' }}</button><span v-if="serviceTestResult" role="status">{{ serviceTestResult }}</span></div><p v-if="serviceError" class="form-error" role="alert">{{ serviceError }}</p><div class="modal-actions"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingService || testingDraftService">{{ savingService ? '保存中…' : editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
     <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="2" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
 
-    <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-reference settings-span"><code v-for="(_, variable) in promptVariableLabels" :key="variable">{{ promptToken(variable) }}</code></div></div><div class="modal-actions"><button type="button" class="btn" @click="promptForm = null">取消</button><button type="submit" class="btn btn-primary">{{ promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
+    <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" ref="promptContentInput" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-picker settings-span"><span>插入变量</span><div><button v-for="(label, variable) in promptVariableLabels" :key="variable" type="button" :aria-label="`插入变量 ${label}`" :title="promptToken(variable)" @click="insertPromptVariable(variable)"><strong>{{ label }}</strong><code>{{ promptToken(variable) }}</code></button></div></div></div><p v-if="promptFormError" class="form-error" role="alert">{{ promptFormError }}</p><div v-if="promptDraftPreview" class="prompt-draft-preview" role="status"><strong>草稿预览</strong><div class="prompt-preview-result">{{ promptDraftPreview }}</div></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft" @click="promptForm = null">取消</button><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft || !promptForm.content.trim()" @click="previewPromptForm">{{ previewingPromptDraft ? '检查中…' : '检查并预览' }}</button><button type="submit" class="btn btn-primary" :disabled="savingPrompt || previewingPromptDraft">{{ savingPrompt ? '保存中…' : promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
 
     <div v-if="previewTemplate" class="modal-mask" @click.self="previewTemplate = null"><div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="preview-prompt-title" @keydown.esc="previewTemplate = null"><h3 id="preview-prompt-title">预览提示词</h3><p class="prompt-preview-name">{{ previewTemplate.name }} · v{{ previewTemplate.version }}</p><div v-if="promptVariables(previewTemplate).length" class="field-grid"><div v-for="variable in promptVariables(previewTemplate)" :key="variable" class="field"><label :for="`preview-${variable}`">{{ promptVariableLabels[variable] || variable }}</label><input :id="`preview-${variable}`" v-model="previewVariables[variable]" /></div></div><p v-if="previewError" class="form-error" role="alert">{{ previewError }}</p><div v-if="previewResult" class="prompt-preview-result" aria-live="polite">{{ previewResult }}</div><div class="modal-actions"><button type="button" class="btn" @click="previewTemplate = null">关闭</button><button type="button" class="btn btn-primary" @click="renderPreview">生成预览</button></div></div></div>
+
+    <div v-if="revisionTemplate" class="modal-mask" @click.self="closePromptHistory">
+      <div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="prompt-history-title" @keydown.esc="closePromptHistory">
+        <h3 id="prompt-history-title">提示词版本历史</h3>
+        <p class="prompt-preview-name">{{ revisionTemplate.name }} · 当前 v{{ revisionTemplate.version }}</p>
+        <div class="prompt-revision-list">
+          <div v-if="promptHistoryLoading" class="empty" role="status">正在加载版本历史…</div>
+          <div v-else-if="promptHistoryError" class="inline-alert" role="alert"><div><strong>版本历史加载失败</strong><span>{{ promptHistoryError }}</span></div><button class="btn" type="button" @click="openPromptHistory(revisionTemplate)">重试加载</button></div>
+          <article v-for="revision in promptRevisions" :key="revision.id" class="prompt-revision">
+            <div class="prompt-revision-head">
+              <div><strong>v{{ revision.version }}</strong><span v-if="revision.version === revisionTemplate.version" class="service-status"><span class="default">当前</span></span><span class="muted">{{ formatRevisionTime(revision.created_at) }}</span></div>
+              <button v-if="canManageSettings && revision.version !== revisionTemplate.version" type="button" class="btn" :disabled="restoringRevision !== null" :aria-label="`恢复 v${revision.version}`" @click="restorePromptRevision(revision)">{{ restoringRevision === revision.version ? '恢复中…' : '恢复此版本' }}</button>
+            </div>
+            <pre>{{ revision.content }}</pre>
+          </article>
+          <div v-if="!promptHistoryLoading && !promptHistoryError && !promptRevisions.length" class="empty">暂无版本记录</div>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn" @click="closePromptHistory">关闭</button></div>
+      </div>
+    </div>
 
     <div v-if="showMemberModal" class="modal-mask" @click.self="showMemberModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="member-modal-title" @submit.prevent="addMember"><h3 id="member-modal-title">添加成员</h3><div class="field"><label for="member-email">邮箱</label><input id="member-email" v-model="memberForm.email" type="email" /></div><div class="field"><label for="member-name">显示名称</label><input id="member-name" v-model="memberForm.display_name" /></div><div class="field"><label for="member-password">初始密码</label><input id="member-password" v-model="memberForm.password" type="password" placeholder="12-128 个字符" /></div><div class="field"><label for="member-role">角色</label><select id="member-role" v-model="memberForm.role"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="modal-actions"><button type="button" class="btn" @click="showMemberModal = false">取消</button><button type="submit" class="btn btn-primary">添加成员</button></div></form></div>
 

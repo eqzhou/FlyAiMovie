@@ -89,9 +89,6 @@ func TestMockAgentAndGridWorkflow(t *testing.T) {
 		}
 		ids = append(ids, itoa(storyboard.ID))
 	}
-	for len(ids) < 4 {
-		ids = append(ids, ids[len(ids)%len(ids)])
-	}
 	splitBody := `{"history_id":` + itoa(historyID) + `,"image_url":"` + imageURL + `","rows":2,"cols":2,"frame_type":"first_frame","storyboard_ids":[` + strings.Join(ids, ",") + `]}`
 	split := performRequest(router, http.MethodPost, "/api/v1/grid/split", splitBody, nil)
 	if split.Code != http.StatusOK {

@@ -21,6 +21,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacleanup"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
+	"github.com/eqzhou/flyaimovie/internal/services/production"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/gin-gonic/gin"
 )
@@ -33,10 +34,12 @@ type Server struct {
 	Videos       *generation.VideoService
 	TTS          *generation.TTSService
 	Jobs         *jobs.Service
+	Productions  *production.Service
 	Cache        *mediacache.Service
 	Frontend     string // dist path optional
 	ResetSender  PasswordResetSender
 	agentRunMu   sync.Mutex
+	agentRetryMu sync.Mutex
 	agentCancels map[uint]context.CancelFunc
 }
 
@@ -57,6 +60,7 @@ func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, front
 		ResetSender:  NoopPasswordResetSender{},
 		agentCancels: make(map[uint]context.CancelFunc),
 	}
+	server.Productions = production.New(db.DB, server.Agents, server.Images, server.Videos, jobService)
 	timestamp := response.Now()
 	if err := db.DB.Model(&models.AgentRun{}).Where("status = ?", "running").Updates(map[string]any{
 		"status": "failed", "last_error": "server restarted during agent execution", "completed_at": timestamp, "updated_at": timestamp,
@@ -119,6 +123,7 @@ func (s *Server) Router() *gin.Engine {
 		s.registerAssets(api)
 		s.registerPipelineExtras(api)
 		s.registerJobs(api)
+		s.registerProductions(api)
 		s.registerAuditLogs(api)
 		s.registerOrganizationQuota(api)
 		s.registerMediaCache(api)

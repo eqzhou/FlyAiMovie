@@ -34,6 +34,7 @@ func TestWriteEndpointsRejectMalformedJSON(t *testing.T) {
 		{http.MethodPost, "/api/v1/storyboards/batch-generate-tts"},
 		{http.MethodPost, "/api/v1/storyboards/1/generate-video"},
 		{http.MethodPost, "/api/v1/grid/prompt"},
+		{http.MethodPost, "/api/v1/grid/history/1/assign"},
 	}
 
 	for _, test := range tests {

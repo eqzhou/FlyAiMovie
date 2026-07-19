@@ -84,7 +84,7 @@ func TestSeedOrganizationDefaultsIsIdempotentAndIsolated(t *testing.T) {
 		}
 	}
 	for _, organizationID := range []uint{11, 22} {
-		var mockCount, agentCount, promptCount int64
+		var mockCount, agentCount, promptCount, revisionCount int64
 		if err := database.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND provider = ?", organizationID, "mock").Count(&mockCount).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -94,9 +94,58 @@ func TestSeedOrganizationDefaultsIsIdempotentAndIsolated(t *testing.T) {
 		if err := database.Model(&models.PromptTemplate{}).Where("organization_id = ? AND deleted_at IS NULL", organizationID).Count(&promptCount).Error; err != nil {
 			t.Fatal(err)
 		}
-		if mockCount != 4 || agentCount != 5 || promptCount != 8 {
-			t.Fatalf("organization %d defaults: mock=%d agents=%d prompts=%d", organizationID, mockCount, agentCount, promptCount)
+		if err := database.Model(&models.PromptTemplateRevision{}).Where("organization_id = ?", organizationID).Count(&revisionCount).Error; err != nil {
+			t.Fatal(err)
 		}
+		if mockCount != 4 || agentCount != 5 || promptCount != 8 || revisionCount != 8 {
+			t.Fatalf("organization %d defaults: mock=%d agents=%d prompts=%d revisions=%d", organizationID, mockCount, agentCount, promptCount, revisionCount)
+		}
+	}
+}
+
+func TestAutoMigrateBackfillsCurrentPromptTemplateRevision(t *testing.T) {
+	database, err := Open(t.TempDir() + "/prompt-revision-backfill.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	template := models.PromptTemplate{OrganizationID: 17, Key: "legacy_prompt", Name: "Legacy", Category: "image", Content: "legacy content", VariablesJSON: "[]", Version: 4, IsActive: true, CreatedAt: "old", UpdatedAt: "new"}
+	if err := database.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	var revision models.PromptTemplateRevision
+	if err := database.Where("organization_id = ? AND prompt_template_id = ? AND version = ?", 17, template.ID, 4).First(&revision).Error; err != nil {
+		t.Fatal(err)
+	}
+	if revision.Content != "legacy content" || revision.CreatedAt != "new" {
+		t.Fatalf("unexpected backfilled revision: %+v", revision)
+	}
+}
+
+func TestAutoMigrateDropsObsoleteGridCellURLIndex(t *testing.T) {
+	database, err := Open(t.TempDir() + "/obsolete-grid-index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec("CREATE UNIQUE INDEX idx_asset_grid_cell ON assets (organization_id, grid_history_id, url)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if !database.Migrator().HasIndex(&models.Asset{}, "idx_asset_grid_cell") {
+		t.Fatal("test setup did not create obsolete grid index")
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	if database.Migrator().HasIndex(&models.Asset{}, "idx_asset_grid_cell") {
+		t.Fatal("obsolete grid cell URL index still exists after migration")
 	}
 }
 

@@ -97,17 +97,6 @@ func TestAdapterHelperVariants(t *testing.T) {
 			t.Errorf("normalizeVideoStatus(%q)=%q want %q", input, got, want)
 		}
 	}
-	for _, tc := range []struct{ data, want string }{
-		{`{"base_resp":{"status_msg":"base error"}}`, "base error"},
-		{`{"message":"message error"}`, "message error"},
-		{`{"error":"field error"}`, "field error"},
-		{" plain error ", "plain error"},
-		{"", "provider returned an error"},
-	} {
-		if got := miniMaxErrorMessage([]byte(tc.data)); got != tc.want {
-			t.Errorf("miniMaxErrorMessage(%q)=%q", tc.data, got)
-		}
-	}
 	for mime, want := range map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "text/plain": ".png"} {
 		if got := imageExtension(mime); got != want {
 			t.Errorf("imageExtension(%q)=%q", mime, got)

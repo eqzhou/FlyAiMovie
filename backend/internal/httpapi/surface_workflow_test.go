@@ -15,11 +15,12 @@ import (
 func TestManagementAndProductionReadSurfaces(t *testing.T) {
 	server, router := testServerRouter(t)
 	now := response.Now()
+	textConfig := models.AIServiceConfig{ServiceType: "text", Provider: "mock", Name: "text", BaseURL: "http://localhost", Model: "mock", IsActive: true, IsDefault: true, CreatedAt: now, UpdatedAt: now}
 	imageConfig := models.AIServiceConfig{ServiceType: "image", Provider: "mock", Name: "image", IsActive: true, CreatedAt: now, UpdatedAt: now}
 	videoConfig := models.AIServiceConfig{ServiceType: "video", Provider: "mock", Name: "video", IsActive: true, CreatedAt: now, UpdatedAt: now}
 	audioConfig := models.AIServiceConfig{ServiceType: "audio", Provider: "mock", Name: "audio", IsActive: true, CreatedAt: now, UpdatedAt: now}
 	provider := models.AIServiceProvider{Name: "mock-image", DisplayName: "Mock image", ServiceType: "image", Provider: "mock", IsActive: true, CreatedAt: now, UpdatedAt: now}
-	for _, row := range []any{&imageConfig, &videoConfig, &audioConfig, &provider} {
+	for _, row := range []any{&textConfig, &imageConfig, &videoConfig, &audioConfig, &provider} {
 		if err := db.DB.Create(row).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -166,6 +167,21 @@ func TestManagementAndProductionReadSurfaces(t *testing.T) {
 	if err := db.DB.Create(&completedRun).Error; err != nil {
 		t.Fatal(err)
 	}
+	legacySucceededRun := models.AgentRun{AgentType: "voice_assigner", DramaID: dramaID, EpisodeID: episode.ID, Status: "succeeded", Input: "legacy", StartedAt: now, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&legacySucceededRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	completedResponse := performRequest(router, http.MethodGet, "/api/v1/agent-runs?status=completed", "", nil)
+	if completedResponse.Code != http.StatusOK {
+		t.Fatalf("completed agent runs status=%d body=%s", completedResponse.Code, completedResponse.Body.String())
+	}
+	completedPayload := decodeResponse(t, completedResponse)
+	completedRows, ok := completedPayload["data"].([]any)
+	if !ok || len(completedRows) < 2 {
+		t.Fatalf("completed agent runs should include legacy succeeded rows: %#v", completedPayload["data"])
+	}
+	assertRequestStatus(t, router, http.MethodGet, "/api/v1/agent-runs?status=unknown", "", http.StatusBadRequest)
+	assertRequestStatus(t, router, http.MethodGet, "/api/v1/agent-runs?agent_type=unknown", "", http.StatusBadRequest)
 	assertRequestStatus(t, router, http.MethodPost, "/api/v1/agent-runs/"+idText(completedRun.ID)+"/cancel", `{}`, http.StatusConflict)
 
 	failedJob, err := server.Jobs.CreateForTarget("test", "other", 77, "mock", nil)

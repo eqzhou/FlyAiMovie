@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"gorm.io/gorm"
 )
 
 func testService(t *testing.T) *Service {
@@ -229,6 +231,253 @@ func TestRetryBackoffIsBoundedAndExponential(t *testing.T) {
 	}
 	if retryBackoff(20) != 5*time.Minute {
 		t.Fatalf("backoff not capped: %v", retryBackoff(20))
+	}
+}
+
+func TestJobEventAndTransitionHelpers(t *testing.T) {
+	if eventProgress(StatusRunning, map[string]any{"progress": 37}) != 37 || eventProgress(StatusSucceeded, nil) != 100 || eventProgress(StatusFailed, nil) != 0 {
+		t.Fatal("job event progress mapping is incorrect")
+	}
+	for target, want := range map[string]string{
+		StatusWaitingProvider: "waiting for provider",
+		StatusSucceeded:       "job completed",
+		StatusFailed:          "job failed",
+		StatusCanceled:        "job canceled",
+		StatusRunning:         StatusRunning,
+	} {
+		if got := eventMessage(target, nil); got != want {
+			t.Fatalf("eventMessage(%q)=%q want=%q", target, got, want)
+		}
+	}
+	if eventMessage(StatusFailed, map[string]any{"last_error": "provider rejected"}) != "provider rejected" {
+		t.Fatal("failure detail was not used for the event message")
+	}
+	for _, transition := range [][2]string{{StatusQueued, StatusRunning}, {StatusQueued, StatusCanceled}, {StatusRunning, StatusWaitingProvider}, {StatusWaitingProvider, StatusRunning}} {
+		if !allowedTransition(transition[0], transition[1]) {
+			t.Fatalf("valid transition rejected: %v", transition)
+		}
+	}
+	if allowedTransition(StatusSucceeded, StatusRunning) || allowedTransition(StatusQueued, StatusSucceeded) {
+		t.Fatal("invalid transition was accepted")
+	}
+}
+
+func TestOwnedCompletionSerializesWithCancellation(t *testing.T) {
+	service := testService(t)
+	job, err := service.CreateQueuedOrganization(31, "image.generate", "image_generation", 44, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.ClaimWaiting("atomic-owner", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	applyStarted := make(chan struct{})
+	releaseApply := make(chan struct{})
+	completeResult := make(chan error, 1)
+	go func() {
+		completeResult <- service.SetSucceededOwnedWith(context.Background(), job.ID, "atomic-owner", `{}`, func(tx *gorm.DB) error {
+			close(applyStarted)
+			<-releaseApply
+			return tx.Model(&models.GenerationJob{}).Where("id = ?", job.ID).Update("status_message", "domain write committed").Error
+		})
+	}()
+	<-applyStarted
+	cancelResult := make(chan error, 1)
+	go func() { cancelResult <- service.Cancel(job.ID) }()
+	close(releaseApply)
+	if err := <-completeResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-cancelResult; !errors.Is(err, ErrTerminalJob) {
+		t.Fatalf("cancel won after owned commit started: %v", err)
+	}
+	current, err := service.Get(job.ID)
+	if err != nil || current.Status != StatusSucceeded {
+		t.Fatalf("job=%+v err=%v", current, err)
+	}
+}
+
+func TestCancellationPreventsOwnedAndCurrentDomainWrites(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+
+	owned, err := service.CreateQueuedOrganization(32, "image.generate", "image_generation", 45, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.ClaimWaiting("canceled-owner", 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != owned.ID {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := service.Cancel(owned.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownedApplied := false
+	if err := service.SetSucceededOwnedWith(ctx, owned.ID, "canceled-owner", `{}`, func(*gorm.DB) error {
+		ownedApplied = true
+		return nil
+	}); !errors.Is(err, ErrTerminalJob) {
+		t.Fatalf("owned completion after cancel=%v", err)
+	}
+	if ownedApplied {
+		t.Fatal("owned domain write ran after cancellation committed")
+	}
+
+	current, err := service.CreateForTarget("video.generate", "video_generation", 46, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cancel(current.ID); err != nil {
+		t.Fatal(err)
+	}
+	currentApplied := false
+	if err := service.SetSucceededCurrentWith(ctx, current.ID, `{}`, func(*gorm.DB) error {
+		currentApplied = true
+		return nil
+	}); !errors.Is(err, ErrTerminalJob) {
+		t.Fatalf("current completion after cancel=%v", err)
+	}
+	if currentApplied {
+		t.Fatal("current domain write ran after cancellation committed")
+	}
+}
+
+func TestProductionJobFactoriesAndAtomicCurrentTransitions(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+
+	waiting, err := service.CreateForTargetOrganizationProduction(51, "image.generate", "image_generation", 501, "mock", nil, 9001)
+	if err != nil || waiting.ProductionRunID == nil || *waiting.ProductionRunID != 9001 {
+		t.Fatalf("waiting=%+v err=%v", waiting, err)
+	}
+	if err := service.SetWaitingCurrentWith(ctx, waiting.ID, "provider-501", func(tx *gorm.DB) error {
+		return tx.Model(&models.GenerationJob{}).Where("id = ?", waiting.ID).Update("status_message", "provider accepted").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.ClaimWaiting("production-owner", 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != waiting.ID {
+		t.Fatalf("claimed=%+v err=%v", claimed, err)
+	}
+	if err := service.SetFailedOwnedWith(ctx, waiting.ID, "production-owner", "provider failed", func(tx *gorm.DB) error {
+		return tx.Model(&models.GenerationJob{}).Where("id = ?", waiting.ID).Update("status_message", "failure persisted atomically").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	succeeded, err := service.CreateForTargetOrganizationProduction(51, "video.generate", "video_generation", 502, "mock", nil, 9001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetSucceededCurrentWith(ctx, succeeded.ID, `{"url":"/static/video.mp4"}`, func(tx *gorm.DB) error {
+		return tx.Model(&models.GenerationJob{}).Where("id = ?", succeeded.ID).Update("status_message", "video saved atomically").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetFailedCurrentWith(ctx, succeeded.ID, "late failure", nil); !errors.Is(err, ErrTerminalJob) {
+		t.Fatalf("late current transition=%v", err)
+	}
+
+	failed, err := service.CreateForTargetOrganizationProduction(51, "audio.generate", "storyboard_tts", 503, "mock", nil, 9001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetFailedCurrentWith(ctx, failed.ID, "audio failed", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	queued, err := service.CreateQueuedOrganizationProduction(51, "compose", "storyboard_compose", 504, "ffmpeg", nil, 9001)
+	if err != nil || queued.ProductionRunID == nil || *queued.ProductionRunID != 9001 {
+		t.Fatalf("queued=%+v err=%v", queued, err)
+	}
+	payload, err := service.CreateQueuedPayloadOrganizationProduction(51, "merge", "episode_merge", 505, "ffmpeg", nil, `{"episode_id":505}`, 9001)
+	if err != nil || payload.PayloadJSON == "" || payload.ProductionRunID == nil || *payload.ProductionRunID != 9001 {
+		t.Fatalf("payload=%+v err=%v", payload, err)
+	}
+	unattached, err := service.CreateQueuedOrganization(51, "compose", "storyboard_compose", 506, "ffmpeg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AttachProductionRun(unattached.ID, 9002); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.Get(unattached.ID)
+	if err != nil || stored.ProductionRunID == nil || *stored.ProductionRunID != 9002 {
+		t.Fatalf("attached=%+v err=%v", stored, err)
+	}
+}
+
+func TestJobValidationCostAndRollbackBranches(t *testing.T) {
+	service := testService(t)
+	for _, tc := range []struct {
+		kind, target, provider string
+		want                   float64
+	}{
+		{"image", "image_generation", "gemini", 0.03},
+		{"image", "image_generation", "minimax", 0.05},
+		{"video", "video_generation", "openai", 0.50},
+		{"video", "video_generation", "minimax", 0.30},
+		{"video", "video_generation", "vidu", 0.20},
+		{"tts", "other", "minimax", 0.02},
+		{"compose", "episode_compose", "ffmpeg", 0.01},
+		{"unknown", "unknown", "unknown", 0},
+	} {
+		if got := EstimateCost(tc.kind, tc.target, tc.provider); got != tc.want {
+			t.Fatalf("EstimateCost(%q,%q,%q)=%v want=%v", tc.kind, tc.target, tc.provider, got, tc.want)
+		}
+	}
+	if _, err := service.CreateForTarget("", "image_generation", 1, "mock", nil); err == nil {
+		t.Fatal("invalid target was accepted")
+	}
+	if err := service.AttachProductionRun(0, 1); err == nil {
+		t.Fatal("zero job attachment was accepted")
+	}
+	if err := service.AttachProductionRun(1, 0); err == nil {
+		t.Fatal("zero production attachment was accepted")
+	}
+	if err := service.RenewLease(1, ""); err == nil {
+		t.Fatal("empty lease owner was accepted")
+	}
+	if _, _, err := service.BatchCancelOrganization(1, make([]uint, 101)); err == nil {
+		t.Fatal("oversized batch cancel was accepted")
+	}
+	canceled, failures, err := service.BatchCancelOrganization(1, []uint{0, 0})
+	if err != nil || len(canceled) != 0 || failures[0] == "" {
+		t.Fatalf("zero batch cancel canceled=%v failures=%v err=%v", canceled, failures, err)
+	}
+	if err := service.Retry(9999); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing retry=%v", err)
+	}
+	running, err := service.CreateForTarget("image", "image_generation", 601, "mock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Retry(running.ID); err == nil {
+		t.Fatal("running job was retryable")
+	}
+	if err := service.DB.Model(running).Updates(map[string]any{"status": StatusFailed, "attempt": 3, "max_attempts": 3}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Retry(running.ID); err == nil {
+		t.Fatal("retry limit was ignored")
+	}
+
+	queued, err := service.CreateQueued("compose", "storyboard_compose", 602, "ffmpeg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.ClaimWaiting("rollback-owner", 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != queued.ID {
+		t.Fatalf("claimed=%+v err=%v", claimed, err)
+	}
+	wantErr := errors.New("domain write failed")
+	if err := service.SetFailedOwnedWith(context.Background(), queued.ID, "rollback-owner", "failed", func(*gorm.DB) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("callback error=%v", err)
+	}
+	current, err := service.Get(queued.ID)
+	if err != nil || current.Status != StatusRunning {
+		t.Fatalf("callback rollback job=%+v err=%v", current, err)
 	}
 }
 

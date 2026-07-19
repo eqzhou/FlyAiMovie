@@ -5,15 +5,22 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/security"
+	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
+	"github.com/eqzhou/flyaimovie/internal/services/netguard"
 	openai "github.com/sashabaranov/go-openai"
 	"gorm.io/gorm"
 )
@@ -35,7 +42,7 @@ func GetActiveConfig(serviceType string, preferredID *uint) (*ServiceConfig, err
 		if err := db.DB.Where("id = ? AND service_type = ? AND is_active = ?", *preferredID, serviceType, true).First(&row).Error; err != nil {
 			return nil, fmt.Errorf("active %s AI config %d not found", serviceType, *preferredID)
 		}
-		return mapConfig(row), nil
+		return mapConfig(row)
 	}
 	var rows []models.AIServiceConfig
 	if err := q.Find(&rows).Error; err != nil {
@@ -50,7 +57,7 @@ func GetActiveConfig(serviceType string, preferredID *uint) (*ServiceConfig, err
 		}
 		return rows[i].Priority > rows[j].Priority
 	})
-	return mapConfig(rows[0]), nil
+	return mapConfig(rows[0])
 }
 
 // GetOrganizationConfig is the tenant-scoped variant used by request paths.
@@ -66,7 +73,7 @@ func GetOrganizationConfig(organizationID uint, serviceType string, preferredID 
 		if err := q.Where("id = ?", *preferredID).First(&row).Error; err != nil {
 			return nil, fmt.Errorf("active %s AI config %d not found", serviceType, *preferredID)
 		}
-		return mapConfig(row), nil
+		return mapConfig(row)
 	}
 	var rows []models.AIServiceConfig
 	if err := q.Find(&rows).Error; err != nil {
@@ -81,7 +88,7 @@ func GetOrganizationConfig(organizationID uint, serviceType string, preferredID 
 		}
 		return rows[i].Priority > rows[j].Priority
 	})
-	return mapConfig(rows[0]), nil
+	return mapConfig(rows[0])
 }
 
 // GetTaskConfig loads the exact configuration used when an async task was submitted.
@@ -107,15 +114,16 @@ func GetTaskConfigOrganization(organizationID uint, serviceType string, configID
 	if err := query.First(&row).Error; err != nil {
 		return nil, fmt.Errorf("%s AI config %d not found", serviceType, *configID)
 	}
-	return mapConfig(row), nil
+	return mapConfig(row)
 }
 
-func mapConfig(row models.AIServiceConfig) *ServiceConfig {
+func mapConfig(row models.AIServiceConfig) (*ServiceConfig, error) {
+	if err := validateProviderURL(row.Provider, row.BaseURL); err != nil {
+		return nil, err
+	}
 	apiKey, err := security.DecryptSecret(row.APIKey)
 	if err != nil {
-		// Preserve the existing function signature while preventing use of an
-		// unreadable credential; callers surface the provider failure later.
-		apiKey = ""
+		return nil, fmt.Errorf("decrypt AI config %d: %w", row.ID, err)
 	}
 	return &ServiceConfig{
 		OrganizationID: row.OrganizationID,
@@ -125,13 +133,62 @@ func mapConfig(row models.AIServiceConfig) *ServiceConfig {
 		APIKey:         apiKey,
 		Model:          row.Model,
 		UpdatedAt:      row.UpdatedAt,
+	}, nil
+}
+
+func validateProviderURL(provider, baseURL string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "mock" {
+		return nil
 	}
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("provider base URL is invalid")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("provider base URL must not contain credentials, query, or fragment")
+	}
+	if provider != "openai_local" && parsed.Scheme != "https" {
+		return fmt.Errorf("remote provider base URL must use https")
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if provider != "openai_local" {
+		allowTrustedPrivate := parsed.Scheme == "https" && adapters.ProviderCustomCAConfigured() && providerPrivateHostAllowed(host)
+		if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata" || host == "metadata.google.internal" {
+			if !allowTrustedPrivate {
+				return fmt.Errorf("remote provider base URL must use a public host")
+			}
+		}
+		if ip := net.ParseIP(host); ip != nil && netguard.IsUnsafeIP(ip) {
+			if !allowTrustedPrivate {
+				return fmt.Errorf("remote provider base URL must use a public host")
+			}
+		}
+	}
+	return nil
+}
+
+func providerPrivateHostAllowed(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	for _, candidate := range strings.Split(os.Getenv("AI_PROVIDER_PRIVATE_HOSTS"), ",") {
+		if strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate)), ".") == host {
+			return true
+		}
+	}
+	return false
 }
 
 func NewOpenAIClient(cfg *ServiceConfig) *openai.Client {
 	c := openai.DefaultConfig(cfg.APIKey)
 	if cfg.Provider == "openai_local" {
-		c.HTTPClient = &http.Client{Transport: &http.Transport{Proxy: nil}}
+		c.HTTPClient = &http.Client{
+			Transport: &http.Transport{Proxy: nil},
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	} else if cfg.Provider != "" && cfg.Provider != "mock" {
+		c.HTTPClient = adapters.SecureProviderHTTPClient(3 * time.Minute)
 	}
 	if cfg.BaseURL != "" {
 		// support both .../v1 and bare base
@@ -183,7 +240,7 @@ func ChatWithMaxTokens(ctx context.Context, cfg *ServiceConfig, system, user str
 	}
 	resp, err := client.CreateChatCompletion(ctx, request)
 	if err != nil {
-		return "", err
+		return "", sanitizeChatProviderError(ctx, err)
 	}
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("empty chat response")
@@ -193,6 +250,21 @@ func ChatWithMaxTokens(ctx context.Context, cfg *ServiceConfig, system, user str
 		_, _, _ = mediacache.New(db.DB, nil).PutValue(cfg.OrganizationID, "ai_request", cacheKey, "text", result, time.Hour)
 	}
 	return result, nil
+}
+
+func sanitizeChatProviderError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	var apiError *openai.APIError
+	if errors.As(err, &apiError) && apiError.HTTPStatusCode > 0 {
+		return fmt.Errorf("text provider request failed with HTTP %d", apiError.HTTPStatusCode)
+	}
+	var requestError *openai.RequestError
+	if errors.As(err, &requestError) && requestError.HTTPStatusCode > 0 {
+		return fmt.Errorf("text provider request failed with HTTP %d", requestError.HTTPStatusCode)
+	}
+	return fmt.Errorf("text provider request failed")
 }
 
 func chatCacheKey(cfg *ServiceConfig, system, user string, temperature float32, maxTokens int) string {

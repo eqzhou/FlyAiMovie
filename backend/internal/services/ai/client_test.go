@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,6 +32,25 @@ func TestChatWithMaxTokensForwardsLimit(t *testing.T) {
 	result, err := ChatWithMaxTokens(context.Background(), &ServiceConfig{BaseURL: server.URL, APIKey: "test", Model: "test-model"}, "system", "user", 0.2, 321)
 	if err != nil || result != "ok" {
 		t.Fatalf("result=%q err=%v", result, err)
+	}
+}
+
+func TestChatProviderErrorDoesNotExposeResponseBodyOrAPIKey(t *testing.T) {
+	secret := "sk-provider-secret"
+	echoedPrompt := "private screenplay content"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"echo ` + secret + ` and ` + echoedPrompt + `","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	_, err := ChatWithMaxTokens(context.Background(), &ServiceConfig{Provider: "openai_local", BaseURL: server.URL, APIKey: secret, Model: "test"}, "system", echoedPrompt, 0.2, 100)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("unexpected provider error: %v", err)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), echoedPrompt) || strings.Contains(err.Error(), "echo") {
+		t.Fatalf("provider error leaked sensitive response content: %v", err)
 	}
 }
 
@@ -196,6 +216,47 @@ func TestConfigSelectionPriorityTaskFallbackAndDecryption(t *testing.T) {
 	}
 }
 
+func TestTaskConfigRejectsLegacyInsecureRemoteURL(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/legacy-http.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	now := response.Now()
+	remote := models.AIServiceConfig{OrganizationID: 7, ServiceType: "image", Provider: "openai", Name: "legacy-http", BaseURL: "http://api.example.com", APIKey: "secret", Model: "image", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	local := models.AIServiceConfig{OrganizationID: 7, ServiceType: "text", Provider: "openai_local", Name: "local-http", BaseURL: "http://127.0.0.1:11434", Model: "local", IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&remote).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&local).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetTaskConfigOrganization(7, "image", &remote.ID); err == nil {
+		t.Fatal("legacy remote HTTP config was accepted")
+	}
+	if _, err := GetTaskConfigOrganization(7, "text", &local.ID); err != nil {
+		t.Fatalf("explicit local HTTP config rejected: %v", err)
+	}
+}
+
+func TestPrivateProviderRequiresValidCAAndExactHostAllowlist(t *testing.T) {
+	t.Setenv("AI_PROVIDER_CA_FILE", filepath.Join(t.TempDir(), "missing-ca.pem"))
+	t.Setenv("AI_PROVIDER_PRIVATE_HOSTS", "127.0.0.1")
+	if err := validateProviderURL("vidu", "https://127.0.0.1:9443"); err == nil {
+		t.Fatal("invalid CA file enabled a private provider")
+	}
+}
+
+func TestProviderURLRejectsReservedMetadataAddress(t *testing.T) {
+	t.Setenv("AI_PROVIDER_CA_FILE", "")
+	t.Setenv("AI_PROVIDER_PRIVATE_HOSTS", "")
+	if err := validateProviderURL("openai", "https://100.100.100.200/v1"); err == nil {
+		t.Fatal("reserved metadata address was accepted")
+	}
+}
+
 func TestChatDefaultModelWrapperAndEmptyResponse(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,15 +287,15 @@ func TestChatDefaultModelWrapperAndEmptyResponse(t *testing.T) {
 	}
 }
 
-func TestMapConfigDropsUnreadableEncryptedCredential(t *testing.T) {
+func TestMapConfigRejectsUnreadableEncryptedCredential(t *testing.T) {
 	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "temporary")
 	protected, err := security.EncryptSecret("secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "")
-	mapped := mapConfig(models.AIServiceConfig{ID: 1, Provider: "openai", APIKey: protected})
-	if mapped.APIKey != "" {
-		t.Fatalf("unreadable credential leaked through: %+v", mapped)
+	mapped, err := mapConfig(models.AIServiceConfig{ID: 1, Provider: "mock", APIKey: protected})
+	if err == nil || mapped != nil {
+		t.Fatalf("unreadable credential accepted: config=%+v err=%v", mapped, err)
 	}
 }

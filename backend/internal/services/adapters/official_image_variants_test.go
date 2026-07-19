@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -90,7 +91,21 @@ func TestDashScopeDirectResultAndFailedPoll(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	poll, err := adapter.Poll(context.Background(), AIConfig{BaseURL: server.URL, APIKey: "key"}, "task")
-	if err != nil || poll.Status != "failed" || poll.Error != "rejected" {
+	if err != nil || poll.Status != "failed" || poll.Error != "dashscope reported image generation failure" {
 		t.Fatalf("poll=%+v err=%v", poll, err)
+	}
+}
+
+func TestOfficialImageErrorsDoNotExposeProviderBodies(t *testing.T) {
+	secret := "provider echoed secret-request-content"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(secret))
+	}))
+	defer server.Close()
+
+	_, err := (&GeminiImageAdapter{}).Generate(context.Background(), AIConfig{BaseURL: server.URL, APIKey: "key"}, ImageGenInput{Prompt: "prompt"})
+	if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "HTTP 400") {
+		t.Fatalf("provider error was not sanitized: %v", err)
 	}
 }

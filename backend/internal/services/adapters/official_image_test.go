@@ -14,8 +14,11 @@ func TestGeminiImageContract(t *testing.T) {
 		if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/v1beta/models/gemini-test:generateContent") {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		if r.URL.Query().Get("key") != "gem-key" {
-			t.Errorf("missing query key")
+		if r.Header.Get("X-Goog-Api-Key") != "gem-key" {
+			t.Errorf("missing API key header")
+		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("credential leaked into query: %s", r.URL.RawQuery)
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -32,6 +35,20 @@ func TestGeminiImageContract(t *testing.T) {
 	}
 	if r.Base64 != "aW1hZ2U=" || r.MimeType != "image/png" || r.IsAsync {
 		t.Fatalf("unexpected result %#v", r)
+	}
+}
+
+func TestGeminiImageNetworkErrorDoesNotExposeAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	baseURL := server.URL
+	server.Close()
+	secret := "gemini-super-secret"
+	_, err := (&GeminiImageAdapter{}).Generate(context.Background(), AIConfig{BaseURL: baseURL, APIKey: secret}, ImageGenInput{Prompt: "test"})
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("API key leaked in error: %v", err)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const maxProviderResponseBytes = 16 << 20
+
 // OpenAICompatImageAdapter supports OpenAI images + common async gateways (task_id responses).
 type OpenAICompatImageAdapter struct {
 	ProviderName string
@@ -60,9 +62,13 @@ func (a *OpenAICompatImageAdapter) Generate(ctx context.Context, cfg AIConfig, i
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s image error %d: %s", a.Name(), resp.StatusCode, string(data))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return nil, fmt.Errorf("%s image request failed (HTTP %d)", a.Name(), resp.StatusCode)
+	}
+	data, err := readProviderResponse(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(data, &parsed); err != nil {
@@ -92,7 +98,7 @@ func (a *OpenAICompatImageAdapter) Generate(ctx context.Context, cfg AIConfig, i
 	if taskID != "" {
 		return &ImageGenResult{IsAsync: true, TaskID: taskID}, nil
 	}
-	return nil, fmt.Errorf("unable to parse image response: %s", string(data))
+	return nil, fmt.Errorf("unable to parse image response")
 }
 
 func (a *OpenAICompatImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskID string) (*ImagePollResult, error) {
@@ -121,10 +127,14 @@ func (a *OpenAICompatImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskI
 			lastErr = err
 			continue
 		}
-		data, _ := io.ReadAll(resp.Body)
+		data, readErr := readProviderResponse(resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
 		if resp.StatusCode >= 300 {
-			lastErr = fmt.Errorf("%d %s", resp.StatusCode, string(data))
+			lastErr = fmt.Errorf("image poll request failed (HTTP %d)", resp.StatusCode)
 			continue
 		}
 		var parsed map[string]any
@@ -173,4 +183,15 @@ func (a *OpenAICompatImageAdapter) Poll(ctx context.Context, cfg AIConfig, taskI
 		return &ImagePollResult{Status: "processing", Error: lastErr.Error()}, nil
 	}
 	return &ImagePollResult{Status: "processing"}, nil
+}
+
+func readProviderResponse(reader io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxProviderResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxProviderResponseBytes {
+		return nil, fmt.Errorf("provider response is too large")
+	}
+	return data, nil
 }

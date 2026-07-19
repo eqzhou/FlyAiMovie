@@ -9,7 +9,6 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -71,11 +70,7 @@ func (a *OpenAIVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID stri
 	}
 	status := normalizeVideoStatus(firstString(data, "status"))
 	if status == "failed" {
-		message := firstString(data, "message")
-		if detail, ok := data["error"].(map[string]any); ok {
-			message = firstNonEmptyStr(firstString(detail, "message", "code"), message)
-		}
-		return &VideoPollResult{Status: status, Error: message}, nil
+		return &VideoPollResult{Status: status, Error: "openai reported video generation failure"}, nil
 	}
 	result := &VideoPollResult{Status: status}
 	if status == "completed" {
@@ -123,8 +118,7 @@ func submitOpenAIMultipart(ctx context.Context, endpoint, apiKey, model, prompt,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("provider request failed with HTTP %d", resp.StatusCode)
 	}
 	var data map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {

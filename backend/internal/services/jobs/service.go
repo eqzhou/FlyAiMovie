@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -42,33 +43,52 @@ func New(database *gorm.DB) *Service {
 }
 
 func (s *Service) CreateForTarget(kind, targetType string, targetID uint, provider string, configID *uint) (*models.GenerationJob, error) {
-	return s.create(0, kind, targetType, targetID, provider, configID, StatusRunning, "")
+	return s.create(0, kind, targetType, targetID, provider, configID, StatusRunning, "", nil)
 }
 
 func (s *Service) CreateForTargetOrganization(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint) (*models.GenerationJob, error) {
-	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusRunning, "")
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusRunning, "", nil)
+}
+
+func (s *Service) CreateForTargetOrganizationProduction(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, productionRunID uint) (*models.GenerationJob, error) {
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusRunning, "", &productionRunID)
 }
 
 func (s *Service) CreateQueued(kind, targetType string, targetID uint, provider string, configID *uint) (*models.GenerationJob, error) {
-	return s.create(0, kind, targetType, targetID, provider, configID, StatusQueued, "")
+	return s.create(0, kind, targetType, targetID, provider, configID, StatusQueued, "", nil)
 }
 
 func (s *Service) CreateQueuedOrganization(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint) (*models.GenerationJob, error) {
-	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, "")
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, "", nil)
 }
 
 // CreateQueuedPayload creates a durable queued job and stores all inputs needed
 // by a worker. The payload is written in the same insert as the job so a worker
 // cannot claim an incomplete request.
 func (s *Service) CreateQueuedPayload(kind, targetType string, targetID uint, provider string, configID *uint, payload string) (*models.GenerationJob, error) {
-	return s.create(0, kind, targetType, targetID, provider, configID, StatusQueued, payload)
+	return s.create(0, kind, targetType, targetID, provider, configID, StatusQueued, payload, nil)
 }
 
 func (s *Service) CreateQueuedPayloadOrganization(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, payload string) (*models.GenerationJob, error) {
-	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, payload)
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, payload, nil)
 }
 
-func (s *Service) create(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, initialStatus, payload string) (*models.GenerationJob, error) {
+func (s *Service) CreateQueuedOrganizationProduction(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, productionRunID uint) (*models.GenerationJob, error) {
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, "", &productionRunID)
+}
+
+func (s *Service) CreateQueuedPayloadOrganizationProduction(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, payload string, productionRunID uint) (*models.GenerationJob, error) {
+	return s.create(organizationID, kind, targetType, targetID, provider, configID, StatusQueued, payload, &productionRunID)
+}
+
+func (s *Service) AttachProductionRun(jobID, productionRunID uint) error {
+	if jobID == 0 || productionRunID == 0 {
+		return fmt.Errorf("job and production run are required")
+	}
+	return s.DB.Model(&models.GenerationJob{}).Where("id = ?", jobID).Update("production_run_id", productionRunID).Error
+}
+
+func (s *Service) create(organizationID uint, kind, targetType string, targetID uint, provider string, configID *uint, initialStatus, payload string, productionRunID *uint) (*models.GenerationJob, error) {
 	if kind == "" || targetType == "" || targetID == 0 {
 		return nil, fmt.Errorf("invalid job target")
 	}
@@ -78,6 +98,17 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		var existing models.GenerationJob
 		if err := tx.Where("organization_id = ? AND target_type = ? AND target_id = ? AND status NOT IN ?", organizationID, targetType, targetID, []string{StatusSucceeded, StatusFailed, StatusCanceled}).Order("id desc").First(&existing).Error; err == nil {
+			if productionRunID != nil {
+				if existing.ProductionRunID != nil && *existing.ProductionRunID != *productionRunID {
+					return fmt.Errorf("target already belongs to another production run")
+				}
+				if existing.ProductionRunID == nil {
+					if err := tx.Model(&existing).Update("production_run_id", *productionRunID).Error; err != nil {
+						return err
+					}
+					existing.ProductionRunID = productionRunID
+				}
+			}
 			job = existing
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -90,7 +121,7 @@ func (s *Service) create(organizationID uint, kind, targetType string, targetID 
 		timestamp := now()
 		leaseExpiry := time.Now().UTC().Add(leaseDuration).Format(time.RFC3339)
 		job = models.GenerationJob{
-			OrganizationID: organizationID, Kind: kind, Status: initialStatus, TargetType: targetType, TargetID: targetID,
+			OrganizationID: organizationID, ProductionRunID: productionRunID, Kind: kind, Status: initialStatus, TargetType: targetType, TargetID: targetID,
 			ConfigID: configID, Provider: provider, Attempt: 1, MaxAttempts: 3,
 			Progress: 1, Stage: initialStatus, StatusMessage: "job created", Currency: "CNY", AvailableAt: timestamp, LeaseExpiresAt: &leaseExpiry, PayloadJSON: payload,
 			EstimatedCost: estimatedCost,
@@ -262,6 +293,68 @@ func (s *Service) SetSucceededOwned(id uint, owner, resultJSON string) error {
 	return s.transitionOwned(id, owner, StatusSucceeded, map[string]any{"result_json": resultJSON, "progress": 100})
 }
 
+// SetSucceededOwnedWith atomically fences a worker-owned result and its domain
+// writes. Cancellation and completion serialize on the same job row.
+func (s *Service) SetSucceededOwnedWith(ctx context.Context, id uint, owner, resultJSON string, apply func(*gorm.DB) error) error {
+	return s.transitionOwnedWith(ctx, id, owner, StatusSucceeded, map[string]any{"result_json": resultJSON, "progress": 100}, apply)
+}
+
+func (s *Service) SetFailedOwnedWith(ctx context.Context, id uint, owner, message string, apply func(*gorm.DB) error) error {
+	return s.transitionOwnedWith(ctx, id, owner, StatusFailed, map[string]any{"last_error": message}, apply)
+}
+
+func (s *Service) transitionOwnedWith(ctx context.Context, id uint, owner, target string, extra map[string]any, apply func(*gorm.DB) error) error {
+	if owner == "" {
+		return fmt.Errorf("worker owner is required")
+	}
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job models.GenerationJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND lease_owner = ?", id, StatusRunning, owner).First(&job).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrTerminalJob
+			}
+			return err
+		}
+		if apply != nil {
+			if err := apply(tx); err != nil {
+				return err
+			}
+		}
+		return New(tx).transitionOwnedNoTx(id, owner, target, extra)
+	})
+}
+
+func (s *Service) SetWaitingCurrentWith(ctx context.Context, id uint, providerTaskID string, apply func(*gorm.DB) error) error {
+	leaseExpiry := time.Now().UTC().Add(leaseDuration).Format(time.RFC3339)
+	return s.transitionCurrentWith(ctx, id, StatusWaitingProvider, map[string]any{"provider_task_id": providerTaskID, "progress": 10, "lease_expires_at": leaseExpiry, "available_at": now(), "lease_owner": ""}, apply)
+}
+
+func (s *Service) SetSucceededCurrentWith(ctx context.Context, id uint, resultJSON string, apply func(*gorm.DB) error) error {
+	return s.transitionCurrentWith(ctx, id, StatusSucceeded, map[string]any{"result_json": resultJSON, "progress": 100}, apply)
+}
+
+func (s *Service) SetFailedCurrentWith(ctx context.Context, id uint, message string, apply func(*gorm.DB) error) error {
+	return s.transitionCurrentWith(ctx, id, StatusFailed, map[string]any{"last_error": message}, apply)
+}
+
+func (s *Service) transitionCurrentWith(ctx context.Context, id uint, target string, extra map[string]any, apply func(*gorm.DB) error) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job models.GenerationJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND (lease_owner = '' OR lease_owner IS NULL)", id, StatusRunning).First(&job).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrTerminalJob
+			}
+			return err
+		}
+		if apply != nil {
+			if err := apply(tx); err != nil {
+				return err
+			}
+		}
+		return New(tx).transitionNoTx(id, target, extra)
+	})
+}
+
 func (s *Service) SetFailedOwned(id uint, owner, message string) error {
 	return s.transitionOwned(id, owner, StatusFailed, map[string]any{"last_error": message})
 }
@@ -398,31 +491,45 @@ func (s *Service) SetFailed(id uint, message string) error {
 }
 
 func (s *Service) Cancel(id uint) error {
-	return s.DB.Transaction(func(tx *gorm.DB) error {
-		service := New(tx)
-		var job models.GenerationJob
-		if err := tx.First(&job, id).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrJobNotFound
+	return retryJobWrite(func() error {
+		return s.DB.Transaction(func(tx *gorm.DB) error {
+			service := New(tx)
+			var job models.GenerationJob
+			if err := tx.First(&job, id).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrJobNotFound
+				}
+				return err
 			}
-			return err
-		}
-		if isTerminal(job.Status) {
-			return ErrTerminalJob
-		}
-		if err := service.transition(job.ID, StatusCanceled, nil); err != nil {
-			return err
-		}
-		timestamp := now()
-		switch job.TargetType {
-		case "image_generation":
-			return tx.Model(&models.ImageGeneration{}).Where("id = ? AND status NOT IN ?", job.TargetID, terminalResourceStatuses()).Updates(map[string]any{"status": "canceled", "updated_at": timestamp}).Error
-		case "video_generation":
-			return tx.Model(&models.VideoGeneration{}).Where("id = ? AND status NOT IN ?", job.TargetID, terminalResourceStatuses()).Updates(map[string]any{"status": "canceled", "updated_at": timestamp}).Error
-		default:
-			return nil
-		}
+			if isTerminal(job.Status) {
+				return ErrTerminalJob
+			}
+			if err := service.transition(job.ID, StatusCanceled, nil); err != nil {
+				return err
+			}
+			timestamp := now()
+			switch job.TargetType {
+			case "image_generation":
+				return tx.Model(&models.ImageGeneration{}).Where("id = ? AND status NOT IN ?", job.TargetID, terminalResourceStatuses()).Updates(map[string]any{"status": "canceled", "updated_at": timestamp}).Error
+			case "video_generation":
+				return tx.Model(&models.VideoGeneration{}).Where("id = ? AND status NOT IN ?", job.TargetID, terminalResourceStatuses()).Updates(map[string]any{"status": "canceled", "updated_at": timestamp}).Error
+			default:
+				return nil
+			}
+		})
 	})
+}
+
+func retryJobWrite(operation func() error) error {
+	var operationErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		operationErr = operation()
+		if operationErr == nil || !strings.Contains(strings.ToLower(operationErr.Error()), "database is locked") {
+			return operationErr
+		}
+		time.Sleep(time.Duration(1<<attempt) * 5 * time.Millisecond)
+	}
+	return operationErr
 }
 
 // Retry requeues a failed or canceled generation target without reusing a

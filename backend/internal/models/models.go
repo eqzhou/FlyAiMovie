@@ -237,6 +237,21 @@ type PromptTemplate struct {
 	DeletedAt      *string `json:"deleted_at,omitempty"`
 }
 
+type PromptTemplateRevision struct {
+	OrganizationID   uint   `gorm:"not null;default:0;uniqueIndex:idx_org_prompt_revision" json:"-"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	PromptTemplateID uint   `gorm:"not null;uniqueIndex:idx_org_prompt_revision;index" json:"template_id"`
+	Version          int    `gorm:"not null;uniqueIndex:idx_org_prompt_revision" json:"version"`
+	Key              string `gorm:"not null" json:"key"`
+	Name             string `gorm:"not null" json:"name"`
+	Category         string `gorm:"not null" json:"category"`
+	Description      string `json:"description"`
+	Content          string `gorm:"not null" json:"content"`
+	VariablesJSON    string `gorm:"not null;default:'[]'" json:"variables_json"`
+	IsActive         bool   `gorm:"not null" json:"is_active"`
+	CreatedAt        string `gorm:"not null" json:"created_at"`
+}
+
 type ImageGeneration struct {
 	OrganizationID  uint    `gorm:"not null;default:0;index" json:"-"`
 	ID              uint    `gorm:"primaryKey" json:"id"`
@@ -373,6 +388,7 @@ type Asset struct {
 	Format          string  `json:"format"`
 	ImageGenID      *uint   `json:"image_gen_id"`
 	VideoGenID      *uint   `json:"video_gen_id"`
+	GridHistoryID   *uint   `gorm:"index" json:"grid_history_id"`
 	IsFavorite      bool    `gorm:"default:false" json:"is_favorite"`
 	ViewCount       int     `gorm:"default:0" json:"view_count"`
 	CreatedAt       string  `gorm:"not null" json:"created_at"`
@@ -382,24 +398,27 @@ type Asset struct {
 
 // GridHistory stores grid generation jobs and split results for the workbench.
 type GridHistory struct {
-	OrganizationID uint    `gorm:"not null;default:0;index" json:"-"`
-	ID             uint    `gorm:"primaryKey" json:"id"`
-	DramaID        *uint   `json:"drama_id"`
-	EpisodeID      *uint   `json:"episode_id"`
-	Mode           string  `json:"mode"` // first_frame|first_last|multi_ref
-	Rows           int     `json:"rows"`
-	Cols           int     `json:"cols"`
-	Prompt         string  `json:"prompt"`
-	CellPrompts    string  `json:"cell_prompts"` // JSON array
-	ImageGenID     *uint   `json:"image_gen_id"`
-	ImageURL       string  `json:"image_url"`
-	CellsJSON      string  `json:"cells_json"` // JSON array of cell urls
-	StoryboardIDs  string  `json:"storyboard_ids"`
-	Status         string  `gorm:"default:pending" json:"status"`
-	ErrorMsg       string  `json:"error_msg"`
-	CreatedAt      string  `gorm:"not null" json:"created_at"`
-	UpdatedAt      string  `gorm:"not null" json:"updated_at"`
-	CompletedAt    *string `json:"completed_at,omitempty"`
+	OrganizationID  uint    `gorm:"not null;default:0;index" json:"-"`
+	ID              uint    `gorm:"primaryKey" json:"id"`
+	DramaID         *uint   `json:"drama_id"`
+	EpisodeID       *uint   `json:"episode_id"`
+	Mode            string  `json:"mode"` // first_frame|first_last|multi_ref
+	SplitFrameType  string  `json:"split_frame_type"`
+	Rows            int     `json:"rows"`
+	Cols            int     `json:"cols"`
+	Prompt          string  `json:"prompt"`
+	CellPrompts     string  `json:"cell_prompts"` // JSON array
+	ImageGenID      *uint   `json:"image_gen_id"`
+	ImageURL        string  `json:"image_url"`
+	CellsJSON       string  `json:"cells_json"` // JSON array of cell urls
+	StoryboardIDs   string  `json:"storyboard_ids"`
+	AssignmentsJSON string  `json:"assignments_json"` // JSON array of persisted cell-to-storyboard assignments
+	CellsVerified   bool    `gorm:"not null;default:false" json:"cells_verified"`
+	Status          string  `gorm:"default:pending" json:"status"`
+	ErrorMsg        string  `json:"error_msg"`
+	CreatedAt       string  `gorm:"not null" json:"created_at"`
+	UpdatedAt       string  `gorm:"not null" json:"updated_at"`
+	CompletedAt     *string `json:"completed_at,omitempty"`
 }
 
 // WebhookReceipt makes signed provider callbacks idempotent across restarts.

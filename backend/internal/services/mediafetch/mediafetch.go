@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eqzhou/flyaimovie/internal/services/netguard"
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
 
@@ -99,6 +100,9 @@ func downloadAuthorizedWithClient(ctx context.Context, client *http.Client, stor
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many redirects")
+		}
+		if bearerToken != "" && len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+			return fmt.Errorf("authorized media redirect changed host")
 		}
 		return ValidateRemoteURL(req.Context(), req.URL.String())
 	}
@@ -225,8 +229,7 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 }
 
 func isUnsafeIP(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+	return netguard.IsUnsafeIP(ip)
 }
 
 func allowedMIME(kind, mime string) bool {

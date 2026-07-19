@@ -195,6 +195,20 @@ func TestGridAssignmentModesAndFailedProbe(t *testing.T) {
 	if err := server.assignGridCells(context, []uint{999}, []string{"missing"}, "first_frame"); err == nil {
 		t.Fatal("missing storyboard assignment accepted")
 	}
+	rollbackShot := models.Storyboard{EpisodeID: 1, StoryboardNumber: 3, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&rollbackShot).Error; err != nil {
+		t.Fatal(err)
+	}
+	missingHistoryID := uint(99999)
+	if err := server.assignGridCellsWithHistory(context, []uint{rollbackShot.ID}, []string{"must-rollback"}, "first_frame", &missingHistoryID, map[string]any{"status": "split"}); err == nil {
+		t.Fatal("missing history did not roll back grid assignment")
+	}
+	if err := db.DB.First(&rollbackShot, rollbackShot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rollbackShot.FirstFrameImage != "" {
+		t.Fatalf("grid frame survived failed history update: %q", rollbackShot.FirstFrameImage)
+	}
 
 	relative, _, err := server.Store.SaveBytes("uploads", "corrupt.mp4", []byte("not media"))
 	if err != nil {

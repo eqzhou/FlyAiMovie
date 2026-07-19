@@ -3,6 +3,7 @@ package models
 type GenerationJob struct {
 	OrganizationID    uint    `gorm:"not null;default:0;index" json:"-"`
 	ID                uint    `gorm:"primaryKey" json:"id"`
+	ProductionRunID   *uint   `gorm:"index" json:"production_run_id,omitempty"`
 	Kind              string  `gorm:"not null;index" json:"kind"`
 	Status            string  `gorm:"not null;index:idx_jobs_ready" json:"status"`
 	TargetType        string  `gorm:"not null;index:idx_job_target" json:"target_type"`

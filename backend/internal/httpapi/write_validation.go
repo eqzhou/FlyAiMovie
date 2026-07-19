@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,21 @@ func bindOptionalJSON(c *gin.Context, target any) error {
 		return nil
 	}
 	return err
+}
+
+func bindSingleJSON(c *gin.Context, target any) error {
+	decoder := json.NewDecoder(c.Request.Body)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	return nil
 }
 
 const (

@@ -43,16 +43,19 @@ func TestRunnerPureHelpers(t *testing.T) {
 		t.Fatal("save_script classified as read only")
 	}
 
-	readAction := []struct {
-		Tool string         `json:"tool"`
-		Args map[string]any `json:"args"`
-	}{{Tool: "read_episode_script", Args: map[string]any{}}}
-	writeAction := []struct {
-		Tool string         `json:"tool"`
-		Args map[string]any `json:"args"`
-	}{{Tool: "save_script", Args: map[string]any{"script": "x"}}}
+	readAction := []AgentAction{{Tool: "read_episode_script", Args: map[string]any{}}}
+	writeAction := []AgentAction{{Tool: "save_script", Args: map[string]any{"script": "x"}}}
 	if !runner.needsWritePass("script_rewriter", readAction) || runner.needsWritePass("script_rewriter", writeAction) || runner.needsWritePass("unknown", readAction) {
 		t.Fatal("write-pass classification is incorrect")
+	}
+	if err := validateAgentActions("script_rewriter", readAction, maxAgentActions-1); err != nil {
+		t.Fatalf("valid cumulative actions rejected: %v", err)
+	}
+	if err := validateAgentActions("script_rewriter", readAction, maxAgentActions); err == nil || !strings.Contains(err.Error(), "动作数量") {
+		t.Fatalf("cumulative action limit not enforced: %v", err)
+	}
+	if err := validateAgentActions("extractor", writeAction, 0); err == nil {
+		t.Fatal("cross-agent tool ownership was not enforced")
 	}
 
 	if !hasToolFailure([]map[string]any{{"result": "Error: failed"}}) {

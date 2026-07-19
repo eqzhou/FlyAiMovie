@@ -70,6 +70,11 @@ func newDatabaseLogger(writer io.Writer) logger.Interface {
 }
 
 func AutoMigrate(gdb *gorm.DB) error {
+	// A short-lived development schema indexed the unbounded Asset URL column.
+	// Remove it before migration so existing databases can accept long media refs.
+	if err := gdb.Exec("DROP INDEX IF EXISTS idx_asset_grid_cell").Error; err != nil {
+		return err
+	}
 	if err := gdb.AutoMigrate(
 		&models.Organization{},
 		&models.User{},
@@ -93,6 +98,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.AIVoice{},
 		&models.AgentConfig{},
 		&models.PromptTemplate{},
+		&models.PromptTemplateRevision{},
 		&models.AgentRun{},
 		&models.AgentRunEvent{},
 		&models.ImageGeneration{},
@@ -104,6 +110,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.WebhookReceipt{},
 		&models.GenerationJob{},
 		&models.JobEvent{},
+		&models.ProductionRun{},
 		&models.MediaMigration{},
 		&models.MediaDeletionTask{},
 		&models.MediaCacheObject{},
@@ -112,7 +119,32 @@ func AutoMigrate(gdb *gorm.DB) error {
 		return err
 	}
 	// Replaced by the organization-scoped composite unique index.
-	return gdb.Exec("DROP INDEX IF EXISTS idx_ai_voices_voice_id").Error
+	if err := gdb.Exec("DROP INDEX IF EXISTS idx_ai_voices_voice_id").Error; err != nil {
+		return err
+	}
+	return backfillPromptTemplateRevisions(gdb)
+}
+
+func promptTemplateRevision(row models.PromptTemplate) models.PromptTemplateRevision {
+	return models.PromptTemplateRevision{
+		OrganizationID: row.OrganizationID, PromptTemplateID: row.ID, Version: row.Version,
+		Key: row.Key, Name: row.Name, Category: row.Category, Description: row.Description,
+		Content: row.Content, VariablesJSON: row.VariablesJSON, IsActive: row.IsActive, CreatedAt: row.UpdatedAt,
+	}
+}
+
+func backfillPromptTemplateRevisions(gdb *gorm.DB) error {
+	var templates []models.PromptTemplate
+	if err := gdb.Where("deleted_at IS NULL").Find(&templates).Error; err != nil {
+		return err
+	}
+	for _, template := range templates {
+		revision := promptTemplateRevision(template)
+		if err := gdb.Where("organization_id = ? AND prompt_template_id = ? AND version = ?", revision.OrganizationID, revision.PromptTemplateID, revision.Version).FirstOrCreate(&revision).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func SeedDefaults(gdb *gorm.DB) error {
@@ -179,6 +211,10 @@ func SeedOrganizationDefaults(gdb *gorm.DB, organizationID uint) error {
 		var existing models.PromptTemplate
 		err := gdb.Where("organization_id = ? AND key = ?", organizationID, item.Key).First(&existing).Error
 		if err == nil {
+			revision := promptTemplateRevision(existing)
+			if err := gdb.Where("organization_id = ? AND prompt_template_id = ? AND version = ?", organizationID, existing.ID, existing.Version).FirstOrCreate(&revision).Error; err != nil {
+				return err
+			}
 			continue
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -199,6 +235,13 @@ func SeedOrganizationDefaults(gdb *gorm.DB, organizationID uint) error {
 		row := models.PromptTemplate{OrganizationID: organizationID, Key: item.Key, Name: item.Name, Category: item.Category, Description: item.Description, Content: item.Content, VariablesJSON: string(variablesJSON), Version: 1, IsActive: true, CreatedAt: ts, UpdatedAt: ts}
 		if err := gdb.Create(&row).Error; err != nil {
 			return fmt.Errorf("seed prompt %s: %w", item.Key, err)
+		}
+		if err := gdb.Create(&models.PromptTemplateRevision{
+			OrganizationID: organizationID, PromptTemplateID: row.ID, Version: row.Version, Key: row.Key,
+			Name: row.Name, Category: row.Category, Description: row.Description, Content: row.Content,
+			VariablesJSON: row.VariablesJSON, IsActive: row.IsActive, CreatedAt: row.UpdatedAt,
+		}).Error; err != nil {
+			return fmt.Errorf("seed prompt revision %s: %w", item.Key, err)
 		}
 	}
 	agentDefaults := []models.AgentConfig{

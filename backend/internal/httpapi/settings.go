@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,16 +21,92 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/adapters"
 	"github.com/eqzhou/flyaimovie/internal/services/agents"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
+	"github.com/eqzhou/flyaimovie/internal/services/netguard"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Server) registerAIConfigs(api *gin.RouterGroup) {
 	api.GET("/ai-configs", s.listAIConfigs)
 	api.POST("/ai-configs", s.createAIConfig)
 	api.PUT("/ai-configs/:id", s.updateAIConfig)
+	api.POST("/ai-configs/test", s.testAIConfigDraft)
 	api.POST("/ai-configs/:id/test", s.testAIConfig)
 	api.DELETE("/ai-configs/:id", s.deleteAIConfig)
 	api.GET("/ai-providers", s.listAIProviders)
+}
+
+type aiConfigProbeInput struct {
+	ID          uint    `json:"id"`
+	ServiceType *string `json:"service_type"`
+	Provider    *string `json:"provider"`
+	Name        *string `json:"name"`
+	BaseURL     *string `json:"base_url"`
+	APIKey      *string `json:"api_key"`
+	Model       *string `json:"model"`
+}
+
+func (s *Server) testAIConfigDraft(c *gin.Context) {
+	var body aiConfigProbeInput
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.BadRequest(c, "invalid body")
+		return
+	}
+	cfg, status, err := s.resolveAIConfigProbe(c, body)
+	if err != nil {
+		c.JSON(status, gin.H{"code": status, "message": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	result, err := adapters.ProbeConnection(ctx, cfg)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": http.StatusBadGateway, "message": err.Error()})
+		return
+	}
+	response.Success(c, result)
+}
+
+func (s *Server) resolveAIConfigProbe(c *gin.Context, body aiConfigProbeInput) (adapters.AIConfig, int, error) {
+	var stored models.AIServiceConfig
+	if body.ID > 0 {
+		if err := organizationDB(c).First(&stored, body.ID).Error; err != nil {
+			return adapters.AIConfig{}, http.StatusNotFound, fmt.Errorf("AI config not found")
+		}
+	}
+	serviceType := strings.ToLower(strings.TrimSpace(probeStringValue(body.ServiceType, stored.ServiceType)))
+	provider := strings.ToLower(strings.TrimSpace(probeStringValue(body.Provider, stored.Provider)))
+	name := strings.TrimSpace(probeStringValue(body.Name, stored.Name))
+	baseURL := strings.TrimSpace(probeStringValue(body.BaseURL, stored.BaseURL))
+	model := strings.TrimSpace(probeStringValue(body.Model, stored.Model))
+	requestedAPIKey := probeStringValue(body.APIKey, "")
+	if len([]rune(name)) > maxNameRunes || len([]rune(baseURL)) > maxTextRunes || len([]rune(model)) > maxTextRunes || len([]rune(requestedAPIKey)) > maxTextRunes {
+		return adapters.AIConfig{}, http.StatusBadRequest, fmt.Errorf("AI config field is too long")
+	}
+	apiKey := requestedAPIKey
+	canReuseStoredKey := stored.ID > 0 && provider == stored.Provider && serviceType == stored.ServiceType && baseURL == strings.TrimSpace(stored.BaseURL)
+	if apiKey == "" && stored.ID > 0 && stored.APIKey != "" && !canReuseStoredKey {
+		return adapters.AIConfig{}, http.StatusBadRequest, fmt.Errorf("api_key is required when provider, service type, or base_url changes")
+	}
+	if apiKey == "" && canReuseStoredKey {
+		decrypted, err := security.DecryptSecret(stored.APIKey)
+		if err != nil {
+			return adapters.AIConfig{}, http.StatusInternalServerError, fmt.Errorf("stored API key cannot be decrypted")
+		}
+		apiKey = decrypted
+	}
+	if err := s.validateAIConfigInput(serviceType, provider, name, baseURL, apiKey); err != nil {
+		return adapters.AIConfig{}, http.StatusBadRequest, err
+	}
+	return adapters.AIConfig{Provider: provider, BaseURL: baseURL, APIKey: apiKey, Model: model}, http.StatusOK, nil
+}
+
+func probeStringValue(value *string, fallback string) string {
+	if value != nil {
+		return *value
+	}
+	return fallback
 }
 
 func (s *Server) testAIConfig(c *gin.Context) {
@@ -45,6 +123,10 @@ func (s *Server) testAIConfig(c *gin.Context) {
 	key, err := security.DecryptSecret(row.APIKey)
 	if err != nil {
 		response.ServerError(c, "stored API key cannot be decrypted")
+		return
+	}
+	if err := s.validateAIConfigInput(row.ServiceType, row.Provider, row.Name, row.BaseURL, key); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
@@ -104,6 +186,10 @@ func (s *Server) createAIConfig(c *gin.Context) {
 	if body.IsActive != nil {
 		active = *body.IsActive
 	}
+	if body.IsDefault && !active {
+		response.BadRequest(c, "default AI config must be active")
+		return
+	}
 	storedAPIKey, err := security.EncryptSecret(body.APIKey)
 	if err != nil {
 		response.ServerError(c, "failed to protect API key")
@@ -117,7 +203,18 @@ func (s *Server) createAIConfig(c *gin.Context) {
 		IsDefault: body.IsDefault, IsActive: active, Settings: body.Settings,
 		CreatedAt: ts, UpdatedAt: ts,
 	}
-	if err := organizationDB(c).Create(&row).Error; err != nil {
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		organizationID := currentOrganizationID(c)
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		if row.IsDefault {
+			if err := tx.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND service_type = ?", organizationID, row.ServiceType).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(&row).Error
+	}); err != nil {
 		response.ServerError(c, err.Error())
 		return
 	}
@@ -184,6 +281,22 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		response.NotFound(c, "AI config not found")
 		return
 	}
+	candidateActive := existing.IsActive
+	if value, ok := body["is_active"].(bool); ok {
+		candidateActive = value
+	}
+	candidateDefault := existing.IsDefault
+	if value, ok := body["is_default"].(bool); ok {
+		candidateDefault = value
+	}
+	if !candidateActive {
+		if requestedDefault, explicitlySet := body["is_default"].(bool); explicitlySet && requestedDefault {
+			response.BadRequest(c, "default AI config must be active")
+			return
+		}
+		updates["is_default"] = false
+		candidateDefault = false
+	}
 	candidateType := existing.ServiceType
 	if value, ok := body["service_type"].(string); ok {
 		candidateType = strings.ToLower(strings.TrimSpace(value))
@@ -204,9 +317,16 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		candidateBaseURL = strings.TrimSpace(value)
 		updates["base_url"] = candidateBaseURL
 	}
+	identityChanged := candidateType != existing.ServiceType || candidateProvider != existing.Provider || candidateBaseURL != strings.TrimSpace(existing.BaseURL)
+	replacementAPIKey, hasReplacementAPIKey := body["api_key"].(string)
+	hasReplacementAPIKey = hasReplacementAPIKey && replacementAPIKey != "" && !strings.Contains(replacementAPIKey, "***")
+	if identityChanged && existing.APIKey != "" && !hasReplacementAPIKey {
+		response.BadRequest(c, "api_key is required when provider, service type, or base_url changes")
+		return
+	}
 	candidateAPIKey := existing.APIKey
-	if value, ok := body["api_key"].(string); ok && value != "" && !strings.Contains(value, "***") {
-		candidateAPIKey = value
+	if hasReplacementAPIKey {
+		candidateAPIKey = replacementAPIKey
 	}
 	if err := s.validateAIConfigInput(candidateType, candidateProvider, candidateName, candidateBaseURL, candidateAPIKey); err != nil {
 		response.BadRequest(c, err.Error())
@@ -228,12 +348,26 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		response.BadRequest(c, "at least one AI config field is required")
 		return
 	}
-	result := organizationDB(c).Model(&models.AIServiceConfig{}).Where("id = ?", id).Updates(updates)
-	if result.Error != nil {
+	organizationID := currentOrganizationID(c)
+	var affected int64
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		if candidateDefault {
+			if err := tx.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND service_type = ? AND id <> ?", organizationID, candidateType, id).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&models.AIServiceConfig{}).Where("organization_id = ? AND id = ?", organizationID, id).Updates(updates)
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
 		response.ServerError(c, "failed to update AI config")
 		return
 	}
-	if result.RowsAffected == 0 {
+	if affected == 0 {
 		response.NotFound(c, "AI config not found")
 		return
 	}
@@ -243,6 +377,14 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		return
 	}
 	response.Success(c, aiConfigResponse(row))
+}
+
+func lockAIConfigOrganization(tx *gorm.DB, organizationID uint) error {
+	if organizationID == 0 {
+		return nil
+	}
+	var organization models.Organization
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&organization, organizationID).Error
 }
 
 func validateAIConfigInput(serviceType, provider, name, baseURL, apiKey string) error {
@@ -274,13 +416,16 @@ func validateAIConfigInputWithPrivateHosts(serviceType, provider, name, baseURL,
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("base_url must not contain credentials, query, or fragment")
 	}
+	if provider != "openai_local" && parsed.Scheme != "https" {
+		return fmt.Errorf("remote provider base_url must use https")
+	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	if host == "metadata.google.internal" || host == "metadata" || host == "169.254.169.254" {
 		return fmt.Errorf("base_url host is not allowed")
 	}
 	privateHost := host == "localhost" || strings.HasSuffix(host, ".localhost")
 	if ip := net.ParseIP(host); ip != nil {
-		privateHost = ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || !ip.IsGlobalUnicast()
+		privateHost = netguard.IsUnsafeIP(ip)
 	}
 	if provider == "openai_local" {
 		if serviceType != "text" || !containsHost(allowedPrivateHosts, host) {
@@ -541,7 +686,11 @@ func (s *Server) agentChat(c *gin.Context) {
 		return
 	}
 	defer cleanup()
-	res, err := s.Agents.Run(runContext, currentOrganizationID(c), agentType, body.DramaID, body.EpisodeID, body.Message)
+	observer, eventError := s.agentRunObserver(run)
+	res, err := s.Agents.RunObserved(runContext, currentOrganizationID(c), agentType, body.DramaID, body.EpisodeID, body.Message, observer)
+	if persistErr := eventError(); persistErr != nil {
+		err = errors.Join(err, fmt.Errorf("persist agent event: %w", persistErr))
+	}
 	if finishErr := s.finishAgentRun(run, res, err); finishErr != nil {
 		response.ServerError(c, "failed to save agent run")
 		return
@@ -589,73 +738,159 @@ func (s *Server) registerSkills(api *gin.RouterGroup) {
 }
 
 func (s *Server) registerVoices(api *gin.RouterGroup) {
-	api.GET("/ai-voices", func(c *gin.Context) {
-		provider := c.Query("provider")
-		var rows []models.AIVoice
-		q := organizationDB(c).Model(&models.AIVoice{})
-		if provider != "" {
-			q = q.Where("provider = ?", provider)
-		}
-		q.Find(&rows)
-		out := make([]gin.H, 0, len(rows))
-		for _, r := range rows {
-			out = append(out, gin.H{
-				"voice_id": r.VoiceID, "voice_name": r.VoiceName, "description": r.Description,
-				"language": r.Language, "provider": r.Provider, "capabilities": r.Capabilities, "is_active": r.IsActive,
-			})
-		}
-		response.Success(c, out)
-	})
-	api.POST("/ai-voices/sync", func(c *gin.Context) {
-		ts := response.Now()
-		organizationID := currentOrganizationID(c)
-		var cfg *ai.ServiceConfig
-		var err error
-		if organizationID == 0 {
-			cfg, err = ai.GetActiveConfig("audio", nil)
-		} else {
-			cfg, err = ai.GetOrganizationConfig(organizationID, "audio", nil)
-		}
+	api.GET("/ai-voices", s.listVoices)
+	api.POST("/ai-voices/sync", s.syncVoices)
+	api.POST("/ai-voices/:voiceID/preview", s.previewVoice)
+}
+
+func (s *Server) listVoices(c *gin.Context) {
+	provider := strings.TrimSpace(c.Query("provider"))
+	if len(provider) > 80 {
+		response.BadRequest(c, "invalid provider")
+		return
+	}
+	var rows []models.AIVoice
+	query := organizationDB(c).Model(&models.AIVoice{})
+	if provider != "" {
+		query = query.Where("provider = ?", provider)
+	}
+	if c.Query("include_inactive") != "1" {
+		query = query.Where("is_active = ?", true)
+	}
+	if err := query.Order("is_active DESC, provider, voice_name, voice_id").Find(&rows).Error; err != nil {
+		response.ServerError(c, "failed to load voices")
+		return
+	}
+	out := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, gin.H{"voice_id": row.VoiceID, "voice_name": row.VoiceName, "description": row.Description,
+			"language": row.Language, "provider": row.Provider, "capabilities": row.Capabilities, "is_active": row.IsActive})
+	}
+	response.Success(c, out)
+}
+
+func (s *Server) syncVoices(c *gin.Context) {
+	organizationID := currentOrganizationID(c)
+	var cfg *ai.ServiceConfig
+	var err error
+	if organizationID == 0 {
+		cfg, err = ai.GetActiveConfig("audio", nil)
+	} else {
+		cfg, err = ai.GetOrganizationConfig(organizationID, "audio", nil)
+	}
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	voices := []adapters.VoiceInfo{}
+	message := "MiniMax voices synchronized"
+	if cfg.Provider == "mock" {
+		voices = []adapters.VoiceInfo{{ID: "male-qn-qingse", Name: "青涩青年", Language: "中文", Capabilities: "mock"},
+			{ID: "male-qn-jingying", Name: "精英青年", Language: "中文", Capabilities: "mock"}, {ID: "female-shaonv", Name: "少女", Language: "中文", Capabilities: "mock"},
+			{ID: "female-yujie", Name: "御姐", Language: "中文", Capabilities: "mock"}, {ID: "presenter_male", Name: "男性主持人", Language: "中文", Capabilities: "mock"},
+			{ID: "presenter_female", Name: "女性主持人", Language: "中文", Capabilities: "mock"}}
+		message = "Mock voices seeded"
+	} else if cfg.Provider == "minimax" {
+		voices, err = adapters.ListMiniMaxVoices(c.Request.Context(), adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
 		if err != nil {
 			response.BadRequest(c, err.Error())
 			return
 		}
-		voices := []adapters.VoiceInfo{}
-		message := "MiniMax voices synchronized"
-		if cfg.Provider == "mock" {
-			voices = []adapters.VoiceInfo{{ID: "male-qn-qingse", Name: "青涩青年", Language: "中文", Capabilities: "mock"},
-				{ID: "male-qn-jingying", Name: "精英青年", Language: "中文", Capabilities: "mock"}, {ID: "female-shaonv", Name: "少女", Language: "中文", Capabilities: "mock"},
-				{ID: "female-yujie", Name: "御姐", Language: "中文", Capabilities: "mock"}, {ID: "presenter_male", Name: "男性主持人", Language: "中文", Capabilities: "mock"},
-				{ID: "presenter_female", Name: "女性主持人", Language: "中文", Capabilities: "mock"}}
-			message = "Mock voices seeded"
-		} else if cfg.Provider == "minimax" {
-			voices, err = adapters.ListMiniMaxVoices(c.Request.Context(), adapters.AIConfig{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model})
-			if err != nil {
-				response.BadRequest(c, err.Error())
-				return
-			}
-		} else {
-			response.BadRequest(c, "active audio provider does not support voice synchronization")
-			return
-		}
-		seen := make([]string, 0, len(voices))
+	} else {
+		response.BadRequest(c, "active audio provider does not support voice synchronization")
+		return
+	}
+	ts := response.Now()
+	seen := make([]string, 0, len(voices))
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		for _, voice := range voices {
+			if strings.TrimSpace(voice.ID) == "" {
+				continue
+			}
 			seen = append(seen, voice.ID)
 			row := models.AIVoice{OrganizationID: organizationID, VoiceID: voice.ID, VoiceName: voice.Name, Description: voice.Description,
 				Language: voice.Language, Provider: cfg.Provider, Capabilities: voice.Capabilities, IsActive: true, CreatedAt: ts, UpdatedAt: ts}
 			var existing models.AIVoice
-			if organizationDB(c).Where("voice_id = ?", voice.ID).First(&existing).Error == nil {
-				organizationDB(c).Model(&existing).Updates(map[string]any{"voice_name": row.VoiceName, "description": row.Description, "language": row.Language,
-					"provider": row.Provider, "capabilities": row.Capabilities, "is_active": true, "updated_at": ts})
-			} else {
-				organizationDB(c).Create(&row)
+			findErr := tx.Where("organization_id = ? AND voice_id = ?", organizationID, voice.ID).First(&existing).Error
+			if errors.Is(findErr, gorm.ErrRecordNotFound) {
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if findErr != nil {
+				return findErr
+			}
+			if err := tx.Model(&existing).Updates(map[string]any{"voice_name": row.VoiceName, "description": row.Description, "language": row.Language,
+				"provider": row.Provider, "capabilities": row.Capabilities, "is_active": true, "updated_at": ts}).Error; err != nil {
+				return err
 			}
 		}
-		query := organizationDB(c).Model(&models.AIVoice{}).Where("provider = ?", cfg.Provider)
+		query := tx.Model(&models.AIVoice{}).Where("organization_id = ? AND provider = ?", organizationID, cfg.Provider)
 		if len(seen) > 0 {
 			query = query.Where("voice_id NOT IN ?", seen)
 		}
-		query.Updates(map[string]any{"is_active": false, "updated_at": ts})
-		response.Success(c, gin.H{"count": len(voices), "message": message})
+		return query.Updates(map[string]any{"is_active": false, "updated_at": ts}).Error
 	})
+	if err != nil {
+		response.ServerError(c, "failed to save synchronized voices")
+		return
+	}
+	response.Success(c, gin.H{"count": len(seen), "message": message})
+}
+
+func (s *Server) previewVoice(c *gin.Context) {
+	voiceID := strings.TrimSpace(c.Param("voiceID"))
+	if voiceID == "" || len([]rune(voiceID)) > 200 {
+		response.BadRequest(c, "invalid voice id")
+		return
+	}
+	var raw map[string]any
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		response.BadRequest(c, "invalid JSON body")
+		return
+	}
+	if err := rejectUnknownFields(raw, "text", "config_id"); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	encoded, _ := json.Marshal(raw)
+	var body struct {
+		Text     string `json:"text"`
+		ConfigID uint   `json:"config_id"`
+	}
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		response.BadRequest(c, "invalid voice preview fields")
+		return
+	}
+	body.Text = strings.TrimSpace(body.Text)
+	if body.Text == "" || len([]rune(body.Text)) > 200 {
+		response.BadRequest(c, "preview text must contain 1 to 200 characters")
+		return
+	}
+	organizationID := currentOrganizationID(c)
+	var voice models.AIVoice
+	if err := organizationDB(c).Where("voice_id = ? AND is_active = ?", voiceID, true).First(&voice).Error; err != nil {
+		response.NotFound(c, "active voice not found")
+		return
+	}
+	var configRow models.AIServiceConfig
+	query := organizationDB(c).Where("service_type = ? AND provider = ? AND is_active = ?", "audio", voice.Provider, true)
+	if body.ConfigID > 0 {
+		query = query.Where("id = ?", body.ConfigID)
+	} else {
+		query = query.Order("is_default DESC, priority DESC, id DESC")
+	}
+	if err := query.First(&configRow).Error; err != nil {
+		response.BadRequest(c, "no matching active audio config for voice provider")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+	url, err := s.TTS.GenerateVoicePreviewOrganization(ctx, organizationID, body.Text, voice.VoiceID, &configRow.ID)
+	if err != nil {
+		response.BadRequest(c, "TTS preview failed: "+err.Error())
+		return
+	}
+	response.Success(c, gin.H{"voice_id": voice.VoiceID, "provider": voice.Provider, "audio_url": url})
 }

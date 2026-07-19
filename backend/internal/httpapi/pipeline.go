@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -13,8 +14,10 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/ffmpeg"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
+	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Server) registerPipelineExtras(api *gin.RouterGroup) {
@@ -72,38 +75,29 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 			return
 		}
 	}
-	prompt := body.Prompt
-	if prompt == "" {
-		prompt = firstNonEmpty(sb.ImagePrompt, sb.Description, sb.Action, sb.Title)
-	}
-	if prompt == "" {
-		response.BadRequest(c, "prompt empty")
-		return
-	}
-	// enrich prompt by frame type
-	switch body.FrameType {
-	case "last_frame":
-		prompt = "ending frame, " + prompt
-	case "composed", "storyboard":
-		prompt = "storyboard panel composition, " + prompt
-	default:
-		prompt = "opening frame, " + prompt
-	}
-	var configID *uint = body.ConfigID
 	epID := sb.EpisodeID
 	if body.EpisodeID != nil {
 		epID = *body.EpisodeID
 	}
+	var ep models.Episode
+	if err := organizationDB(c).First(&ep, epID).Error; err != nil {
+		response.NotFound(c, "episode not found")
+		return
+	}
+	var drama models.Drama
+	organizationDB(c).First(&drama, ep.DramaID)
+	characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
+	resolution := prompttemplate.FramePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.FrameType, body.Prompt, characterNames, sceneNames)
+	prompt := strings.TrimSpace(resolution.Prompt)
+	if prompt == "" {
+		response.BadRequest(c, "prompt empty")
+		return
+	}
+	var configID *uint = body.ConfigID
 	if configID == nil {
-		var ep models.Episode
-		if err := organizationDB(c).First(&ep, epID).Error; err == nil {
-			configID = ep.ImageConfigID
-		}
+		configID = ep.ImageConfigID
 	}
 	sid := sb.ID
-	// load drama via episode
-	var ep models.Episode
-	organizationDB(c).First(&ep, epID)
 	did := ep.DramaID
 	rec := &models.ImageGeneration{
 		OrganizationID: currentOrganizationID(c),
@@ -182,21 +176,20 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 			errs = append(errs, fmt.Sprintf("sb %d: not found", id))
 			continue
 		}
-		prompt := firstNonEmpty(sb.ImagePrompt, sb.Description, sb.Action, sb.Title)
+		var ep models.Episode
+		if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+			errs = append(errs, fmt.Sprintf("sb %d: episode not found", id))
+			continue
+		}
+		var drama models.Drama
+		organizationDB(c).First(&drama, ep.DramaID)
+		characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
+		resolution := prompttemplate.FramePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.FrameType, "", characterNames, sceneNames)
+		prompt := strings.TrimSpace(resolution.Prompt)
 		if prompt == "" {
 			errs = append(errs, fmt.Sprintf("sb %d: empty prompt", id))
 			continue
 		}
-		switch body.FrameType {
-		case "last_frame":
-			prompt = "ending frame, " + prompt
-		case "composed", "storyboard":
-			prompt = "storyboard panel composition, " + prompt
-		default:
-			prompt = "opening frame, " + prompt
-		}
-		var ep models.Episode
-		organizationDB(c).First(&ep, sb.EpisodeID)
 		configID := body.ConfigID
 		if configID == nil {
 			configID = ep.ImageConfigID
@@ -287,8 +280,14 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 			continue
 		}
 		var ep models.Episode
-		organizationDB(c).First(&ep, sb.EpisodeID)
-		prompt := firstNonEmpty(sb.VideoPrompt, sb.ImagePrompt, sb.Description)
+		if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+			continue
+		}
+		var drama models.Drama
+		organizationDB(c).First(&drama, ep.DramaID)
+		characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
+		resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, "", characterNames, sceneNames)
+		prompt := strings.TrimSpace(resolution.Prompt)
 		if prompt == "" {
 			continue
 		}
@@ -383,8 +382,19 @@ func (s *Server) storyboardGenerateVideo(c *gin.Context) {
 		return
 	}
 	var ep models.Episode
-	organizationDB(c).First(&ep, sb.EpisodeID)
-	prompt := firstNonEmpty(body.Prompt, sb.VideoPrompt, sb.ImagePrompt, sb.Description)
+	if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+		response.NotFound(c, "episode not found")
+		return
+	}
+	var drama models.Drama
+	organizationDB(c).First(&drama, ep.DramaID)
+	characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
+	resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.Prompt, characterNames, sceneNames)
+	prompt := strings.TrimSpace(resolution.Prompt)
+	if prompt == "" {
+		response.BadRequest(c, "prompt empty")
+		return
+	}
 	sid := sb.ID
 	did := ep.DramaID
 	rec := &models.VideoGeneration{
@@ -589,49 +599,14 @@ func (s *Server) genericWebhook(c *gin.Context) {
 }
 
 // Enhance grid endpoints: prompt with agent + history persistence helpers used from media.go overrides.
-func (s *Server) buildGridPrompt(mode string, rows, cols int, shots []models.Storyboard) (string, []string) {
-	if rows <= 0 {
-		rows = 2
-	}
-	if cols <= 0 {
-		cols = 2
-	}
-	cells := make([]string, 0, rows*cols)
-	for i := 0; i < rows*cols; i++ {
-		if i < len(shots) {
-			sb := shots[i]
-			p := firstNonEmpty(sb.ImagePrompt, sb.Description, sb.Action, sb.Title)
-			if p == "" {
-				p = "cinematic shot"
-			}
-			cells = append(cells, p)
-		} else {
-			cells = append(cells, "empty cinematic panel, dark, no text")
-		}
-	}
-	var b strings.Builder
-	b.WriteString("Create a seamless ")
-	b.WriteString(strconv.Itoa(rows))
-	b.WriteString("x")
-	b.WriteString(strconv.Itoa(cols))
-	b.WriteString(" storyboard grid with exactly ")
-	b.WriteString(strconv.Itoa(rows * cols))
-	b.WriteString(" equal panels, consistent art style, cinematic lighting, high detail, no text, no watermark, no borders labels.\n")
-	if mode == "first_last" {
-		b.WriteString("For each shot, create two panels in order: opening frame first, ending frame second. Keep the same characters and composition across the pair.\n")
-	} else if mode == "multi_ref" {
-		b.WriteString("Maintain character identity consistency across panels.\n")
-	} else {
-		b.WriteString("Each panel is a first-frame composition.\n")
-	}
-	for i, cell := range cells {
-		b.WriteString("Panel ")
-		b.WriteString(strconv.Itoa(i + 1))
-		b.WriteString(": ")
-		b.WriteString(cell)
-		b.WriteString("\n")
-	}
-	return b.String(), cells
+func (s *Server) buildGridPrompt(c *gin.Context, organizationID uint, drama models.Drama, episode models.Episode, mode string, rows, cols int, shots []models.Storyboard) (string, []string) {
+	characterNames, sceneNames := promptAssetNames(c, drama.ID, nil)
+	resolution, cells := prompttemplate.GridPrompt(organizationDB(c), organizationID, drama, episode, mode, rows, cols, shots, characterNames, sceneNames)
+	return resolution.Prompt, cells
+}
+
+func promptAssetNames(c *gin.Context, dramaID uint, storyboard *models.Storyboard) ([]string, []string) {
+	return prompttemplate.ShotAssetNames(organizationDB(c), currentOrganizationID(c), dramaID, storyboard)
 }
 
 func mustJSON(v any) string {
@@ -640,7 +615,13 @@ func mustJSON(v any) string {
 }
 
 // re-export helpers for split assignment of last frames
+var errGridHistoryAlreadySplit = errors.New("grid history is already split")
+
 func (s *Server) assignGridCells(c *gin.Context, ids []uint, urls []string, frameType string) error {
+	return s.assignGridCellsWithHistory(c, ids, urls, frameType, nil, nil)
+}
+
+func (s *Server) assignGridCellsWithHistory(c *gin.Context, ids []uint, urls []string, frameType string, historyID *uint, historyUpdates map[string]any) error {
 	if frameType == "" {
 		frameType = "first_frame"
 	}
@@ -648,6 +629,17 @@ func (s *Server) assignGridCells(c *gin.Context, ids []uint, urls []string, fram
 		return fmt.Errorf("invalid first_last grid assignment")
 	}
 	return organizationDB(c).Transaction(func(tx *gorm.DB) error {
+		var lockedHistory models.GridHistory
+		if historyID != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("organization_id = ? AND id = ?", currentOrganizationID(c), *historyID).
+				First(&lockedHistory).Error; err != nil {
+				return err
+			}
+			if historyUpdates != nil && (lockedHistory.Status == "split" || strings.TrimSpace(lockedHistory.CellsJSON) != "") {
+				return errGridHistoryAlreadySplit
+			}
+		}
 		for i, url := range urls {
 			if i >= len(ids) {
 				break
@@ -678,6 +670,32 @@ func (s *Server) assignGridCells(c *gin.Context, ids []uint, urls []string, fram
 			}
 			if result.RowsAffected != 1 {
 				return fmt.Errorf("storyboard %d not found", ids[targetIndex])
+			}
+		}
+		if historyID != nil {
+			assets := make([]models.Asset, 0, len(urls))
+			createdAt := response.Now()
+			for index, url := range urls {
+				assets = append(assets, models.Asset{
+					OrganizationID: currentOrganizationID(c), DramaID: lockedHistory.DramaID, EpisodeID: lockedHistory.EpisodeID,
+					Name: fmt.Sprintf("宫格切片 #%d", index+1), Type: "image", Category: "grid_cell",
+					URL: url, LocalPath: strings.TrimPrefix(url, "/static/"), MimeType: "image/png", ProbeStatus: "completed",
+					GridHistoryID: historyID, CreatedAt: createdAt, UpdatedAt: createdAt,
+				})
+			}
+			if len(assets) > 0 {
+				if err := tx.Create(&assets).Error; err != nil {
+					return err
+				}
+			}
+			result := tx.Model(&models.GridHistory{}).
+				Where("organization_id = ? AND id = ?", currentOrganizationID(c), *historyID).
+				Updates(historyUpdates)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("grid history %d not found", *historyID)
 			}
 		}
 		return nil

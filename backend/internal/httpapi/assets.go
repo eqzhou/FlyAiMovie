@@ -126,6 +126,14 @@ func (s *Server) updateAsset(c *gin.Context) {
 			updates[key] = value
 		}
 	}
+	for _, key := range []string{"url", "thumbnail_url", "local_path"} {
+		if value, ok := updates[key].(string); ok && value != "" {
+			if err := validateLocalMediaOwnership(c, value); err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+		}
+	}
 	for _, key := range []string{"file_size", "width", "height", "duration"} {
 		if value, ok := body[key]; ok {
 			number, valid := nonNegativeJSONInt(value)

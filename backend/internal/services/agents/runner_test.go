@@ -111,6 +111,10 @@ func TestOfflineFallbackAgentsPersistWorkflow(t *testing.T) {
 	if err := database.Create(&voice).Error; err != nil {
 		t.Fatal(err)
 	}
+	textConfig := models.AIServiceConfig{OrganizationID: 7, ServiceType: "text", Provider: "mock", Name: "offline-mock", BaseURL: "http://localhost", APIKey: "mock", Model: "mock", IsActive: true, IsDefault: true, CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&textConfig).Error; err != nil {
+		t.Fatal(err)
+	}
 	runner := NewRunner(t.TempDir())
 	var voiceResult *ChatResult
 
@@ -167,5 +171,32 @@ func TestOfflineFallbackAgentsPersistWorkflow(t *testing.T) {
 	database.Model(&models.EpisodeScene{}).Where("organization_id = ? AND episode_id = ?", 7, episode.ID).Count(&sceneLinks)
 	if characterLinks != int64(len(characters)) || sceneLinks == 0 {
 		t.Fatalf("links characters=%d scenes=%d", characterLinks, sceneLinks)
+	}
+}
+
+func TestEmitResultEventsHandlesObserversAndPartialResults(t *testing.T) {
+	emitRunEvent(nil, RunEvent{EventType: "ignored"})
+	emitResultEvents(nil, &ChatResult{})
+	var events []RunEvent
+	observer := func(event RunEvent) { events = append(events, event) }
+	emitResultEvents(observer, nil)
+	emitResultEvents(observer, &ChatResult{
+		ToolCalls: []map[string]any{
+			{"toolName": "read_script", "args": map[string]any{"episode_id": 1}},
+			{"toolName": "save_script"},
+		},
+		ToolResults: []map[string]any{{"toolName": "read_script", "result": "content"}},
+	})
+	if len(events) != 3 {
+		t.Fatalf("events=%+v", events)
+	}
+	wantTypes := []string{"tool_call", "tool_result", "tool_call"}
+	for index, want := range wantTypes {
+		if events[index].EventType != want {
+			t.Fatalf("event[%d]=%+v want=%s", index, events[index], want)
+		}
+	}
+	if events[0].ToolName != "read_script" || events[2].ToolName != "save_script" {
+		t.Fatalf("events=%+v", events)
 	}
 }
