@@ -233,3 +233,50 @@ func TestMutableMediaReferencesCannotClaimUnownedLocalPaths(t *testing.T) {
 		}
 	}
 }
+
+
+func TestGridAssignMapsBusinessErrors(t *testing.T) {
+	router := testRouter(t)
+	now := response.Now()
+	drama := models.Drama{Title: "grid errors", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&drama).Error; err != nil {
+		t.Fatal(err)
+	}
+	episode := models.Episode{DramaID: drama.ID, EpisodeNumber: 1, Title: "one", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&episode).Error; err != nil {
+		t.Fatal(err)
+	}
+	storyboard := models.Storyboard{EpisodeID: episode.ID, StoryboardNumber: 1, Title: "shot", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	history := models.GridHistory{
+		DramaID: &drama.ID, EpisodeID: &episode.ID, Mode: "first_frame", Rows: 1, Cols: 1,
+		ImageURL: "/static/grid.png", CellsJSON: `["/static/cell-1.png"]`, Status: "split",
+		CellsVerified: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.DB.Create(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.Asset{OrganizationID: history.OrganizationID, DramaID: &drama.ID, EpisodeID: &episode.ID, GridHistoryID: &history.ID, Name: "cell", Type: "image", Category: "grid_cell", URL: "/static/cell-1.png", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	missingStoryboard := performRequest(router, http.MethodPost, "/api/v1/grid/history/"+itoa(history.ID)+"/assign", `{"cell_index":0,"storyboard_id":99999,"frame_type":"first_frame"}`, nil)
+	if missingStoryboard.Code != http.StatusConflict && missingStoryboard.Code != http.StatusNotFound {
+		// ownership validation may conflict before not-found; either is better than 500
+		t.Fatalf("missing storyboard status=%d body=%s", missingStoryboard.Code, missingStoryboard.Body.String())
+	}
+	if missingStoryboard.Code == http.StatusInternalServerError {
+		t.Fatalf("mapped business error should not be 500: %s", missingStoryboard.Body.String())
+	}
+
+	history.CellsJSON = `[]`
+	if err := db.DB.Model(&history).Update("cells_json", `[]`).Error; err != nil {
+		t.Fatal(err)
+	}
+	missingCell := performRequest(router, http.MethodPost, "/api/v1/grid/history/"+itoa(history.ID)+"/assign", `{"cell_index":0,"storyboard_id":`+itoa(storyboard.ID)+`,"frame_type":"first_frame"}`, nil)
+	if missingCell.Code != http.StatusBadRequest {
+		t.Fatalf("missing cell status=%d body=%s", missingCell.Code, missingCell.Body.String())
+	}
+}

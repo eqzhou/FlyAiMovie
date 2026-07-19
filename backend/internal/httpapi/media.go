@@ -772,7 +772,11 @@ type gridCellAssignment struct {
 	FrameType    string `json:"frame_type"`
 }
 
-var errUnregisteredGridCell = errors.New("grid cell is not registered to the current organization")
+var (
+	errUnregisteredGridCell = errors.New("grid cell is not registered to the current organization")
+	errGridCellMissing      = errors.New("grid cell does not exist")
+	errGridStoryboardMissing = errors.New("storyboard not found")
+)
 
 func decodeGridStrings(raw string) []string {
 	var values []string
@@ -932,7 +936,7 @@ func (s *Server) gridAssignCell(c *gin.Context) {
 		}
 		lockedCells := decodeGridStrings(locked.CellsJSON)
 		if cellIndex >= len(lockedCells) || strings.TrimSpace(lockedCells[cellIndex]) == "" {
-			return fmt.Errorf("grid cell does not exist")
+			return errGridCellMissing
 		}
 		committedCellURL = lockedCells[cellIndex]
 		var ownedCellCount int64
@@ -971,7 +975,7 @@ func (s *Server) gridAssignCell(c *gin.Context) {
 			return updated.Error
 		}
 		if updated.RowsAffected != 1 {
-			return fmt.Errorf("storyboard not found")
+			return errGridStoryboardMissing
 		}
 		nextAssignments := replaceGridAssignment(assignments, replacement)
 		committedAssignments = nextAssignments
@@ -981,11 +985,16 @@ func (s *Server) gridAssignCell(c *gin.Context) {
 		}).Error
 	})
 	if err != nil {
-		if errors.Is(err, errUnregisteredGridCell) {
+		switch {
+		case errors.Is(err, errUnregisteredGridCell):
 			c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "grid cells from this history must be regenerated before reassignment"})
-			return
+		case errors.Is(err, errGridStoryboardMissing), errors.Is(err, gorm.ErrRecordNotFound):
+			response.NotFound(c, "storyboard not found")
+		case errors.Is(err, errGridCellMissing):
+			response.BadRequest(c, "grid cell does not exist")
+		default:
+			response.ServerError(c, "failed to assign grid cell")
 		}
-		response.ServerError(c, "failed to assign grid cell")
 		return
 	}
 	response.Success(c, gin.H{"cell_index": cellIndex, "cell_url": committedCellURL, "storyboard_id": storyboardIDValue, "frame_type": frameType, "assignments": committedAssignments})

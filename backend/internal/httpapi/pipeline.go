@@ -274,13 +274,16 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 		return
 	}
 	out := make([]uint, 0)
+	errs := make([]string, 0)
 	for _, id := range ids {
 		var sb models.Storyboard
 		if err := organizationDB(c).First(&sb, id).Error; err != nil {
+			errs = append(errs, fmt.Sprintf("sb %d: not found", id))
 			continue
 		}
 		var ep models.Episode
 		if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+			errs = append(errs, fmt.Sprintf("sb %d: episode not found", id))
 			continue
 		}
 		var drama models.Drama
@@ -289,6 +292,11 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 		resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, "", characterNames, sceneNames)
 		prompt := strings.TrimSpace(resolution.Prompt)
 		if prompt == "" {
+			errs = append(errs, fmt.Sprintf("sb %d: empty prompt", id))
+			continue
+		}
+		if firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage) == "" {
+			errs = append(errs, fmt.Sprintf("sb %d: missing first frame", id))
 			continue
 		}
 		sid := sb.ID
@@ -300,15 +308,17 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 			FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage,
 			ReferenceMode: body.ReferenceMode, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration,
 		}
-		if err := s.Videos.Generate(c.Request.Context(), rec, body.ConfigID); err == nil {
-			out = append(out, rec.ID)
-		} else if body.ConfigID == nil {
-			if err2 := s.Videos.Generate(c.Request.Context(), rec, ep.VideoConfigID); err2 == nil {
-				out = append(out, rec.ID)
-			}
+		configID := body.ConfigID
+		if configID == nil {
+			configID = ep.VideoConfigID
 		}
+		if err := s.Videos.Generate(c.Request.Context(), rec, configID); err != nil {
+			errs = append(errs, fmt.Sprintf("sb %d: %s", id, err.Error()))
+			continue
+		}
+		out = append(out, rec.ID)
 	}
-	response.Success(c, gin.H{"count": len(out), "ids": out})
+	response.Success(c, gin.H{"count": len(out), "ids": out, "errors": errs})
 }
 
 func (s *Server) batchGenerateTTS(c *gin.Context) {
