@@ -735,3 +735,110 @@ func TestProductionLeaseHeartbeatPreventsDuplicateClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+
+func TestProductionCompleteAndFailEpisodeStatus(t *testing.T) {
+	fixture := newProductionFixture(t)
+	now := response.Now()
+
+	// complete() should mark the episode completed even when video already exists.
+	episode := models.Episode{OrganizationID: 41, DramaID: fixture.drama.ID, EpisodeNumber: 31, Title: "已有成片", Content: "内容", Status: "processing", VideoURL: "/static/episode.mp4", CreatedAt: now, UpdatedAt: now}
+	if err := fixture.service.DB.Create(&episode).Error; err != nil {
+		t.Fatal(err)
+	}
+	run, err := fixture.service.Create(41, fixture.drama.ID, episode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.DB.Model(run).Updates(map[string]any{"stage": StageMerge, "lease_owner": "complete-owner", "lease_expires_at": now, "available_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	run.LeaseOwner = "complete-owner"
+	if err := fixture.service.complete(run); err != nil {
+		t.Fatal(err)
+	}
+	var completed models.Episode
+	if err := fixture.service.DB.First(&completed, episode.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "completed" {
+		t.Fatalf("complete left episode status=%s", completed.Status)
+	}
+
+	// failRun should restore completed when a remake fails but a final cut remains.
+	remake := models.Episode{OrganizationID: 41, DramaID: fixture.drama.ID, EpisodeNumber: 32, Title: "重制失败", Content: "内容", Status: "processing", VideoURL: "/static/old.mp4", CreatedAt: now, UpdatedAt: now}
+	if err := fixture.service.DB.Create(&remake).Error; err != nil {
+		t.Fatal(err)
+	}
+	failedRun, err := fixture.service.Create(41, fixture.drama.ID, remake.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.DB.Model(failedRun).Updates(map[string]any{"lease_owner": "fail-owner", "lease_expires_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	failedRun.LeaseOwner = "fail-owner"
+	if err := fixture.service.failRun(failedRun, errors.New("agent boom")); err != nil {
+		t.Fatal(err)
+	}
+	var restored models.Episode
+	if err := fixture.service.DB.First(&restored, remake.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restored.Status != "completed" {
+		t.Fatalf("failRun remake status=%s want completed", restored.Status)
+	}
+
+	// failRun without a final cut should mark the episode failed.
+	fresh := models.Episode{OrganizationID: 41, DramaID: fixture.drama.ID, EpisodeNumber: 33, Title: "首次失败", Content: "内容", Status: "processing", CreatedAt: now, UpdatedAt: now}
+	if err := fixture.service.DB.Create(&fresh).Error; err != nil {
+		t.Fatal(err)
+	}
+	freshRun, err := fixture.service.Create(41, fixture.drama.ID, fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.DB.Model(freshRun).Updates(map[string]any{"lease_owner": "fail-owner-2", "lease_expires_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	freshRun.LeaseOwner = "fail-owner-2"
+	if err := fixture.service.failRun(freshRun, errors.New("no cut")); err != nil {
+		t.Fatal(err)
+	}
+	var failedEpisode models.Episode
+	if err := fixture.service.DB.First(&failedEpisode, fresh.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failedEpisode.Status != "failed" {
+		t.Fatalf("failRun first-cut status=%s want failed", failedEpisode.Status)
+	}
+}
+
+func TestProductionDoesNotAdvanceWithoutFrameArtifacts(t *testing.T) {
+	fixture := newProductionFixture(t)
+	now := response.Now()
+	episode := models.Episode{OrganizationID: 41, DramaID: fixture.drama.ID, EpisodeNumber: 34, Title: "假成功", Content: "内容", Status: "draft", CreatedAt: now, UpdatedAt: now}
+	if err := fixture.service.DB.Create(&episode).Error; err != nil {
+		t.Fatal(err)
+	}
+	run, err := fixture.service.Create(41, fixture.drama.ID, episode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.DB.Model(run).Updates(map[string]any{"stage": StageFrames, "lease_owner": "artifact-owner", "lease_expires_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	run.LeaseOwner = "artifact-owner"
+	storyboard := models.Storyboard{OrganizationID: 41, EpisodeID: episode.ID, StoryboardNumber: 1, Title: "shot", ImagePrompt: "frame prompt", CreatedAt: now, UpdatedAt: now}
+	if err := fixture.service.DB.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	// No active jobs and no first frame: advancing must fail instead of skipping frames.
+	if err := fixture.service.waitOrAdvance(run, []string{"image_generation"}, StageVideos, 52, "首帧已完成"); err == nil {
+		t.Fatal("expected missing first-frame error")
+	}
+	current, _ := fixture.service.Get(41, run.ID)
+	if current.Stage != StageFrames {
+		t.Fatalf("stage advanced unexpectedly: %+v", current)
+	}
+}

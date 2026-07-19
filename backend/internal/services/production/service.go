@@ -685,7 +685,48 @@ func (s *Service) waitOrAdvance(run *models.ProductionRun, targetTypes []string,
 	if active > 0 {
 		return s.deferRun(run, "等待子任务完成")
 	}
+	if err := s.ensureStageArtifactsReady(run, next); err != nil {
+		return err
+	}
 	return s.advance(run, next, progress, message)
+}
+
+// ensureStageArtifactsReady verifies media side effects landed before advancing.
+// Job success alone is not enough if a storyboard still lacks the expected outputs.
+func (s *Service) ensureStageArtifactsReady(run *models.ProductionRun, next string) error {
+	switch next {
+	case StageVideos:
+		rows, err := s.storyboards(run)
+		if err != nil {
+			return err
+		}
+		for _, sb := range rows {
+			if strings.TrimSpace(sb.FirstFrameImage) == "" {
+				return fmt.Errorf("分镜 %d 首帧尚未就绪", sb.ID)
+			}
+		}
+	case StageTTS:
+		rows, err := s.storyboards(run)
+		if err != nil {
+			return err
+		}
+		for _, sb := range rows {
+			if strings.TrimSpace(sb.VideoURL) == "" {
+				return fmt.Errorf("分镜 %d 视频尚未就绪", sb.ID)
+			}
+		}
+	case StageMerge:
+		rows, err := s.storyboards(run)
+		if err != nil {
+			return err
+		}
+		for _, sb := range rows {
+			if strings.TrimSpace(sb.ComposedVideoURL) == "" {
+				return fmt.Errorf("分镜 %d 镜头合成尚未就绪", sb.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) childFailure(runID uint, targetTypes []string) error {
@@ -738,6 +779,9 @@ func (s *Service) complete(run *models.ProductionRun) error {
 	if result.RowsAffected != 1 {
 		return ErrTerminalRun
 	}
+	// Keep episode lifecycle aligned with production success, including remakes that
+	// already had a video_url and skipped a fresh merge job.
+	_ = s.DB.Model(&models.Episode{}).Where("organization_id = ? AND id = ?", run.OrganizationID, run.EpisodeID).Updates(map[string]any{"status": "completed", "updated_at": now}).Error
 	run.Status = StatusSucceeded
 	run.Stage = StageCompleted
 	run.Progress = 100
@@ -754,7 +798,16 @@ func (s *Service) failRun(run *models.ProductionRun, reason error) error {
 		return nil
 	}
 	_ = s.cancelActiveChildren(run.OrganizationID, run.ID)
-	_ = s.DB.Model(&models.Episode{}).Where("organization_id = ? AND id = ?", run.OrganizationID, run.EpisodeID).Updates(map[string]any{"status": "failed", "updated_at": now}).Error
+	var episode models.Episode
+	if err := s.DB.Where("organization_id = ? AND id = ?", run.OrganizationID, run.EpisodeID).First(&episode).Error; err == nil {
+		// Remakes move completed episodes back to processing. If they already have a
+		// final cut, restore completed on failure; otherwise mark failed.
+		status := "failed"
+		if strings.TrimSpace(episode.VideoURL) != "" {
+			status = "completed"
+		}
+		_ = s.DB.Model(&episode).Where("status = ?", "processing").Updates(map[string]any{"status": status, "updated_at": now}).Error
+	}
 	return nil
 }
 
