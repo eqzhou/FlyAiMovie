@@ -21,7 +21,7 @@ import (
 var promptKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 
 const (
-	maxPromptPreviewVariables = 16
+	maxPromptPreviewVariables = 32
 	maxPromptPreviewBodyBytes = 2 << 20
 )
 

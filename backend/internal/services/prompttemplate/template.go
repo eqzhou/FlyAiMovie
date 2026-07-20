@@ -20,6 +20,20 @@ var approvedVariables = map[string]struct{}{
 	"prop_name": {}, "prop_type": {}, "prop_description": {}, "prop_prompt": {},
 }
 
+// ApprovedVariables returns the whitelist of interpolatable prompt tokens in stable order.
+func ApprovedVariables() []string {
+	keys := []string{
+		"drama_title", "episode_title", "user_instruction",
+		"character_names", "scene_names",
+		"shot_title", "shot_description", "image_prompt", "video_prompt",
+		"grid_rows", "grid_cols", "grid_mode",
+		"character_name", "character_role", "character_appearance", "character_description", "character_personality",
+		"scene_location", "scene_time", "scene_prompt",
+		"prop_name", "prop_type", "prop_description", "prop_prompt",
+	}
+	return append([]string(nil), keys...)
+}
+
 type Default struct{ Key, Name, Category, Description, Content string }
 
 var defaults = map[string]Default{

@@ -69,3 +69,23 @@ func TestGenerationTemplateVariables(t *testing.T) {
 		t.Fatalf("Variables() = %#v, %v", variables, err)
 	}
 }
+
+func TestAssetImageTemplateVariables(t *testing.T) {
+	content := "{{character_name}} {{character_role}} {{character_appearance}} {{character_description}} {{character_personality}} {{scene_location}} {{scene_time}} {{scene_prompt}} {{prop_name}} {{prop_type}} {{prop_description}} {{prop_prompt}}"
+	variables, err := Variables(content)
+	if err != nil || len(variables) != 12 {
+		t.Fatalf("Variables() = %#v, %v", variables, err)
+	}
+}
+
+func TestApprovedVariablesCoversWhitelist(t *testing.T) {
+	got := ApprovedVariables()
+	if len(got) != len(approvedVariables) {
+		t.Fatalf("ApprovedVariables() len=%d want %d", len(got), len(approvedVariables))
+	}
+	for _, name := range got {
+		if _, ok := approvedVariables[name]; !ok {
+			t.Fatalf("ApprovedVariables returned unknown %q", name)
+		}
+	}
+}

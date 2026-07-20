@@ -65,19 +65,27 @@ const voicePreviewURLs = ref<Record<string, string>>({})
 const previewVariables = ref<Record<string, string>>({})
 const previewResult = ref('')
 const previewError = ref('')
-const builtInPromptKeys = new Set(['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'grid_prompt_generator', 'storyboard_image', 'storyboard_video', 'grid_composition'])
+const builtInPromptKeys = new Set(['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'grid_prompt_generator', 'storyboard_image', 'storyboard_video', 'grid_composition', 'character_image', 'scene_image', 'prop_image'])
 const promptCategoryLabels: Record<string, string> = { agent_system: 'Agent 系统', grid: '宫格', image: '图片', video: '视频', audio: '音频' }
 const promptVariableLabels: Record<string, string> = {
   drama_title: '项目标题', episode_title: '剧集标题', user_instruction: '用户要求',
   character_names: '角色名称', scene_names: '场景名称', shot_title: '镜头标题',
   shot_description: '镜头描述', image_prompt: '图片提示词', video_prompt: '视频提示词',
   grid_rows: '宫格行数', grid_cols: '宫格列数', grid_mode: '宫格模式',
+  character_name: '角色名', character_role: '角色定位', character_appearance: '角色外貌',
+  character_description: '角色描述', character_personality: '角色性格',
+  scene_location: '场景地点', scene_time: '场景时间', scene_prompt: '场景提示词',
+  prop_name: '道具名称', prop_type: '道具类型', prop_description: '道具描述', prop_prompt: '道具提示词',
 }
 const promptExampleValues: Record<string, string> = {
   drama_title: '示例短剧', episode_title: '第一集', user_instruction: '保持人物与画面连续',
   character_names: '林夏、周远', scene_names: '雨夜车站、旧城区', shot_title: '雨中重逢',
   shot_description: '主角穿过站台，在列车灯光中停下', image_prompt: '电影感雨夜站台，人物清晰',
   video_prompt: '缓慢推镜，雨水与衣摆自然运动', grid_rows: '3', grid_cols: '3', grid_mode: '首帧',
+  character_name: '林夏', character_role: '女主角', character_appearance: '黑色短发，风衣，冷静眼神',
+  character_description: '前记者，擅长观察细节', character_personality: '沉稳、敏锐',
+  scene_location: '雨夜车站', scene_time: '夜', scene_prompt: '潮湿站台，列车灯光扫过地面',
+  prop_name: '旧怀表', prop_type: '信物', prop_description: '黄铜外壳，表盘有裂痕', prop_prompt: '静物特写，暖光',
 }
 const providerChoices: Record<string, Array<{ value: string; label: string; base: string }>> = {
   text: [
