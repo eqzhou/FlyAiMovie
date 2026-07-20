@@ -7,6 +7,7 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"github.com/gin-gonic/gin"
 )
 
@@ -160,7 +161,18 @@ func (s *Server) propGenerateImage(c *gin.Context) {
 		}
 		configID = ep.ImageConfigID
 	}
-	prompt := firstNonEmpty(prop.Prompt, prop.Name+", prop, product photography")
+	var drama models.Drama
+	organizationDB(c).First(&drama, prop.DramaID)
+	var ep models.Episode
+	if body.EpisodeID > 0 {
+		organizationDB(c).First(&ep, body.EpisodeID)
+	}
+	resolution := prompttemplate.PropImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, prop, "")
+	prompt := strings.TrimSpace(resolution.Prompt)
+	if prompt == "" {
+		response.BadRequest(c, "prompt empty")
+		return
+	}
 	pid := prop.ID
 	did := prop.DramaID
 	rec := &models.ImageGeneration{

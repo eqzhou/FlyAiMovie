@@ -8,6 +8,7 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -239,7 +240,14 @@ func (s *Server) characterGenerateImage(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "character does not belong to episode drama"})
 		return
 	}
-	prompt := ch.Name + ", " + firstNonEmpty(ch.Appearance, ch.Description, "人物立绘") + ", high quality, front view, white background"
+	var drama models.Drama
+	organizationDB(c).First(&drama, ch.DramaID)
+	resolution := prompttemplate.CharacterImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, ch, "")
+	prompt := strings.TrimSpace(resolution.Prompt)
+	if prompt == "" {
+		response.BadRequest(c, "prompt empty")
+		return
+	}
 	cid := ch.ID
 	did := ch.DramaID
 	rec := &models.ImageGeneration{
@@ -275,7 +283,13 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 		if ch.DramaID != ep.DramaID {
 			continue
 		}
-		prompt := ch.Name + ", " + firstNonEmpty(ch.Appearance, ch.Description, "人物立绘") + ", high quality, front view, white background"
+		var drama models.Drama
+		organizationDB(c).First(&drama, ch.DramaID)
+		resolution := prompttemplate.CharacterImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, ch, "")
+		prompt := strings.TrimSpace(resolution.Prompt)
+		if prompt == "" {
+			continue
+		}
 		id := ch.ID
 		did := ch.DramaID
 		rec := &models.ImageGeneration{OrganizationID: currentOrganizationID(c), CharacterID: &id, DramaID: &did, Prompt: prompt, ImageType: "character"}
@@ -430,7 +444,14 @@ func (s *Server) sceneGenerateImage(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "scene does not belong to episode drama"})
 		return
 	}
-	prompt := firstNonEmpty(sc.Prompt, sc.Location+", "+sc.Time+", cinematic scene, high quality")
+	var drama models.Drama
+	organizationDB(c).First(&drama, sc.DramaID)
+	resolution := prompttemplate.SceneImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sc, "")
+	prompt := strings.TrimSpace(resolution.Prompt)
+	if prompt == "" {
+		response.BadRequest(c, "prompt empty")
+		return
+	}
 	sid := sc.ID
 	did := sc.DramaID
 	rec := &models.ImageGeneration{OrganizationID: currentOrganizationID(c), SceneID: &sid, DramaID: &did, Prompt: prompt, ImageType: "scene"}

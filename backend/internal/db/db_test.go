@@ -97,7 +97,7 @@ func TestSeedOrganizationDefaultsIsIdempotentAndIsolated(t *testing.T) {
 		if err := database.Model(&models.PromptTemplateRevision{}).Where("organization_id = ?", organizationID).Count(&revisionCount).Error; err != nil {
 			t.Fatal(err)
 		}
-		if mockCount != 4 || agentCount != 5 || promptCount != 8 || revisionCount != 8 {
+		if mockCount != 4 || agentCount != 5 || promptCount != 11 || revisionCount != 11 {
 			t.Fatalf("organization %d defaults: mock=%d agents=%d prompts=%d revisions=%d", organizationID, mockCount, agentCount, promptCount, revisionCount)
 		}
 	}

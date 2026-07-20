@@ -24,7 +24,7 @@
 - 工作台阶段写入 URL 并可刷新恢复；分镜区改为紧凑镜头列表与当前镜头检查器，新增角色、场景和分镜使用独立弹窗，viewer 只保留查看能力，局部资源失败不会清空已加载页面。
 - 宫格切分结果现在持久记录每个切片的来源与目标槽位，可在首帧、尾帧和分镜板之间重新分配；同一目标槽位只保留一个切片，移动切片时仅条件清理其旧值。缺少安全来源记录的旧历史保持可查看，并明确引导重新生成。
 - 设置与角色库采用顶部分类导航和列表主体；新增、编辑、导入集中在弹窗，AI 服务可在保存前测试当前模型、Base URL 与密钥组合，并禁止把旧密钥复用到变更后的端点。
-- 提示词设置支持搜索、分类和状态过滤；新建或编辑模板可在保存前由服务端按变量白名单检查并渲染草稿，不产生模板或版本记录；镜头帧、镜头视频、宫格构图与自动制作媒体阶段会自动套用组织模板，镜头内容为空时不会用纯模板兜底。
+- 提示词设置支持搜索、分类和状态过滤；新建或编辑模板可在保存前由服务端按变量白名单检查并渲染草稿，不产生模板或版本记录；镜头帧、镜头视频、宫格构图、角色/场景/道具形象与自动制作媒体阶段会自动套用组织模板，内容为空时不会用纯模板兜底。
 
 仍存在的差异属于有意的 clean-room 技术实现差异或外部验收门槛：后端使用 Go + PostgreSQL/SQLite，不采用上游 TypeScript/Mastra/Drizzle；真实厂商、真实 SMTP、公开 HTTPS 和许可证归档仍需对应账号或发布环境，不能由 Mock/契约测试替代。
 
@@ -49,7 +49,7 @@
 | P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已实现：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已实现：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
 | P-19 | 厂商官方协议 | 每个声明支持的厂商通过官方 API 契约测试 | 部分验收：OpenAI 图片与 Sora 视频、Chatfire、Gemini、MiniMax、Volcengine、Vidu、Aliyun 已使用独立协议 adapter；Sora 尾帧/多参考输入会明确拒绝；真实账号 smoke test 待执行 | `official_image_test.go`、`official_video_test.go`、`minimax_tts_test.go` |
-| P-20 | 提示词模板 | 组织内管理、版本化、预览并应用 Agent、镜头图片、镜头视频和宫格提示词 | 已验收：8 个独立内置模板，白名单变量插值、未知表达式拒绝、组织隔离、旧库自动补齐当前快照；创建、编辑和恢复均事务写入不可变版本，任一旧版可恢复为新版本；设置页提供搜索/分类/状态过滤、完整变量面板、按光标插入、未保存草稿的服务端校验预览、模板复制、内置恢复和只读历史，工作台可确认写回；草稿预览不写模板或版本；Agent 运行事件持久记录实际解析的模板 ID、key、版本和来源；镜头首帧/尾帧/分镜板、镜头视频、宫格构图和自动制作媒体阶段均服务端自动套用组织模板，镜头内容为空时拒绝用纯模板兜底生成 | `prompt_templates_test.go`、`db_test.go`、`template_test.go`、`apply_test.go`、`TestRunnerUsesOrganizationPromptTemplateAndVersion`、`TestStoryboardFrameUsesOrganizationPromptTemplate`、production service tests、设置页与工作台桌面/移动 E2E |
+| P-20 | 提示词模板 | 组织内管理、版本化、预览并应用 Agent、镜头图片、镜头视频和宫格提示词 | 已验收：11 个独立内置模板（Agent/镜头图/镜头视频/宫格/角色图/场景图/道具图），白名单变量插值、未知表达式拒绝、组织隔离、旧库自动补齐当前快照；创建、编辑和恢复均事务写入不可变版本，任一旧版可恢复为新版本；设置页提供搜索/分类/状态过滤、完整变量面板、按光标插入、未保存草稿的服务端校验预览、模板复制、内置恢复和只读历史，工作台可确认写回；草稿预览不写模板或版本；Agent 运行事件持久记录实际解析的模板 ID、key、版本和来源；镜头首帧/尾帧/分镜板、镜头视频、宫格构图、角色/场景/道具形象与自动制作媒体阶段均服务端自动套用组织模板，资产或镜头内容为空时拒绝用纯模板兜底生成 | `prompt_templates_test.go`、`db_test.go`、`template_test.go`、`apply_test.go`、`TestRunnerUsesOrganizationPromptTemplateAndVersion`、`TestStoryboardFrameUsesOrganizationPromptTemplate`、production service tests、设置页与工作台桌面/移动 E2E |
 | P-21 | 资源归属一致性 | 跨项目/剧集资源不能被错误关联或修改 | 已实现：角色、场景、道具、分镜、生成、宫格、素材和 Agent 入口统一校验；宫格切片同时校验组织、历史、素材类别和服务端写入的来源标记，分镜替换使用事务 | 跨项目资源、Agent、宫格与生成入口回归测试；`TestGridSplitRejectsMediaOwnedByAnotherOrganization`、`TestMutableMediaReferencesCannotClaimUnownedLocalPaths` |
 | P-22 | 组织数据生命周期 | owner 可导出本组织数据，并通过密码与 slug 双重确认删除组织 | 已验收：导出按组织隔离且排除凭据；删除事务同时写入媒体补偿队列，文件失败可退避重试且服务启动会恢复，同时保留仍属于其他组织的共享用户 | `TestOrganizationExportIsScopedAndRedactsCredentials`、`TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser`、`mediacleanup/service_test.go` |
 | P-23 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库支持列表搜索、弹窗新建/编辑、导入和删除 | `TestCharacterTemplateImportCreatesIndependentCharacter`、`frontend/tests/e2e/account-settings-assets.spec.ts` |

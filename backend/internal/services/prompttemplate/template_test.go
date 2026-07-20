@@ -41,7 +41,7 @@ func TestVariablesReturnsStableUniqueNames(t *testing.T) {
 
 func TestBuiltInDefaultsAreComplete(t *testing.T) {
 	items := Defaults()
-	if len(items) != 8 {
+	if len(items) != 11 {
 		t.Fatalf("Defaults() returned %d items", len(items))
 	}
 	categories := map[string]bool{}

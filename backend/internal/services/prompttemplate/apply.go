@@ -14,6 +14,9 @@ type Context struct {
 	Drama           models.Drama
 	Episode         models.Episode
 	Storyboard      models.Storyboard
+	Character       models.Character
+	Scene           models.Scene
+	Prop            models.Prop
 	CharacterNames  []string
 	SceneNames      []string
 	UserInstruction string
@@ -44,18 +47,30 @@ func joinNames(values []string) string {
 
 func (ctx Context) values() map[string]string {
 	return map[string]string{
-		"drama_title":      ctx.Drama.Title,
-		"episode_title":    ctx.Episode.Title,
-		"user_instruction": ctx.UserInstruction,
-		"character_names":  joinNames(ctx.CharacterNames),
-		"scene_names":      joinNames(ctx.SceneNames),
-		"shot_title":       ctx.Storyboard.Title,
-		"shot_description": firstNonEmpty(ctx.Storyboard.Description, ctx.Storyboard.Action, ctx.Storyboard.Title),
-		"image_prompt":     firstNonEmpty(ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description, ctx.Storyboard.Action),
-		"video_prompt":     firstNonEmpty(ctx.Storyboard.VideoPrompt, ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description),
-		"grid_rows":        intString(ctx.GridRows),
-		"grid_cols":        intString(ctx.GridCols),
-		"grid_mode":        ctx.GridMode,
+		"drama_title":            ctx.Drama.Title,
+		"episode_title":          ctx.Episode.Title,
+		"user_instruction":       ctx.UserInstruction,
+		"character_names":        joinNames(ctx.CharacterNames),
+		"scene_names":            joinNames(ctx.SceneNames),
+		"shot_title":             ctx.Storyboard.Title,
+		"shot_description":       firstNonEmpty(ctx.Storyboard.Description, ctx.Storyboard.Action, ctx.Storyboard.Title),
+		"image_prompt":           firstNonEmpty(ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description, ctx.Storyboard.Action),
+		"video_prompt":           firstNonEmpty(ctx.Storyboard.VideoPrompt, ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description),
+		"grid_rows":              intString(ctx.GridRows),
+		"grid_cols":              intString(ctx.GridCols),
+		"grid_mode":              ctx.GridMode,
+		"character_name":         ctx.Character.Name,
+		"character_role":         firstNonEmpty(ctx.Character.Role, "角色"),
+		"character_appearance":   firstNonEmpty(ctx.Character.Appearance, ctx.Character.Description, ctx.Character.Name),
+		"character_description":  ctx.Character.Description,
+		"character_personality":  ctx.Character.Personality,
+		"scene_location":         ctx.Scene.Location,
+		"scene_time":             firstNonEmpty(ctx.Scene.Time, "日"),
+		"scene_prompt":           firstNonEmpty(ctx.Scene.Prompt, ctx.Scene.Location),
+		"prop_name":              ctx.Prop.Name,
+		"prop_type":              firstNonEmpty(ctx.Prop.Type, "道具"),
+		"prop_description":       ctx.Prop.Description,
+		"prop_prompt":            firstNonEmpty(ctx.Prop.Prompt, ctx.Prop.Name),
 	}
 }
 
@@ -236,4 +251,64 @@ func GridPrompt(database *gorm.DB, organizationID uint, drama models.Drama, epis
 		GridRows: rows, GridCols: cols, GridMode: mode,
 	}
 	return ApplyTemplate(database, organizationID, "grid_composition", "grid", context, fallback), cells
+}
+
+// CharacterImagePrompt builds the image prompt for a character portrait generation.
+// explicitPrompt overrides appearance/description variables when provided.
+func CharacterImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, character models.Character, explicitPrompt string) Resolution {
+	explicit := strings.TrimSpace(explicitPrompt)
+	instruction := firstNonEmpty(explicit, character.Appearance, character.Description, character.Name)
+	if strings.TrimSpace(instruction) == "" {
+		return Resolution{Source: "fallback", Key: "character_image"}
+	}
+	shotCharacter := character
+	if explicit != "" {
+		shotCharacter.Appearance = explicit
+		shotCharacter.Description = explicit
+	}
+	fallback := strings.TrimSpace(shotCharacter.Name + ", " + firstNonEmpty(shotCharacter.Appearance, shotCharacter.Description, "人物立绘") + ", high quality, front view, white background")
+	context := Context{
+		OrganizationID: organizationID, Drama: drama, Episode: episode, Character: shotCharacter,
+		CharacterNames: []string{shotCharacter.Name}, UserInstruction: instruction,
+	}
+	return ApplyTemplate(database, organizationID, "character_image", "image", context, fallback)
+}
+
+// SceneImagePrompt builds the image prompt for a scene environment generation.
+func SceneImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, scene models.Scene, explicitPrompt string) Resolution {
+	explicit := strings.TrimSpace(explicitPrompt)
+	instruction := firstNonEmpty(explicit, scene.Prompt, scene.Location)
+	if strings.TrimSpace(instruction) == "" {
+		return Resolution{Source: "fallback", Key: "scene_image"}
+	}
+	shotScene := scene
+	if explicit != "" {
+		shotScene.Prompt = explicit
+	}
+	fallback := firstNonEmpty(shotScene.Prompt, strings.TrimSpace(shotScene.Location+", "+firstNonEmpty(shotScene.Time, "日")+", cinematic scene, high quality"))
+	context := Context{
+		OrganizationID: organizationID, Drama: drama, Episode: episode, Scene: shotScene,
+		SceneNames: []string{firstNonEmpty(shotScene.Location, "场景")}, UserInstruction: instruction,
+	}
+	return ApplyTemplate(database, organizationID, "scene_image", "image", context, fallback)
+}
+
+// PropImagePrompt builds the image prompt for a prop still generation.
+func PropImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, prop models.Prop, explicitPrompt string) Resolution {
+	explicit := strings.TrimSpace(explicitPrompt)
+	instruction := firstNonEmpty(explicit, prop.Prompt, prop.Description, prop.Name)
+	if strings.TrimSpace(instruction) == "" {
+		return Resolution{Source: "fallback", Key: "prop_image"}
+	}
+	shotProp := prop
+	if explicit != "" {
+		shotProp.Prompt = explicit
+		shotProp.Description = explicit
+	}
+	fallback := firstNonEmpty(shotProp.Prompt, shotProp.Name+", prop, product photography")
+	context := Context{
+		OrganizationID: organizationID, Drama: drama, Episode: episode, Prop: shotProp,
+		UserInstruction: instruction,
+	}
+	return ApplyTemplate(database, organizationID, "prop_image", "image", context, fallback)
 }

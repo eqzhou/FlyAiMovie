@@ -135,3 +135,43 @@ func upsertPromptTemplate(t *testing.T, key, category, content, variablesJSON st
 		t.Fatal(err)
 	}
 }
+
+func TestAssetImageGenerationUsesOrganizationPromptTemplate(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"资产模板短剧","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+	episodeID := uintField(t, episode, "id")
+
+	upsertPromptTemplate(t, "character_image", "image", "CHAR::{{character_name}}::{{character_appearance}}", `["character_name","character_appearance"]`)
+	upsertPromptTemplate(t, "scene_image", "image", "SCENE::{{scene_location}}::{{scene_prompt}}", `["scene_location","scene_prompt"]`)
+	upsertPromptTemplate(t, "prop_image", "image", "PROP::{{prop_name}}::{{prop_prompt}}", `["prop_name","prop_prompt"]`)
+
+	character := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁","appearance":"白外套"}`)
+	characterID := uintField(t, character, "id")
+	scene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"location":"站台","time":"夜","prompt":"雨夜"}`)
+	sceneID := uintField(t, scene, "id")
+	prop := requestData(t, router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱","prompt":"皮革"}`)
+	propID := uintField(t, prop, "id")
+
+	charGen := requestData(t, router, http.MethodPost, "/api/v1/characters/"+itoa(characterID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`)
+	sceneGen := requestData(t, router, http.MethodPost, "/api/v1/scenes/"+itoa(sceneID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`)
+	propGen := requestData(t, router, http.MethodPost, "/api/v1/props/"+itoa(propID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`)
+
+	assertImagePrompt := func(id uint, want string) {
+		t.Helper()
+		var image models.ImageGeneration
+		if err := db.DB.First(&image, id).Error; err != nil {
+			t.Fatalf("load image %d: %v body char=%v scene=%v prop=%v", id, err, charGen, sceneGen, propGen)
+		}
+		if image.Prompt != want {
+			t.Fatalf("prompt=%q want=%q", image.Prompt, want)
+		}
+	}
+	assertImagePrompt(uintField(t, charGen, "image_generation_id"), "CHAR::阿宁::白外套")
+	assertImagePrompt(uintField(t, sceneGen, "image_generation_id"), "SCENE::站台::雨夜")
+	assertImagePrompt(uintField(t, propGen, "image_generation_id"), "PROP::旧提箱::皮革")
+}

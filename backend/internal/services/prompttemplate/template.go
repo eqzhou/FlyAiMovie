@@ -15,6 +15,9 @@ var approvedVariables = map[string]struct{}{
 	"character_names": {}, "scene_names": {},
 	"shot_title": {}, "shot_description": {}, "image_prompt": {}, "video_prompt": {},
 	"grid_rows": {}, "grid_cols": {}, "grid_mode": {},
+	"character_name": {}, "character_role": {}, "character_appearance": {}, "character_description": {}, "character_personality": {},
+	"scene_location": {}, "scene_time": {}, "scene_prompt": {},
+	"prop_name": {}, "prop_type": {}, "prop_description": {}, "prop_prompt": {},
 }
 
 type Default struct{ Key, Name, Category, Description, Content string }
@@ -28,6 +31,9 @@ var defaults = map[string]Default{
 	"storyboard_image":      {Name: "镜头图片", Category: "image", Description: "根据镜头内容生成静态画面提示词", Content: "《{{drama_title}}》{{episode_title}}，镜头：{{shot_title}}。画面内容：{{shot_description}}。角色：{{character_names}}。场景：{{scene_names}}。电影级构图，主体清晰，视觉风格连续。"},
 	"storyboard_video":      {Name: "镜头视频", Category: "video", Description: "根据镜头内容生成动态视频提示词", Content: "《{{drama_title}}》{{episode_title}}，镜头：{{shot_title}}。动作与画面：{{shot_description}}。已有画面提示：{{image_prompt}}。保持人物身份与空间连续，描述明确的运动、镜头和节奏。"},
 	"grid_composition":      {Name: "宫格构图", Category: "grid", Description: "组织连续镜头的宫格画面提示词", Content: "为《{{drama_title}}》{{episode_title}}制作 {{grid_rows}}x{{grid_cols}} 宫格，模式：{{grid_mode}}。角色：{{character_names}}。场景：{{scene_names}}。制作要求：{{user_instruction}}。各格独立构图，人物与美术风格连续。"},
+	"character_image":       {Name: "角色形象", Category: "image", Description: "根据角色资料生成人物立绘提示词", Content: "《{{drama_title}}》角色立绘：{{character_name}}（{{character_role}}）。外貌：{{character_appearance}}。性格：{{character_personality}}。补充：{{character_description}}。要求：{{user_instruction}}。高清正面，主体清晰，背景干净，风格统一。"},
+	"scene_image":           {Name: "场景画面", Category: "image", Description: "根据场景资料生成环境画面提示词", Content: "《{{drama_title}}》场景：{{scene_location}}，时间：{{scene_time}}。画面提示：{{scene_prompt}}。要求：{{user_instruction}}。电影级空间层次，氛围明确，适合短剧镜头。"},
+	"prop_image":            {Name: "道具画面", Category: "image", Description: "根据道具资料生成静物提示词", Content: "《{{drama_title}}》道具：{{prop_name}}（{{prop_type}}）。描述：{{prop_description}}。画面提示：{{prop_prompt}}。要求：{{user_instruction}}。产品摄影质感，主体居中，细节清晰。"},
 }
 
 func DefaultFor(key string) (Default, bool) {
@@ -37,7 +43,7 @@ func DefaultFor(key string) (Default, bool) {
 }
 
 func Defaults() []Default {
-	keys := []string{"script_rewriter", "extractor", "storyboard_breaker", "voice_assigner", "grid_prompt_generator", "storyboard_image", "storyboard_video", "grid_composition"}
+	keys := []string{"script_rewriter", "extractor", "storyboard_breaker", "voice_assigner", "grid_prompt_generator", "storyboard_image", "storyboard_video", "grid_composition", "character_image", "scene_image", "prop_image"}
 	result := make([]Default, 0, len(keys))
 	for _, key := range keys {
 		value, _ := DefaultFor(key)

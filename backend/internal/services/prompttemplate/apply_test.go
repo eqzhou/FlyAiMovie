@@ -122,3 +122,50 @@ func TestApplyTemplateRequiresMatchingCategory(t *testing.T) {
 		t.Fatalf("resolution=%+v", resolution)
 	}
 }
+
+func TestCharacterScenePropImagePromptsUseOrganizationTemplates(t *testing.T) {
+	database := openPromptTestDB(t)
+	if err := database.AutoMigrate(&models.Prop{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, template := range []models.PromptTemplate{
+		{OrganizationID: 12, Key: "character_image", Name: "Char", Category: "image", Content: "角色::{{character_name}}::{{character_appearance}}", VariablesJSON: `["character_name","character_appearance"]`, Version: 1, IsActive: true, CreatedAt: "now", UpdatedAt: "now"},
+		{OrganizationID: 12, Key: "scene_image", Name: "Scene", Category: "image", Content: "场景::{{scene_location}}::{{scene_prompt}}", VariablesJSON: `["scene_location","scene_prompt"]`, Version: 2, IsActive: true, CreatedAt: "now", UpdatedAt: "now"},
+		{OrganizationID: 12, Key: "prop_image", Name: "Prop", Category: "image", Content: "道具::{{prop_name}}::{{prop_prompt}}", VariablesJSON: `["prop_name","prop_prompt"]`, Version: 3, IsActive: true, CreatedAt: "now", UpdatedAt: "now"},
+	} {
+		if err := database.Create(&template).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	drama := models.Drama{Title: "归途"}
+	episode := models.Episode{Title: "重逢"}
+	character := models.Character{Name: "阿宁", Appearance: "白外套"}
+	scene := models.Scene{Location: "站台", Time: "夜", Prompt: "雨夜路灯"}
+	prop := models.Prop{Name: "旧提箱", Prompt: "皮革磨损"}
+
+	charResolution := CharacterImagePrompt(database, 12, drama, episode, character, "")
+	if charResolution.Source != "organization_template" || charResolution.Prompt != "角色::阿宁::白外套" {
+		t.Fatalf("character=%+v", charResolution)
+	}
+	sceneResolution := SceneImagePrompt(database, 12, drama, episode, scene, "")
+	if sceneResolution.Source != "organization_template" || sceneResolution.Prompt != "场景::站台::雨夜路灯" {
+		t.Fatalf("scene=%+v", sceneResolution)
+	}
+	propResolution := PropImagePrompt(database, 12, drama, episode, prop, "API override")
+	if propResolution.Source != "organization_template" || propResolution.Prompt != "道具::旧提箱::API override" {
+		t.Fatalf("prop=%+v", propResolution)
+	}
+}
+
+func TestAssetImagePromptsRejectEmptyContent(t *testing.T) {
+	database := openPromptTestDB(t)
+	if CharacterImagePrompt(database, 1, models.Drama{}, models.Episode{}, models.Character{}, "").Prompt != "" {
+		t.Fatal("empty character should not invent prompt")
+	}
+	if SceneImagePrompt(database, 1, models.Drama{}, models.Episode{}, models.Scene{}, "").Prompt != "" {
+		t.Fatal("empty scene should not invent prompt")
+	}
+	if PropImagePrompt(database, 1, models.Drama{}, models.Episode{}, models.Prop{}, "").Prompt != "" {
+		t.Fatal("empty prop should not invent prompt")
+	}
+}
