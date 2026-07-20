@@ -69,10 +69,10 @@ const builtInPromptKeys = new Set(['script_rewriter', 'extractor', 'storyboard_b
 const promptCategoryLabels: Record<string, string> = { agent_system: 'Agent 系统', grid: '宫格', image: '图片', video: '视频', audio: '音频' }
 const promptVariableLabels: Record<string, string> = {
   drama_title: '项目标题', episode_title: '剧集标题', user_instruction: '用户要求',
-  character_names: '角色名称', scene_names: '场景名称', shot_title: '镜头标题',
+  character_names: '角色列表', scene_names: '场景列表', shot_title: '镜头标题',
   shot_description: '镜头描述', image_prompt: '图片提示词', video_prompt: '视频提示词',
   grid_rows: '宫格行数', grid_cols: '宫格列数', grid_mode: '宫格模式',
-  character_name: '角色名', character_role: '角色定位', character_appearance: '角色外貌',
+  character_name: '角色姓名', character_role: '角色定位', character_appearance: '角色外貌',
   character_description: '角色描述', character_personality: '角色性格',
   scene_location: '场景地点', scene_time: '场景时间', scene_prompt: '场景提示词',
   prop_name: '道具名称', prop_type: '道具类型', prop_description: '道具描述', prop_prompt: '道具提示词',
