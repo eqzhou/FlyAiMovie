@@ -497,8 +497,10 @@ async function batchCharImages() {
   busy.value = 'char-batch'
   try {
     const ids = characters.value.map((c) => c.id)
-    await characterAPI.batchImages(ids, episode.value.id)
-    show('批量角色图已提交')
+    const result = await characterAPI.batchImages(ids, episode.value.id)
+    const errors = Array.isArray(result?.errors) ? result.errors : []
+    if (errors.length) show(`批量角色图完成 ${result?.count || 0} 项，失败 ${errors.length}：${errors.slice(0, 3).join('；')}`)
+    else show(`批量角色图已提交 ${result?.count || 0} 项`)
     await refreshAssets()
   } catch (e: any) {
     show(e.message)
@@ -676,12 +678,14 @@ async function batchFrames(frameType = 'first_frame') {
   if (!selectedShotIds.value.length) return show('请至少选择一个镜头')
   busy.value = 'batch-frames'
   try {
-    await storyboardAPI.batchFrames({
+    const result = await storyboardAPI.batchFrames({
       episode_id: episode.value.id,
       frame_type: frameType,
       storyboard_ids: selectedShotIds.value,
     })
-    show('批量帧生成已提交')
+    const errors = Array.isArray(result?.errors) ? result.errors : []
+    if (errors.length) show(`批量帧完成 ${result?.count || 0} 项，失败 ${errors.length}：${errors.slice(0, 3).join('；')}`)
+    else show(`批量帧生成已提交 ${result?.count || 0} 项`)
     await refreshAssets()
   } catch (e: any) {
     show(e.message)
@@ -707,11 +711,13 @@ async function batchVideos() {
   if (!selectedShotIds.value.length) return show('请至少选择一个镜头')
   busy.value = 'batch-videos'
   try {
-    await storyboardAPI.batchVideos({
+    const result = await storyboardAPI.batchVideos({
       episode_id: episode.value.id,
       storyboard_ids: selectedShotIds.value,
     })
-    show('批量视频已提交')
+    const errors = Array.isArray(result?.errors) ? result.errors : []
+    if (errors.length) show(`批量视频完成 ${result?.count || 0} 项，失败 ${errors.length}：${errors.slice(0, 3).join('；')}`)
+    else show(`批量视频已提交 ${result?.count || 0} 项`)
     await refreshAssets()
   } catch (e: any) {
     show(e.message)

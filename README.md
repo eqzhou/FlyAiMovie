@@ -51,7 +51,7 @@ docker compose -f docker-compose.sqlite.yml up --build
 ## 内置能力
 
 - Agent：`script_rewriter` / `extractor` / `storyboard_breaker` / `voice_assigner` / `grid_prompt_generator`
-- 提示词：8 类内置/自定义模板、搜索与分类、保存前草稿校验预览、不可变版本历史、旧版本恢复与 Agent 运行版本追踪；宫格、镜头图片和视频生成会自动套用组织模板，工作台也可手动套用
+- 提示词：11 个内置/自定义模板（Agent、镜头图/视频、宫格、角色图、场景图、道具图）、搜索与分类、保存前草稿校验预览、不可变版本历史、旧版本恢复与 Agent 运行版本追踪；宫格、镜头图片/视频、角色/场景/道具形象与自动制作媒体阶段会自动套用组织模板，工作台也可手动套用
 - 媒体：图片 / 视频异步轮询 + webhook（`/api/v1/webhooks/vidu`、`/api/v1/webhooks/generic`）；OpenAI Sora 支持创建、轮询和鉴权下载
 - 宫格历史、切片持久分配与冲突替换、任务查询/取消、统一素材库 API、批量帧/视频/配音、道具管理、本地存储 `/static`
 - 跨项目角色模板库、项目内场景复制/迁移、视频/音频上传与 FFprobe 元数据

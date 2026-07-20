@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -275,12 +276,15 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 		return
 	}
 	ids := make([]uint, 0)
+	errs := make([]string, 0)
 	for _, cid := range body.CharacterIDs {
 		var ch models.Character
 		if err := organizationDB(c).First(&ch, cid).Error; err != nil {
+			errs = append(errs, fmt.Sprintf("character %d: not found", cid))
 			continue
 		}
 		if ch.DramaID != ep.DramaID {
+			errs = append(errs, fmt.Sprintf("character %d: does not belong to episode drama", cid))
 			continue
 		}
 		var drama models.Drama
@@ -288,16 +292,19 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 		resolution := prompttemplate.CharacterImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, ch, "")
 		prompt := strings.TrimSpace(resolution.Prompt)
 		if prompt == "" {
+			errs = append(errs, fmt.Sprintf("character %d: empty prompt", cid))
 			continue
 		}
 		id := ch.ID
 		did := ch.DramaID
 		rec := &models.ImageGeneration{OrganizationID: currentOrganizationID(c), CharacterID: &id, DramaID: &did, Prompt: prompt, ImageType: "character"}
-		if err := s.Images.Generate(c.Request.Context(), rec, ep.ImageConfigID); err == nil {
-			ids = append(ids, rec.ID)
+		if err := s.Images.Generate(c.Request.Context(), rec, ep.ImageConfigID); err != nil {
+			errs = append(errs, fmt.Sprintf("character %d: %s", cid, err.Error()))
+			continue
 		}
+		ids = append(ids, rec.ID)
 	}
-	response.Success(c, gin.H{"count": len(ids), "ids": ids})
+	response.Success(c, gin.H{"count": len(ids), "ids": ids, "errors": errs})
 }
 
 func (s *Server) registerScenes(api *gin.RouterGroup) {

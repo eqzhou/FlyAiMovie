@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -174,4 +175,33 @@ func TestAssetImageGenerationUsesOrganizationPromptTemplate(t *testing.T) {
 	assertImagePrompt(uintField(t, charGen, "image_generation_id"), "CHAR::阿宁::白外套")
 	assertImagePrompt(uintField(t, sceneGen, "image_generation_id"), "SCENE::站台::雨夜")
 	assertImagePrompt(uintField(t, propGen, "image_generation_id"), "PROP::旧提箱::皮革")
+}
+
+func TestCharacterBatchImagesSurfacesPerItemErrors(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"批量角色图","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+	episodeID := uintField(t, episode, "id")
+	ready := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁","appearance":"白外套"}`)
+	blank := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"空白角色","appearance":"x"}`)
+	blankID := uintField(t, blank, "id")
+	if err := db.DB.Model(&models.Character{}).Where("id = ?", blankID).Updates(map[string]any{"name": " ", "appearance": "", "description": "", "updated_at": "now"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result := requestData(t, router, http.MethodPost, "/api/v1/characters/batch-generate-images", `{"episode_id":`+itoa(episodeID)+`,"character_ids":[`+itoa(uintField(t, ready, "id"))+`,`+itoa(blankID)+`,99999]}`)
+	if int(result["count"].(float64)) != 1 {
+		t.Fatalf("count=%v body=%v", result["count"], result)
+	}
+	errs, ok := result["errors"].([]any)
+	if !ok || len(errs) < 2 {
+		t.Fatalf("errors=%v body=%v", result["errors"], result)
+	}
+	joined := fmt.Sprint(errs)
+	if !strings.Contains(joined, "empty prompt") || !strings.Contains(joined, "not found") {
+		t.Fatalf("unexpected errors %s", joined)
+	}
 }
