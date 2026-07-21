@@ -312,7 +312,7 @@ onUnmounted(() => {
               <td v-if="canManageTasks"><input v-model="selected" type="checkbox" :value="job.id" :aria-label="`选择任务 ${job.id}`" /></td>
               <td>#{{ job.id }}<br><span class="muted">{{ kindLabel(job.kind) }}</span></td>
               <td><span class="job-status" :class="job.status">{{ statusLabel(job.status) }}</span><div v-if="job.last_error" class="job-error">{{ job.last_error }}</div></td>
-              <td><div class="progress-bar"><i :style="{ width: `${job.progress || 0}%` }"></i></div><span class="muted">{{ job.progress || 0 }}%</span></td>
+              <td><div class="progress-bar"><i :style="`width: ${job.progress || 0}%`"></i></div><span class="muted">{{ job.progress || 0 }}%</span></td>
               <td>{{ job.provider || '-' }}<br><span class="muted">{{ job.provider_task_id || '' }}</span></td>
               <td>{{ job.attempt }} / {{ job.max_attempts }}</td>
               <td>{{ formatTime(job.updated_at) }}</td>

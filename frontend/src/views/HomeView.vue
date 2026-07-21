@@ -127,7 +127,7 @@ onMounted(load)
           </div>
         </div>
         <div class="card-footer">
-          <div class="progress-mini-track"><div class="progress-mini-fill" :style="{ width: progress(d) + '%' }"></div></div>
+          <div class="progress-mini-track"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
       </div>

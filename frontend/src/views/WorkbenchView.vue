@@ -1182,7 +1182,7 @@ onUnmounted(stopPoll)
           <span class="automation-mark" :class="currentProduction.status"></span>
           <div><strong>{{ productionStageLabel(currentProduction.stage) }}</strong><span>{{ productionStatusLabel(currentProduction.status) }} · 第 {{ currentProduction.attempt }} 次</span></div>
         </div>
-        <div class="automation-progress"><div class="progress-bar"><i :style="{ width: `${currentProduction.progress || 0}%` }"></i></div><strong>{{ currentProduction.progress || 0 }}%</strong></div>
+        <div class="automation-progress"><div class="progress-bar"><i :style="`width: ${currentProduction.progress || 0}%`"></i></div><strong>{{ currentProduction.progress || 0 }}%</strong></div>
       </div>
       <div class="automation-footer">
         <span :class="{ 'job-error': currentProduction.last_error }">{{ currentProduction.last_error || currentProduction.status_message || '等待任务调度' }}</span>
@@ -1207,7 +1207,7 @@ onUnmounted(stopPoll)
         </div>
         <div class="production-progress">
           <div class="production-progress-label"><span>制作进度</span><strong>{{ progressPct }}%</strong></div>
-          <div class="progress-bar"><i :style="{ width: progressPct + '%' }"></i></div>
+          <div class="progress-bar"><i :style="`width: ${progressPct}%`"></i></div>
         </div>
       </div>
 
