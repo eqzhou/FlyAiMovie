@@ -25,7 +25,7 @@ async function switchOrganization(event: Event) {
 
 <template>
   <div class="app-shell">
-    <header v-if="!authStore.state.enabled || authStore.state.actor" class="topbar">
+    <header v-if="!authStore.state.enabled || authStore.state.actor" class="topbar" @keydown.esc="navigationOpen = false">
       <router-link to="/" class="brand">
         <span class="brand-mark"></span>
         <span>FlyAiMovie</span>
@@ -33,15 +33,16 @@ async function switchOrganization(event: Event) {
       <button
         class="nav-toggle"
         type="button"
+        aria-controls="primary-navigation"
         :aria-expanded="navigationOpen"
         :aria-label="navigationOpen ? '关闭导航' : '打开导航'"
         title="导航"
         @click="navigationOpen = !navigationOpen"
       ><X v-if="navigationOpen" :size="18" aria-hidden="true" /><Menu v-else :size="18" aria-hidden="true" /></button>
-      <nav class="nav" :class="{ open: navigationOpen }" aria-label="主导航">
+      <nav id="primary-navigation" class="nav" :class="{ open: navigationOpen }" aria-label="主导航">
         <router-link to="/">项目</router-link>
         <router-link to="/character-library">角色库</router-link>
-		<router-link to="/jobs">任务</router-link>
+        <router-link to="/jobs">任务</router-link>
         <router-link to="/settings">设置</router-link>
         <router-link v-if="authStore.state.actor && ['owner', 'admin'].includes(authStore.state.actor.role)" to="/audit">审计</router-link>
         <select v-if="authStore.state.organizations.length > 1" class="organization-switch" :value="authStore.state.actor?.organization.id" aria-label="切换组织" @change="switchOrganization">

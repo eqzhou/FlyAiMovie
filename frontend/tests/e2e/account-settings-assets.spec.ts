@@ -113,7 +113,10 @@ async function mockAccountAPI(page: Page, options: {
       scenes: [{ id: 60, location: '旧车站', time: '夜', description: '雨夜站台' }], props: [],
     }
     else if (path === '/api/v1/props') data = [{ id: 70, name: '旧雨伞', description: '黑色长柄伞', image_url: '' }]
-    else if (path === '/api/v1/assets') data = [{ id: 30, name: '车站参考图', type: 'image', category: 'reference', url: '/media/station.png', is_favorite: false }]
+    else if (path === '/api/v1/assets') data = [
+      { id: 30, name: '车站参考图', type: 'image', category: 'reference', url: '/media/station.png', is_favorite: false },
+      { id: 31, name: '危险链接素材', type: 'file', category: 'reference', url: 'javascript:alert(1)', is_favorite: false },
+    ]
 
     return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, data, message: status === 200 ? 'success' : 'error' }) })
   })
@@ -240,6 +243,9 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await page.goto('/drama/2/assets')
   await expect(page.getByRole('heading', { name: '素材项目 · 素材库' })).toBeVisible()
   await expect(page.getByText('车站参考图')).toBeVisible()
+  const unsafeAsset = page.locator('.asset-card').filter({ hasText: '危险链接素材' })
+  await expect(unsafeAsset.getByText('素材地址无效')).toBeVisible()
+  await expect(unsafeAsset.getByRole('link')).toHaveCount(0)
 })
 
 test('desktop: one settings source can fail without blanking other sections', async ({ page }) => {

@@ -108,14 +108,14 @@ onMounted(load)
     <p v-if="err" class="muted">{{ err }}</p>
     <div v-if="loading" class="muted">加载中…</div>
     <div v-else class="grid">
-      <div
+      <article
         v-for="d in dramas"
         :key="d.id"
         class="card project-card"
-        @click="router.push(`/drama/${d.id}`)"
       >
+        <button class="project-card-target" type="button" :aria-label="`进入项目 ${d.title}`" @click="router.push(`/drama/${d.id}`)"></button>
         <div>
-          <div class="row" style="justify-content:space-between">
+          <div class="row between center">
             <span class="badge">{{ d.episodes?.length || 0 }} 集</span>
             <button v-if="canManageProjects" class="btn btn-ghost" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
           </div>
@@ -130,8 +130,9 @@ onMounted(load)
           <div class="progress-mini-track"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
-      </div>
-      <div v-if="!dramas.length" class="card empty" @click="canManageProjects && openCreate()">{{ canManageProjects ? '还没有项目，点击创建' : '暂无项目' }}</div>
+      </article>
+      <button v-if="!dramas.length && canManageProjects" class="card empty project-empty-action" type="button" @click="openCreate">还没有项目，点击创建</button>
+      <div v-else-if="!dramas.length" class="card empty">暂无项目</div>
     </div>
 
     <div v-if="showCreate && canManageProjects" class="modal-mask" @click.self="closeCreate">

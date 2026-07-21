@@ -8,6 +8,7 @@ import {
   , assetAPI, jobsAPI, productionAPI, uploadAPI
 } from '../api'
 import { authStore } from '../auth'
+import { safeMediaHref } from '../utils/mediaUrl'
 
 const route = useRoute()
 const router = useRouter()
@@ -1253,24 +1254,24 @@ onUnmounted(stopPoll)
         </div>
 
         <!-- CAST -->
-        <div v-else-if="tab==='cast'" class="row">
-          <div class="col panel">
+        <div v-else-if="tab==='cast'" class="cast-layout">
+          <div class="panel">
             <div v-if="canEdit" class="toolbar">
               <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('extractor', '请提取本集角色与场景并去重保存')">AI 提取</button>
               <button class="btn" :disabled="!!busy" @click="runAgent('voice_assigner', '请为所有角色分配音色')">AI 分配音色</button>
               <button class="btn" :disabled="!!busy || !characters.length" @click="batchCharImages">批量角色图</button>
               <button class="btn" :disabled="!!busy" @click="editCharacter()">添加角色</button>
             </div>
-            <h3>角色</h3>
+            <h3 class="section-title">角色</h3>
             <div class="list">
               <div v-for="c in characters" :key="c.id" class="list-item">
-                <div class="row" style="justify-content:space-between;align-items:flex-start">
-                  <div style="flex:1">
+                <div class="row between">
+                  <div class="stack">
                     <h4>{{ c.name }} <span class="muted">{{ c.role }}</span></h4>
-                    <p class="muted" style="margin:0;font-size:12px">{{ c.appearance || c.description || '暂无外貌' }}</p>
-                    <p class="muted" style="margin:6px 0 0;font-size:12px">音色：{{ c.voice_style || '未分配' }}</p>
-                    <audio v-if="c.voice_sample_url" :src="c.voice_sample_url" controls style="width:100%;margin-top:8px" />
-                    <div v-if="assignCharId===c.id" class="voice-list" style="margin-top:8px">
+                    <p class="muted sm">{{ c.appearance || c.description || '暂无外貌' }}</p>
+                    <p class="muted sm mt-6">音色：{{ c.voice_style || '未分配' }}</p>
+                    <audio v-if="c.voice_sample_url" class="audio-block" :src="c.voice_sample_url" controls />
+                    <div v-if="assignCharId===c.id" class="voice-list mt-8">
                       <div
                         v-for="v in voices"
                         :key="v.voice_id"
@@ -1284,11 +1285,11 @@ onUnmounted(stopPoll)
                       <div v-if="!voices.length" class="muted">无音色，请在设置中同步</div>
                     </div>
                   </div>
-                  <div class="row" style="flex-direction:column;align-items:flex-end;gap:8px">
+                  <div class="row column-end">
                     <img v-if="c.image_url" class="thumb" :src="c.image_url" :alt="`${c.name} 角色形象`" />
-                    <div v-if="canEdit" class="mini-actions">
+                    <div v-if="canEdit" class="cast-actions">
                       <button class="btn" :disabled="!!busy" @click="genCharImage(c)">形象</button>
-                      <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('character', c, $event)" /></label>
+                      <label class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" class="file-input-hidden" @change="uploadBoundImage('character', c, $event)" /></label>
                       <button class="btn" :disabled="!!busy" @click="assignCharId = assignCharId===c.id ? null : c.id">音色</button>
                       <button class="btn" :disabled="!!busy || !c.voice_style" @click="voiceSample(c)">试听</button>
                       <button class="btn" :disabled="!!busy" @click="editCharacter(c)">编辑</button>
@@ -1300,22 +1301,22 @@ onUnmounted(stopPoll)
               <div v-if="!characters.length" class="empty">尚未提取角色</div>
             </div>
           </div>
-          <div class="col panel">
-            <div class="toolbar" style="justify-content:space-between">
-              <h3 style="margin:0">场景</h3>
+          <div class="panel">
+            <div class="toolbar spread">
+              <h3 class="section-title">场景</h3>
               <button v-if="canEdit" class="btn" :disabled="!!busy" @click="editScene()">添加场景</button>
             </div>
             <div class="list">
               <div v-for="sc in scenes" :key="sc.id" class="list-item">
-                <div class="row" style="justify-content:space-between">
+                <div class="row between">
                   <div>
                     <h4>{{ sc.location }} · {{ sc.time }}</h4>
-                    <p class="muted" style="margin:0;font-size:12px">{{ sc.prompt }}</p>
+                    <p class="muted sm">{{ sc.prompt }}</p>
                   </div>
-                  <div class="row">
+                  <div class="scene-actions">
                     <img v-if="sc.image_url" class="thumb" :src="sc.image_url" :alt="`${sc.location} 场景图`" />
                     <button v-if="canEdit" class="btn" :disabled="!!busy" @click="genSceneImage(sc)">生成场景</button>
-                    <label v-if="canEdit" class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" style="display:none" @change="uploadBoundImage('scene', sc, $event)" /></label>
+                    <label v-if="canEdit" class="btn" :aria-disabled="!!busy">上传<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!!busy" class="file-input-hidden" @change="uploadBoundImage('scene', sc, $event)" /></label>
                     <button v-if="canEdit" class="btn" :disabled="!!busy" @click="editScene(sc)">编辑</button>
                     <button v-if="canEdit" class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'copy')">复制</button>
                     <button v-if="canEdit" class="btn" :disabled="!!busy || (drama?.episodes || []).length < 2" @click="transferScene(sc, 'move')">迁移</button>
@@ -1331,7 +1332,7 @@ onUnmounted(stopPoll)
                 <div class="field"><label for="scene-target-episode">目标剧集</label><select id="scene-target-episode" v-model.number="sceneTransfer.target_episode_id">
                   <option :value="0">请选择</option><option v-for="item in (drama?.episodes || []).filter((row:any) => row.id !== episode?.id)" :key="item.id" :value="item.id">第 {{ item.episode_number }} 集 · {{ item.title }}</option>
                 </select></div>
-                <label v-if="sceneTransfer.mode === 'move'" class="row" style="align-items:center"><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
+                <label v-if="sceneTransfer.mode === 'move'" class="check-inline"><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
                 <div class="modal-actions"><button class="btn" @click="sceneTransfer=null">取消</button><button class="btn btn-primary" :disabled="!!busy" @click="confirmSceneTransfer">确认</button></div>
               </div>
             </div>
@@ -1346,11 +1347,11 @@ onUnmounted(stopPoll)
               <button :disabled="!!busy" :class="{ active: gridMode==='first_last' }" @click="selectGridMode('first_last')">首尾参考</button>
               <button :disabled="!!busy" :class="{ active: gridMode==='multi_ref' }" @click="selectGridMode('multi_ref')">多参一致</button>
             </div>
-            <label class="muted" style="font-size:12px">行
-              <input type="number" min="1" max="4" :value="gridRows" :disabled="!!busy" style="width:52px;margin-left:4px" @change="updateGridDimension('rows', Number(($event.target as HTMLInputElement).value))" />
+            <label class="dim-field">行
+              <input type="number" min="1" max="4" :value="gridRows" :disabled="!!busy" @change="updateGridDimension('rows', Number(($event.target as HTMLInputElement).value))" />
             </label>
-            <label class="muted" style="font-size:12px">列
-              <input type="number" min="1" max="4" :value="gridCols" :disabled="!!busy" style="width:52px;margin-left:4px" @change="updateGridDimension('cols', Number(($event.target as HTMLInputElement).value))" />
+            <label class="dim-field">列
+              <input type="number" min="1" max="4" :value="gridCols" :disabled="!!busy" @change="updateGridDimension('cols', Number(($event.target as HTMLInputElement).value))" />
             </label>
             <button class="btn" :disabled="!!busy" @click="buildGridPrompt">生成提示词</button>
             <button class="btn" :disabled="!!busy" @click="openGridPromptEditor">套用提示词模板</button>
@@ -1365,10 +1366,10 @@ onUnmounted(stopPoll)
           </div>
           <div class="split-2">
             <div>
-              <div class="muted" style="margin-bottom:8px;font-size:12px">预览</div>
+              <div class="muted sm section-kicker">预览</div>
               <img v-if="gridImage" class="grid-preview" :src="gridImage" alt="宫格图预览" />
               <div v-else class="empty">尚未生成宫格图</div>
-              <div v-if="gridCells.length" class="cell-grid" style="margin-top:12px">
+              <div v-if="gridCells.length" class="cell-grid mt-12">
                 <div v-if="!gridCellsVerified" class="inline-alert grid-cell-legacy" role="status"><div><strong>历史切片仅供查看</strong><span>这份历史生成于安全归属记录之前。请生成新宫格并重新切分后再分配。</span></div></div>
                 <div v-for="(u,i) in gridCells" :key="`${gridHistoryId || 'draft'}-${i}`" class="grid-cell-card" role="group" :aria-label="`宫格切片 ${i + 1}`">
                   <div class="grid-cell-visual"><span>#{{ i + 1 }}</span><img :src="u" :alt="`宫格切片 ${i + 1}`" /></div>
@@ -1383,21 +1384,21 @@ onUnmounted(stopPoll)
               </div>
             </div>
             <div>
-              <div class="muted" style="margin-bottom:8px;font-size:12px">写入分镜（勾选）</div>
+              <div class="muted sm section-kicker">写入分镜（勾选）</div>
               <div class="list">
-                <label v-for="sb in storyboards" :key="sb.id" class="list-item" style="display:flex;gap:10px;align-items:center;cursor:pointer">
+                <label v-for="sb in storyboards" :key="sb.id" class="list-item shot-pick">
                   <input v-if="canEdit" type="checkbox" :checked="selectedShotIds.includes(sb.id)" @change="toggleShot(sb.id)" />
-                  <span style="flex:1">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</span>
-                  <img v-if="sb.first_frame_image" class="thumb" style="width:48px;height:48px" :src="sb.first_frame_image" :alt="`镜头 ${sb.storyboard_number} 首帧`" />
+                  <span class="grow">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</span>
+                  <img v-if="sb.first_frame_image" class="thumb sm" :src="sb.first_frame_image" :alt="`镜头 ${sb.storyboard_number} 首帧`" />
                 </label>
                 <div v-if="!storyboards.length" class="empty">请先拆解分镜</div>
               </div>
-              <div style="margin-top:12px">
-                <div class="muted" style="font-size:12px;margin-bottom:6px">历史</div>
+              <div class="mt-12">
+                <div class="muted sm section-kicker tight">历史</div>
                 <div class="list">
-                  <div v-for="h in gridHist" :key="h.id" class="list-item" style="font-size:12px">
+                  <div v-for="h in gridHist" :key="h.id" class="list-item compact">
                     #{{ h.id }} · {{ h.mode }} · {{ h.rows }}x{{ h.cols }} · {{ h.status }}
-                    <button v-if="h.image_url" class="btn" style="margin-top:6px" :disabled="!!busy || assigningGridCell !== null" :aria-label="`载入宫格 #${h.id}`" @click="loadGridHistory(h)">载入</button>
+                    <button v-if="h.image_url" class="btn mt-6" :disabled="!!busy || assigningGridCell !== null" :aria-label="`载入宫格 #${h.id}`" @click="loadGridHistory(h)">载入</button>
                   </div>
                   <div v-if="!gridHist.length" class="muted">暂无历史</div>
                 </div>
@@ -1474,7 +1475,7 @@ onUnmounted(stopPoll)
               </div>
             </section>
           </div>
-          <div v-if="!storyboards.length" class="empty" style="margin-top:12px">尚未拆解分镜</div>
+          <div v-if="!storyboards.length" class="empty mt-12">尚未拆解分镜</div>
         </div>
 
         <!-- EXPORT -->
@@ -1484,35 +1485,35 @@ onUnmounted(stopPoll)
             <button class="btn btn-primary" :disabled="!!busy" @click="mergeAll">拼接导出成片</button>
           </div>
           <p class="muted">将已生成视频与配音排队合成为镜头，再拼接为整集成片。任务状态可在右侧查看。</p>
-          <video v-if="episode.video_url" class="media" style="width:min(720px,100%);margin-top:12px" :src="episode.video_url" controls />
-          <div v-else class="empty" style="margin-top:12px">尚未导出成片</div>
-          <div style="margin-top:16px">
-            <h3 style="margin-top:0">镜头合成状态</h3>
+          <video v-if="episode.video_url" class="media export" :src="episode.video_url" controls />
+          <div v-else class="empty mt-12">尚未导出成片</div>
+          <div class="export-status">
+            <h3>镜头合成状态</h3>
             <div class="list">
-              <div v-for="sb in storyboards" :key="'c'+sb.id" class="list-item" style="font-size:13px">
-                <div class="row" style="justify-content:space-between">
+              <div v-for="sb in storyboards" :key="'c'+sb.id" class="list-item">
+                <div class="row between">
                   <span>#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</span>
                   <span class="muted">
                     {{ sb.composed_video_url ? '已合成' : (sb.video_url ? '有视频' : '缺视频') }}
                     · {{ sb.tts_audio_url ? '有配音' : '无配音' }}
                   </span>
                 </div>
-                <video v-if="sb.composed_video_url" class="media" style="width:100%;margin-top:8px" :src="sb.composed_video_url" controls />
+                <video v-if="sb.composed_video_url" class="media shot" :src="sb.composed_video_url" controls />
               </div>
             </div>
           </div>
-          <div class="split-2" style="margin-top:16px">
+          <div class="split-2 mt-16">
             <div>
-              <h3 style="margin-top:0">素材库</h3>
+              <h3 class="section-title">素材库</h3>
               <div class="list">
                 <div v-for="asset in assets" :key="asset.id" class="list-item">
-                  <div class="row" style="justify-content:space-between;align-items:center">
+                  <div class="row between center">
                     <span>{{ asset.name }}</span>
                     <span class="muted">{{ asset.type }} · {{ asset.category || '未分类' }}</span>
                   </div>
-                  <img v-if="asset.mime_type?.startsWith('image/')" class="thumb" :src="asset.url" :alt="asset.name" style="margin-top:8px" />
-                  <a :href="asset.url" target="_blank" class="muted" style="font-size:12px;display:block;margin-top:6px">打开素材</a>
-                  <div v-if="canEdit && (asset.type === 'image' || asset.mime_type?.startsWith('image/'))" class="row" style="margin-top:8px;align-items:center">
+                  <img v-if="asset.mime_type?.startsWith('image/')" class="thumb mt-8" :src="asset.url" :alt="asset.name" />
+                  <a v-if="safeMediaHref(asset.url)" :href="safeMediaHref(asset.url)" target="_blank" rel="noopener noreferrer" class="muted block-link">打开素材</a>
+                  <div v-if="canEdit && (asset.type === 'image' || asset.mime_type?.startsWith('image/'))" class="row mt-8 center">
                     <select v-model.number="assetTargetShot[asset.id]" aria-label="目标分镜">
                       <option :value="undefined">选择分镜</option>
                       <option v-for="sb in storyboards" :key="sb.id" :value="sb.id">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</option>
@@ -1529,16 +1530,16 @@ onUnmounted(stopPoll)
               </div>
             </div>
             <div>
-              <h3 style="margin-top:0">任务状态</h3>
+              <h3 class="section-title">任务状态</h3>
               <div class="list">
                 <div v-for="job in jobs" :key="job.id" class="list-item">
-                  <div class="row" style="justify-content:space-between;align-items:center">
+                  <div class="row between center">
                     <span>#{{ job.id }} {{ job.kind }}</span>
                     <span class="muted">{{ job.status }}</span>
                   </div>
-                  <div class="muted" style="font-size:12px;margin-top:6px">进度 {{ job.progress || 0 }}% · {{ job.last_error || '无错误' }}</div>
-                  <button v-if="canEdit && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger" style="margin-top:8px" @click="cancelJob(job)">取消任务</button>
-                  <button v-if="canEdit && ['failed','canceled'].includes(job.status)" class="btn" style="margin-top:8px" @click="retryJob(job)">重试任务</button>
+                  <div class="muted sm mt-6">进度 {{ job.progress || 0 }}% · {{ job.last_error || '无错误' }}</div>
+                  <button v-if="canEdit && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger mt-8" @click="cancelJob(job)">取消任务</button>
+                  <button v-if="canEdit && ['failed','canceled'].includes(job.status)" class="btn mt-8" @click="retryJob(job)">重试任务</button>
                 </div>
                 <div v-if="!jobs.length" class="empty">暂无任务记录</div>
               </div>
@@ -1546,8 +1547,8 @@ onUnmounted(stopPoll)
           </div>
         </div>
 
-        <div v-if="log" class="panel" style="margin-top:16px">
-          <h3 style="margin-top:0">Agent / 任务输出</h3>
+        <div v-if="log" class="panel mt-16">
+          <h3 class="section-title">Agent / 任务输出</h3>
           <pre class="log-box">{{ log }}</pre>
         </div>
       </div>
@@ -1677,7 +1678,7 @@ onUnmounted(stopPoll)
     </div>
 
     <div v-if="toast" class="toast">{{ toast }}</div>
-    <div v-if="busy" class="toast" style="left:16px;right:auto">处理中：{{ busy }}</div>
+    <div v-if="busy" class="toast busy">处理中：{{ busy }}</div>
   </div>
   <div v-else-if="loading" class="page">
     <div class="empty" role="status" aria-live="polite">正在加载本集…</div>

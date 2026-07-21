@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { assetAPI, dramaAPI, episodeAPI, uploadAPI } from '../api'
+import { safeMediaHref } from '../utils/mediaUrl'
 
 const route = useRoute()
 const router = useRouter()
@@ -311,7 +312,8 @@ onMounted(loadProject)
           <img v-if="asset.type === 'image' || asset.mime_type?.startsWith('image')" :src="asset.thumbnail_url || asset.url" :alt="asset.name" />
           <video v-else-if="asset.type === 'video' || asset.mime_type?.startsWith('video')" :src="asset.url" controls preload="metadata" />
           <audio v-else-if="asset.type === 'audio' || asset.mime_type?.startsWith('audio')" :src="asset.url" controls preload="metadata" />
-          <a v-else :href="asset.url" target="_blank" rel="noopener">打开素材</a>
+          <a v-else-if="safeMediaHref(asset.url)" :href="safeMediaHref(asset.url)" target="_blank" rel="noopener noreferrer">打开素材</a>
+          <span v-else class="muted">素材地址无效</span>
         </div>
         <div class="asset-card-body">
           <div class="asset-title-row">
@@ -329,7 +331,7 @@ onMounted(loadProject)
           <div class="asset-actions">
             <button v-if="asset.type === 'image' || asset.mime_type?.startsWith('image')" class="btn btn-primary" :disabled="!!busy" @click="applyAsset(asset)">复用到分镜</button>
             <button class="btn" :disabled="!!busy" @click="openEdit(asset)">编辑</button>
-            <a class="btn" :href="asset.url" target="_blank" rel="noopener">打开</a>
+            <a v-if="safeMediaHref(asset.url)" class="btn" :href="safeMediaHref(asset.url)" target="_blank" rel="noopener noreferrer">打开</a>
             <button class="btn btn-danger" :disabled="!!busy" @click="removeAsset(asset)">删除</button>
           </div>
         </div>
