@@ -8,7 +8,9 @@ import (
 	"math"
 	"sort"
 
+	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func bindOptionalJSON(c *gin.Context, target any) error {
@@ -108,4 +110,25 @@ func positiveJSONIDs(value any) ([]uint, bool) {
 		result = append(result, id)
 	}
 	return result, true
+}
+
+// activeResourceQuery scopes organization reads to non-soft-deleted rows.
+func activeResourceQuery(c *gin.Context) *gorm.DB {
+	return organizationDB(c).Where("deleted_at IS NULL")
+}
+
+func findActiveCharacter(c *gin.Context, id uint, character *models.Character) error {
+	return activeResourceQuery(c).First(character, id).Error
+}
+
+func findActiveScene(c *gin.Context, id uint, scene *models.Scene) error {
+	return activeResourceQuery(c).First(scene, id).Error
+}
+
+func findActiveProp(c *gin.Context, id uint, prop *models.Prop) error {
+	return activeResourceQuery(c).First(prop, id).Error
+}
+
+func findActiveStoryboard(c *gin.Context, id uint, storyboard *models.Storyboard) error {
+	return activeResourceQuery(c).First(storyboard, id).Error
 }

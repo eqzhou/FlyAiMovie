@@ -205,3 +205,69 @@ func TestCharacterBatchImagesSurfacesPerItemErrors(t *testing.T) {
 		t.Fatalf("unexpected errors %s", joined)
 	}
 }
+
+func TestSoftDeletedResourcesRejectGeneration(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"软删除保护","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+	episodeID := uintField(t, episode, "id")
+
+	character := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁","appearance":"白外套"}`)
+	characterID := uintField(t, character, "id")
+	scene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"location":"站台","time":"夜","prompt":"雨夜"}`)
+	sceneID := uintField(t, scene, "id")
+	prop := requestData(t, router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱","prompt":"皮革"}`)
+	propID := uintField(t, prop, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"开场","image_prompt":"quiet room","video_prompt":"quiet room","dialogue":"阿宁：你好"}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/characters/"+itoa(characterID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete character status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/scenes/"+itoa(sceneID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete scene status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/props/"+itoa(propID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete prop status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/storyboards/"+itoa(storyboardID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	charGen := performRequest(router, http.MethodPost, "/api/v1/characters/"+itoa(characterID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`, nil)
+	if charGen.Code != http.StatusBadRequest {
+		t.Fatalf("deleted character generate status=%d body=%s", charGen.Code, charGen.Body.String())
+	}
+	sceneGen := performRequest(router, http.MethodPost, "/api/v1/scenes/"+itoa(sceneID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`, nil)
+	if sceneGen.Code != http.StatusBadRequest {
+		t.Fatalf("deleted scene generate status=%d body=%s", sceneGen.Code, sceneGen.Body.String())
+	}
+	propGen := performRequest(router, http.MethodPost, "/api/v1/props/"+itoa(propID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`, nil)
+	if propGen.Code != http.StatusNotFound {
+		t.Fatalf("deleted prop generate status=%d body=%s", propGen.Code, propGen.Body.String())
+	}
+	frameGen := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-frame", `{"frame_type":"first_frame"}`, nil)
+	if frameGen.Code != http.StatusNotFound {
+		t.Fatalf("deleted storyboard frame status=%d body=%s", frameGen.Code, frameGen.Body.String())
+	}
+	videoGen := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-video", `{}`, nil)
+	if videoGen.Code != http.StatusNotFound {
+		t.Fatalf("deleted storyboard video status=%d body=%s", videoGen.Code, videoGen.Body.String())
+	}
+	ttsGen := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-tts", `{}`, nil)
+	if ttsGen.Code != http.StatusBadRequest {
+		t.Fatalf("deleted storyboard tts status=%d body=%s", ttsGen.Code, ttsGen.Body.String())
+	}
+	batch := requestData(t, router, http.MethodPost, "/api/v1/characters/batch-generate-images", `{"episode_id":`+itoa(episodeID)+`,"character_ids":[`+itoa(characterID)+`]}`)
+	if int(batch["count"].(float64)) != 0 {
+		t.Fatalf("batch count=%v body=%v", batch["count"], batch)
+	}
+	errs, ok := batch["errors"].([]any)
+	if !ok || len(errs) == 0 || !strings.Contains(fmt.Sprint(errs), "not found") {
+		t.Fatalf("batch errors=%v", batch["errors"])
+	}
+}

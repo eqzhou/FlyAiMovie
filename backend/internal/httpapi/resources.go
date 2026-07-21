@@ -190,7 +190,7 @@ func (s *Server) characterVoiceSample(c *gin.Context) {
 		return
 	}
 	var ch models.Character
-	if err := organizationDB(c).First(&ch, id).Error; err != nil {
+	if err := findActiveCharacter(c, uint(id), &ch); err != nil {
 		response.BadRequest(c, "Character not found")
 		return
 	}
@@ -224,7 +224,7 @@ func (s *Server) characterGenerateImage(c *gin.Context) {
 		return
 	}
 	var ch models.Character
-	if err := organizationDB(c).First(&ch, id).Error; err != nil {
+	if err := findActiveCharacter(c, uint(id), &ch); err != nil {
 		response.BadRequest(c, "Character not found")
 		return
 	}
@@ -279,7 +279,7 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 	errs := make([]string, 0)
 	for _, cid := range body.CharacterIDs {
 		var ch models.Character
-		if err := organizationDB(c).First(&ch, cid).Error; err != nil {
+		if err := findActiveCharacter(c, cid, &ch); err != nil {
 			errs = append(errs, fmt.Sprintf("character %d: not found", cid))
 			continue
 		}
@@ -434,7 +434,7 @@ func (s *Server) sceneGenerateImage(c *gin.Context) {
 		return
 	}
 	var sc models.Scene
-	if err := organizationDB(c).First(&sc, id).Error; err != nil {
+	if err := findActiveScene(c, uint(id), &sc); err != nil {
 		response.BadRequest(c, "Scene not found")
 		return
 	}
@@ -745,7 +745,7 @@ func (s *Server) deleteStoryboard(c *gin.Context) {
 func (s *Server) storyboardTTS(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var sb models.Storyboard
-	if err := organizationDB(c).First(&sb, id).Error; err != nil {
+	if err := findActiveStoryboard(c, uint(id), &sb); err != nil {
 		response.BadRequest(c, "not found")
 		return
 	}

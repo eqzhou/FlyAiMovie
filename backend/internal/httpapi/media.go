@@ -147,7 +147,7 @@ func (s *Server) createVideo(c *gin.Context) {
 	// auto-fill from storyboard
 	if body.StoryboardID != nil {
 		var sb models.Storyboard
-		if err := organizationDB(c).First(&sb, *body.StoryboardID).Error; err == nil {
+		if err := findActiveStoryboard(c, *body.StoryboardID, &sb); err == nil {
 			if referenceImageURLs == "" {
 				referenceImageURLs = sb.ReferenceImages
 			}
@@ -572,7 +572,7 @@ func (s *Server) registerCompose(api *gin.RouterGroup) {
 func (s *Server) composeShot(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var sb models.Storyboard
-	if err := organizationDB(c).First(&sb, id).Error; err != nil {
+	if err := findActiveStoryboard(c, uint(id), &sb); err != nil {
 		response.NotFound(c, "not found")
 		return
 	}
@@ -773,8 +773,8 @@ type gridCellAssignment struct {
 }
 
 var (
-	errUnregisteredGridCell = errors.New("grid cell is not registered to the current organization")
-	errGridCellMissing      = errors.New("grid cell does not exist")
+	errUnregisteredGridCell  = errors.New("grid cell is not registered to the current organization")
+	errGridCellMissing       = errors.New("grid cell does not exist")
 	errGridStoryboardMissing = errors.New("storyboard not found")
 )
 

@@ -144,7 +144,7 @@ func (s *Server) propGenerateImage(c *gin.Context) {
 		return
 	}
 	var prop models.Prop
-	if err := organizationDB(c).First(&prop, id).Error; err != nil {
+	if err := findActiveProp(c, uint(id), &prop); err != nil {
 		response.NotFound(c, "prop not found")
 		return
 	}

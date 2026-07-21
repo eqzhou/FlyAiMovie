@@ -61,7 +61,7 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 	}
 	body.FrameType = frameType
 	var sb models.Storyboard
-	if err := organizationDB(c).First(&sb, id).Error; err != nil {
+	if err := findActiveStoryboard(c, uint(id), &sb); err != nil {
 		response.NotFound(c, "storyboard not found")
 		return
 	}
@@ -108,7 +108,7 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 	refs := []string{}
 	if sb.SceneID != nil {
 		var sc models.Scene
-		if err := organizationDB(c).First(&sc, *sb.SceneID).Error; err == nil && sc.ImageURL != "" {
+		if err := findActiveScene(c, *sb.SceneID, &sc); err == nil && sc.ImageURL != "" {
 			refs = append(refs, sc.ImageURL)
 		}
 	}
@@ -116,7 +116,7 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 	organizationDB(c).Where("storyboard_id = ?", sb.ID).Find(&links)
 	for _, l := range links {
 		var ch models.Character
-		if err := organizationDB(c).First(&ch, l.CharacterID).Error; err == nil && ch.ImageURL != "" {
+		if err := findActiveCharacter(c, l.CharacterID, &ch); err == nil && ch.ImageURL != "" {
 			refs = append(refs, ch.ImageURL)
 		}
 	}
@@ -172,7 +172,7 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 	errs := make([]string, 0)
 	for _, id := range ids {
 		var sb models.Storyboard
-		if err := organizationDB(c).First(&sb, id).Error; err != nil {
+		if err := findActiveStoryboard(c, id, &sb); err != nil {
 			errs = append(errs, fmt.Sprintf("sb %d: not found", id))
 			continue
 		}
@@ -227,18 +227,31 @@ func ensureBatchStoryboardEpisode(c *gin.Context, ids []uint, episodeID uint) bo
 	if episodeID == 0 || len(ids) == 0 {
 		return true
 	}
-	var mismatched int64
+	var active int64
 	if err := organizationDB(c).Model(&models.Storyboard{}).
-		Where("id IN ? AND deleted_at IS NULL AND episode_id <> ?", ids, episodeID).
-		Count(&mismatched).Error; err != nil {
+		Where("id IN ? AND deleted_at IS NULL AND episode_id = ?", ids, episodeID).
+		Count(&active).Error; err != nil {
 		response.ServerError(c, "failed to validate storyboard ownership")
 		return false
 	}
-	if mismatched > 0 {
+	if int(active) != len(uniqueUints(ids)) {
 		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "storyboard does not belong to episode"})
 		return false
 	}
 	return true
+}
+
+func uniqueUints(ids []uint) []uint {
+	seen := make(map[uint]struct{}, len(ids))
+	out := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Server) batchGenerateVideos(c *gin.Context) {
@@ -277,7 +290,7 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 	errs := make([]string, 0)
 	for _, id := range ids {
 		var sb models.Storyboard
-		if err := organizationDB(c).First(&sb, id).Error; err != nil {
+		if err := findActiveStoryboard(c, id, &sb); err != nil {
 			errs = append(errs, fmt.Sprintf("sb %d: not found", id))
 			continue
 		}
@@ -348,7 +361,7 @@ func (s *Server) batchGenerateTTS(c *gin.Context) {
 	ok, skipped, fail := 0, 0, 0
 	for _, id := range ids {
 		var sb models.Storyboard
-		if err := organizationDB(c).First(&sb, id).Error; err != nil {
+		if err := findActiveStoryboard(c, id, &sb); err != nil {
 			fail++
 			continue
 		}
@@ -387,7 +400,7 @@ func (s *Server) storyboardGenerateVideo(c *gin.Context) {
 		}
 	}
 	var sb models.Storyboard
-	if err := organizationDB(c).First(&sb, id).Error; err != nil {
+	if err := findActiveStoryboard(c, uint(id), &sb); err != nil {
 		response.NotFound(c, "not found")
 		return
 	}
