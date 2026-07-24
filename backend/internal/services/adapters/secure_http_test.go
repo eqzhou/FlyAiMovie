@@ -88,3 +88,24 @@ func TestPrivateProviderHostnameRequiresExactAllowlistAndCustomCA(t *testing.T) 
 		t.Fatal("private hostname was allowed without a valid custom CA")
 	}
 }
+
+func TestHasSafeProviderIP(t *testing.T) {
+	if hasSafeProviderIP([]net.IP{net.ParseIP("198.18.0.44")}) {
+		t.Fatal("benchmarking range should not count as safe")
+	}
+	if !hasSafeProviderIP([]net.IP{net.ParseIP("198.18.0.44"), net.ParseIP("8.8.8.8")}) {
+		t.Fatal("public address should count as safe")
+	}
+}
+
+func TestLookupIPsViaPublicDNSReturnsGlobalAddress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	ips, err := lookupIPsViaPublicDNS(ctx, "one.one.one.one")
+	if err != nil {
+		t.Skipf("public DNS unavailable in this environment: %v", err)
+	}
+	if !hasSafeProviderIP(ips) {
+		t.Fatalf("public DNS returned only unsafe addresses: %v", ips)
+	}
+}

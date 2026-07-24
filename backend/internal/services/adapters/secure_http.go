@@ -33,11 +33,11 @@ func providerHTTPClient(timeout time.Duration) *http.Client {
 				}
 				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 			}
-			ips, err := net.LookupIP(host)
+			allowPrivate := providerPrivateHostAllowed(host)
+			ips, err := lookupProviderIPs(ctx, host, allowPrivate)
 			if err != nil {
 				return nil, fmt.Errorf("resolve provider host: %w", err)
 			}
-			allowPrivate := providerPrivateHostAllowed(host)
 			for _, ip := range ips {
 				if isUnsafeProviderIP(ip) && !allowPrivate {
 					continue
@@ -61,6 +61,83 @@ func providerHTTPClient(timeout time.Duration) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// lookupProviderIPs resolves provider hostnames with a public-DNS fallback.
+// Local Clash/MacPacket fake-ip DNS often returns 198.18.0.0/15 addresses that
+// would otherwise trip SSRF guards for legitimate public API gateways.
+func lookupProviderIPs(ctx context.Context, host string, allowPrivate bool) ([]net.IP, error) {
+	ips, err := net.LookupIP(host)
+	if err == nil && (allowPrivate || hasSafeProviderIP(ips)) {
+		return ips, nil
+	}
+	if allowPrivate {
+		if err != nil {
+			return nil, err
+		}
+		return ips, nil
+	}
+	fallback, fallbackErr := lookupIPsViaPublicDNS(ctx, host)
+	if fallbackErr == nil && len(fallback) > 0 {
+		return fallback, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if fallbackErr != nil {
+		return ips, nil
+	}
+	return ips, nil
+}
+
+func hasSafeProviderIP(ips []net.IP) bool {
+	for _, ip := range ips {
+		if !isUnsafeProviderIP(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func lookupIPsViaPublicDNS(ctx context.Context, host string) ([]net.IP, error) {
+	resolvers := []string{"1.1.1.1:53", "8.8.8.8:53"}
+	seen := map[string]struct{}{}
+	out := make([]net.IP, 0, 4)
+	var lastErr error
+	for _, server := range resolvers {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(dialCtx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(dialCtx, "udp", server)
+			},
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		addrs, err := resolver.LookupIPAddr(lookupCtx, host)
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, addr := range addrs {
+			if addr.IP == nil {
+				continue
+			}
+			key := addr.IP.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, addr.IP)
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no public DNS answers for %s", host)
 }
 
 func providerLiteralIPAllowed(host string, ip net.IP) bool {
