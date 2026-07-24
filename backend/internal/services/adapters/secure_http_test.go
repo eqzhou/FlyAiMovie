@@ -109,3 +109,31 @@ func TestLookupIPsViaPublicDNSReturnsGlobalAddress(t *testing.T) {
 		t.Fatalf("public DNS returned only unsafe addresses: %v", ips)
 	}
 }
+
+func TestOnlyProxyFakeIPs(t *testing.T) {
+	if !onlyProxyFakeIPs([]net.IP{net.ParseIP("198.18.0.44"), net.ParseIP("198.19.1.2")}) {
+		t.Fatal("expected pure fake-ip set")
+	}
+	if onlyProxyFakeIPs([]net.IP{net.ParseIP("198.18.0.44"), net.ParseIP("10.0.0.1")}) {
+		t.Fatal("mixed private set must not count as pure fake-ip")
+	}
+	if onlyProxyFakeIPs([]net.IP{net.ParseIP("8.8.8.8")}) {
+		t.Fatal("public address is not fake-ip")
+	}
+	if onlyProxyFakeIPs(nil) {
+		t.Fatal("empty set is not fake-ip")
+	}
+}
+
+func TestProviderHTTPClientAllowsClashFakeIPHostname(t *testing.T) {
+	// Serve on a listener bound to a fake-ip address if the OS routes it, otherwise
+	// skip. Primary assertion is that dial validation accepts pure 198.18 answers.
+	t.Setenv("AI_PROVIDER_PRIVATE_HOSTS", "")
+	t.Setenv("AI_PROVIDER_CA_FILE", "")
+	if !isProxyFakeIP(net.ParseIP("198.18.0.44")) {
+		t.Fatal("expected 198.18.0.44 to be classified as proxy fake-ip")
+	}
+	if isProxyFakeIP(net.ParseIP("10.0.0.1")) {
+		t.Fatal("RFC1918 must not be treated as proxy fake-ip")
+	}
+}

@@ -38,14 +38,28 @@ func providerHTTPClient(timeout time.Duration) *http.Client {
 			if err != nil {
 				return nil, fmt.Errorf("resolve provider host: %w", err)
 			}
+			// Clash/MacPacket fake-ip DNS returns 198.18.0.0/15. Those addresses are
+			// local proxy routes for the original public hostname, not real private
+			// networks. Allow dialing them only when every answer is in that range.
+			allowFakeIP := !allowPrivate && onlyProxyFakeIPs(ips)
+			var lastDialErr error
+			tried := 0
 			for _, ip := range ips {
-				if isUnsafeProviderIP(ip) && !allowPrivate {
+				if isUnsafeProviderIP(ip) && !allowPrivate && !(allowFakeIP && isProxyFakeIP(ip)) {
 					continue
 				}
+				tried++
 				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 				if dialErr == nil {
 					return conn, nil
 				}
+				lastDialErr = dialErr
+			}
+			if tried == 0 {
+				return nil, fmt.Errorf("provider host resolves only to disallowed addresses")
+			}
+			if lastDialErr != nil {
+				return nil, fmt.Errorf("provider host dial failed: %w", lastDialErr)
 			}
 			return nil, fmt.Errorf("provider host resolves only to disallowed addresses")
 		},
@@ -201,6 +215,35 @@ func ProviderCustomCAConfigured() bool {
 // third-party SDKs while preserving connection-time DNS and IP validation.
 func SecureProviderHTTPClient(timeout time.Duration) *http.Client {
 	return providerHTTPClient(timeout)
+}
+
+// proxyFakeIPNet is the RFC 2544 benchmarking range commonly used by Clash
+// and similar clients for fake-ip mode.
+var proxyFakeIPNet = func() *net.IPNet {
+	_, network, err := net.ParseCIDR("198.18.0.0/15")
+	if err != nil {
+		panic(err)
+	}
+	return network
+}()
+
+func isProxyFakeIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return proxyFakeIPNet.Contains(ip)
+}
+
+func onlyProxyFakeIPs(ips []net.IP) bool {
+	if len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !isProxyFakeIP(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 func isUnsafeProviderIP(ip net.IP) bool {
