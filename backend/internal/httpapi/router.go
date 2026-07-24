@@ -38,6 +38,7 @@ type Server struct {
 	Cache        *mediacache.Service
 	Frontend     string // dist path optional
 	ResetSender  PasswordResetSender
+	InviteSender InvitationSender
 	agentRunMu   sync.Mutex
 	agentRetryMu sync.Mutex
 	agentCancels map[uint]context.CancelFunc
@@ -58,6 +59,7 @@ func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, front
 		Cache:        cacheService,
 		Frontend:     frontendDist,
 		ResetSender:  NoopPasswordResetSender{},
+		InviteSender: NoopInvitationSender{},
 		agentCancels: make(map[uint]context.CancelFunc),
 	}
 	server.Productions = production.New(db.DB, server.Agents, server.Images, server.Videos, jobService)
@@ -76,7 +78,9 @@ func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, front
 		log.Printf("media cleanup retry left %d failed tasks", cleanup.Failed)
 	}
 	if cfg != nil && cfg.Email.SMTPHost != "" && cfg.Email.SMTPPort > 0 && cfg.Email.SMTPUsername != "" && cfg.Email.SMTPPassword != "" && cfg.Email.From != "" && cfg.Email.ResetURLBase != "" {
-		server.ResetSender = NewSMTPPasswordResetSender(cfg.Email)
+		mailer := NewSMTPPasswordResetSender(cfg.Email)
+		server.ResetSender = mailer
+		server.InviteSender = mailer
 	}
 	return server
 }

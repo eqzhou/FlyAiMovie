@@ -972,3 +972,26 @@ label.btn:has(.file-input-hidden:focus-visible) { outline: 2px solid var(--accen
   .asset-toolbar select, .asset-apply-bar select { flex: 1 1 140px; min-width: 0; }
   .asset-grid { grid-template-columns: 1fr; }
 }
+
+/* Invite modal delivery feedback */
+.invite-modal-help { margin: -4px 0 14px; line-height: 1.5; }
+.invite-success { display: grid; gap: 12px; }
+.invite-delivery {
+  display: grid; gap: 4px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+}
+.invite-delivery[data-sent="false"] {
+  border-color: color-mix(in srgb, var(--warn, #d97706) 35%, var(--border));
+  background: color-mix(in srgb, var(--warn, #d97706) 12%, var(--bg-elev));
+}
+.invite-delivery strong { font-size: 13px; color: var(--text); }
+.invite-status {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+  border-radius: 999px; font-size: 12px; font-weight: 600;
+  background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--text);
+}
+.invite-status[data-status="pending"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.invite-status[data-status="accepted"] { background: color-mix(in srgb, var(--ok, #16a34a) 16%, transparent); color: var(--ok, #16a34a); }
+.invite-status[data-status="expired"] { background: color-mix(in srgb, var(--warn, #d97706) 16%, transparent); color: var(--warn, #d97706); }
+.invite-status[data-status="revoked"] { background: color-mix(in srgb, var(--danger, #dc2626) 14%, transparent); color: var(--danger, #dc2626); }

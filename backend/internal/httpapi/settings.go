@@ -533,8 +533,8 @@ func (s *Server) upsertAgentConfig(c *gin.Context) {
 		response.BadRequest(c, "max_tokens must be between 1 and 128000")
 		return
 	}
-	if body.MaxIterations != nil && (*body.MaxIterations < 1 || *body.MaxIterations > 2) {
-		response.BadRequest(c, "max_iterations must be between 1 and 2")
+	if body.MaxIterations != nil && (*body.MaxIterations < 1 || *body.MaxIterations > 5) {
+		response.BadRequest(c, "max_iterations must be between 1 and 5")
 		return
 	}
 	ts := response.Now()
@@ -615,8 +615,8 @@ func (s *Server) updateAgentConfig(c *gin.Context) {
 	}
 	if v, ok := body["max_iterations"]; ok {
 		number, valid := positiveJSONInt(v)
-		if !valid || number > 2 {
-			response.BadRequest(c, "max_iterations must be between 1 and 2")
+		if !valid || number > 5 {
+			response.BadRequest(c, "max_iterations must be between 1 and 5")
 			return
 		}
 		updates["max_iterations"] = number

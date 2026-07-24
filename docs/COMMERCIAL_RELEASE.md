@@ -69,3 +69,12 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - 模型供应商条款版本与配置清单；
 - 自动测试、安全扫描、E2E 和人工验收报告；
 - 品牌、素材、声音和肖像授权记录。
+
+## 自动化补充（2026-07-24）
+
+- `make sbom` / `scripts/generate-sbom.sh`：导出 Go modules、npm 依赖树、FFmpeg 版本与 license 证据到 `artifacts/sbom/`
+- CI `sbom` job 上传 artifact `sbom-inventory`
+- Playwright WebKit 项目已加入 `frontend/playwright.config.ts`，CI 安装 chromium + webkit
+- 真实厂商 smoke：`SMOKE_OPENAI_KEY` / `SMOKE_MINIMAX_KEY` / `SMOKE_VIDU_KEY` 等环境变量触发 `TestLiveSmoke*`
+- 真实 SMTP smoke：`SMOKE_SMTP_*` + `SMOKE_APP_URL_BASE` 触发 `TestLiveSmokeSMTPPasswordResetAndInvitation`
+- 邀请链路在配置 SMTP 后会发送邮件；未配置时仍返回 token 供复制链接

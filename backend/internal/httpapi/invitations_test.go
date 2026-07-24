@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -145,5 +146,88 @@ func TestOrganizationInvitationCanBeRevokedAndResent(t *testing.T) {
 	}
 	if performRequest(router, http.MethodGet, "/api/v1/auth/invitations/"+token2, "", nil).Code != http.StatusNotFound {
 		t.Fatal("old invitation token remained valid after resend")
+	}
+}
+
+type captureInvitationSender struct {
+	email            string
+	organizationName string
+	role             string
+	token            string
+	expires          time.Time
+	calls            int
+}
+
+func (s *captureInvitationSender) SendInvitation(email, organizationName, role, token string, expiresAt time.Time) error {
+	s.calls++
+	s.email, s.organizationName, s.role, s.token, s.expires = email, organizationName, role, token, expiresAt
+	return nil
+}
+
+func TestOrganizationInvitationDeliversEmailWhenSenderConfigured(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	sender := &captureInvitationSender{}
+	server.InviteSender = sender
+	router := server.Router()
+	ownerCookie, ownerCSRF, organization := createTestActorSession(t, server, "invite-mail-owner@example.com", "invite-mail-owner", "owner")
+	created := performAuthRequest(router, http.MethodPost, "/api/v1/organization/members/invitations", `{"email":"invite-mail@example.com","role":"editor","ttl_hours":12}`, ownerCookie, ownerCSRF)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create invitation status=%d body=%s", created.Code, created.Body.String())
+	}
+	data := decodeResponse(t, created)["data"].(map[string]any)
+	token, _ := data["token"].(string)
+	if token == "" || data["email_sent"] != true {
+		t.Fatalf("expected email_sent token response: %s", created.Body.String())
+	}
+	if sender.calls != 1 || sender.email != "invite-mail@example.com" || sender.token != token || sender.role != "editor" {
+		t.Fatalf("sender=%+v token=%s", sender, token)
+	}
+	if sender.organizationName != organization.Name {
+		t.Fatalf("organization name=%q want %q", sender.organizationName, organization.Name)
+	}
+	if sender.expires.Before(time.Now().UTC()) {
+		t.Fatalf("expires not in future: %v", sender.expires)
+	}
+
+	resend := performAuthRequest(router, http.MethodPost, "/api/v1/organization/members/invitations/"+itoa(uint(data["id"].(float64)))+"/resend", "", ownerCookie, ownerCSRF)
+	if resend.Code != http.StatusCreated {
+		t.Fatalf("resend status=%d body=%s", resend.Code, resend.Body.String())
+	}
+	resendData := decodeResponse(t, resend)["data"].(map[string]any)
+	if resendData["email_sent"] != true || sender.calls != 2 || sender.token == token {
+		t.Fatalf("resend sender=%+v response=%s", sender, resend.Body.String())
+	}
+}
+
+func TestSMTPPasswordResetSenderDeliversInvitationThroughLocalServer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	messages := make(chan string, 1)
+	errors := make(chan error, 1)
+	go serveTestSMTP(listener, messages, errors)
+	port := listener.Addr().(*net.TCPAddr).Port
+	sender := NewSMTPPasswordResetSender(config.EmailConfig{
+		SMTPHost: "localhost", SMTPPort: port, SMTPUsername: "user", SMTPPassword: "password",
+		From: "noreply@example.com", ResetURLBase: "https://app.example.com/",
+	})
+	if err := sender.SendInvitation("person@example.com", "Studio One", "editor", "token with spaces", time.Unix(1_700_000_000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errors:
+		t.Fatal(err)
+	case message := <-messages:
+		if !strings.Contains(message, "To: person@example.com") || !strings.Contains(message, "https://app.example.com/invite/token%20with%20spaces") || !strings.Contains(message, "Studio One") {
+			t.Fatalf("message=%q", message)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SMTP server did not receive invitation message")
+	}
+	if err := (NoopInvitationSender{}).SendInvitation("x", "y", "z", "t", time.Now()); err == nil {
+		t.Fatal("noop invitation sender unexpectedly succeeded")
 	}
 }

@@ -44,12 +44,14 @@ auth:
 
 email:
   # Configure SMTP_HOST/SMTP_PORT/SMTP_USERNAME/SMTP_PASSWORD/EMAIL_FROM in production.
+  # Used for password-reset and organization invitation emails.
   smtp_host: ""
   smtp_port: 587
   smtp_username: ""
   smtp_password: ""
   from: ""
-  # Public HTTPS origin, e.g. https://movie.example.com
+  # Public HTTPS origin for /password-reset/:token and /invite/:token links
+  # e.g. https://movie.example.com
   reset_url_base: ""
 
 # Required for production; inject through the environment or a secret manager.

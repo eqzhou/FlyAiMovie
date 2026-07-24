@@ -14,6 +14,16 @@ import (
 	"gorm.io/gorm"
 )
 
+type InvitationSender interface {
+	SendInvitation(email, organizationName, role, token string, expiresAt time.Time) error
+}
+
+type NoopInvitationSender struct{}
+
+func (NoopInvitationSender) SendInvitation(string, string, string, string, time.Time) error {
+	return errors.New("invitation email sender is not configured")
+}
+
 func (s *Server) registerPublicInvitations(api *gin.RouterGroup) {
 	api.GET("/auth/invitations/:token", s.getInvitation)
 	api.POST("/auth/invitations/:token/accept", s.acceptInvitation)
@@ -71,15 +81,17 @@ func (s *Server) createOrganizationInvitation(c *gin.Context) {
 		return
 	}
 	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(body.TTLHours) * time.Hour)
 	invitation := models.OrganizationInvitation{
 		OrganizationID: actor.Organization.ID, InvitedBy: actor.User.ID, Email: email, Role: body.Role,
-		TokenHash: tokenHash(token), ExpiresAt: now.Add(time.Duration(body.TTLHours) * time.Hour).Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
+		TokenHash: tokenHash(token), ExpiresAt: expiresAt.Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
 	}
 	if err := db.DB.Create(&invitation).Error; err != nil {
 		response.ServerError(c, "failed to create invitation")
 		return
 	}
-	response.Created(c, gin.H{"id": invitation.ID, "email": invitation.Email, "role": invitation.Role, "expires_at": invitation.ExpiresAt, "token": token})
+	emailSent := s.deliverInvitationEmail(actor.Organization.Name, invitation.Email, invitation.Role, token, expiresAt)
+	response.Created(c, gin.H{"id": invitation.ID, "email": invitation.Email, "role": invitation.Role, "expires_at": invitation.ExpiresAt, "token": token, "email_sent": emailSent})
 }
 
 func (s *Server) listOrganizationInvitations(c *gin.Context) {
@@ -158,9 +170,10 @@ func (s *Server) resendOrganizationInvitation(c *gin.Context) {
 		return
 	}
 	now := time.Now().UTC()
+	expiresAt := now.Add(72 * time.Hour)
 	newInvitation := models.OrganizationInvitation{
 		OrganizationID: actor.Organization.ID, InvitedBy: actor.User.ID, Email: previous.Email, Role: previous.Role,
-		TokenHash: tokenHash(token), ExpiresAt: now.Add(72 * time.Hour).Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
+		TokenHash: tokenHash(token), ExpiresAt: expiresAt.Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
 	}
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.OrganizationInvitation{}).Where("id = ? AND organization_id = ? AND accepted_at IS NULL AND revoked_at IS NULL", id, actor.Organization.ID).Update("revoked_at", now.Format(time.RFC3339)).Error; err != nil {
@@ -172,7 +185,19 @@ func (s *Server) resendOrganizationInvitation(c *gin.Context) {
 		response.ServerError(c, "failed to resend invitation")
 		return
 	}
-	response.Created(c, gin.H{"id": newInvitation.ID, "email": newInvitation.Email, "role": newInvitation.Role, "expires_at": newInvitation.ExpiresAt, "token": token, "status": "pending"})
+	emailSent := s.deliverInvitationEmail(actor.Organization.Name, newInvitation.Email, newInvitation.Role, token, expiresAt)
+	response.Created(c, gin.H{"id": newInvitation.ID, "email": newInvitation.Email, "role": newInvitation.Role, "expires_at": newInvitation.ExpiresAt, "token": token, "status": "pending", "email_sent": emailSent})
+}
+
+func (s *Server) deliverInvitationEmail(organizationName, email, role, token string, expiresAt time.Time) bool {
+	sender := s.InviteSender
+	if sender == nil {
+		sender = NoopInvitationSender{}
+	}
+	if err := sender.SendInvitation(email, organizationName, role, token, expiresAt); err != nil {
+		return false
+	}
+	return true
 }
 
 func findInvitation(token string) (models.OrganizationInvitation, models.Organization, error) {

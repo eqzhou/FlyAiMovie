@@ -234,7 +234,6 @@ func TestMutableMediaReferencesCannotClaimUnownedLocalPaths(t *testing.T) {
 	}
 }
 
-
 func TestGridAssignMapsBusinessErrors(t *testing.T) {
 	router := testRouter(t)
 	now := response.Now()

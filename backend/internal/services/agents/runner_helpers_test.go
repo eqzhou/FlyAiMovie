@@ -104,8 +104,15 @@ func TestRunnerLoadsSkillAndDefaultActions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: extractor\n---\nExtract carefully."), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "reference"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "reference", "notes.md"), []byte("Keep names stable."), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runner := NewRunner(dir)
-	if got := runner.loadSkill("extractor"); got != "## Skill\nExtract carefully." {
+	got := runner.loadSkill("extractor")
+	if !strings.Contains(got, "## Skill\nExtract carefully.") || !strings.Contains(got, "### notes\nKeep names stable.") {
 		t.Fatalf("skill=%q", got)
 	}
 	if runner.loadSkill("missing") != "" {

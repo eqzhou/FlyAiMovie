@@ -30,6 +30,11 @@ export default defineConfig({
         isMobile: true,
       },
     },
+    {
+      name: 'webkit',
+      grep: /desktop:/,
+      use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 1000 } },
+    },
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 4173',

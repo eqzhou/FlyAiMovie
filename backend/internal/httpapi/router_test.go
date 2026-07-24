@@ -221,7 +221,7 @@ func TestAIConfigRejectsUnsupportedProviderPair(t *testing.T) {
 func TestAgentConfigRejectsUnsupportedRuntimeLimits(t *testing.T) {
 	router := testRouter(t)
 	response := performRequest(router, http.MethodPost, "/api/v1/agent-configs", `{
-		"agent_type":"script_rewriter","name":"invalid","max_tokens":0,"max_iterations":3
+		"agent_type":"script_rewriter","name":"invalid","max_tokens":0,"max_iterations":6
 	}`, nil)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", response.Code, response.Body.String())

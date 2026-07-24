@@ -125,6 +125,9 @@ const members = ref<any[]>([])
 const memberForm = ref({ email: '', display_name: '', password: '', role: 'editor' })
 const inviteForm = ref({ email: '', role: 'editor', ttl_hours: 72 })
 const inviteLink = ref('')
+const inviteEmailSent = ref<boolean | null>(null)
+const inviting = ref(false)
+const copyingInvite = ref(false)
 const invitations = ref<any[]>([])
 const passwordForm = ref({ current: '', next: '', confirm: '' })
 const deleteForm = ref({ password: '', confirmation: '' })
@@ -157,9 +160,11 @@ function providerLabel(config: any) {
 }
 function agentTypeLabel(value: string) { return agentTypeLabels[value] || value }
 
-function show(m: string) {
+function show(m: string, duration = 2800) {
   toast.value = m
-  setTimeout(() => (toast.value = ''), 2000)
+  window.setTimeout(() => {
+    if (toast.value === m) toast.value = ''
+  }, duration)
 }
 
 async function load() {
@@ -200,11 +205,20 @@ async function addMember() {
 }
 
 async function inviteMember() {
-  const result = await memberAPI.invite(inviteForm.value)
-  inviteLink.value = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
-  inviteForm.value = { email: '', role: 'editor', ttl_hours: 72 }
-  show('邀请已创建，请复制链接发送给成员')
-  invitations.value = await memberAPI.invitations()
+  if (inviting.value) return
+  inviting.value = true
+  try {
+    const result = await memberAPI.invite(inviteForm.value)
+    inviteLink.value = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
+    inviteEmailSent.value = !!result.email_sent
+    inviteForm.value = { email: '', role: 'editor', ttl_hours: 72 }
+    show(result.email_sent
+      ? '邀请已创建，邮件已尝试发送；也可复制链接备用'
+      : '邀请已创建。邮件未配置或发送失败，请复制链接发送给成员', 4200)
+    invitations.value = await memberAPI.invitations()
+  } finally {
+    inviting.value = false
+  }
 }
 
 async function revokeInvitation(invitation: any) {
@@ -214,11 +228,65 @@ async function revokeInvitation(invitation: any) {
 }
 
 async function resendInvitation(invitation: any) {
-  const result = await memberAPI.resendInvitation(invitation.id)
-  inviteLink.value = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
+  if (inviting.value) return
+  inviting.value = true
+  try {
+    const result = await memberAPI.resendInvitation(invitation.id)
+    inviteLink.value = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
+    inviteEmailSent.value = !!result.email_sent
+    showInviteModal.value = true
+    invitations.value = await memberAPI.invitations()
+    show(result.email_sent
+      ? '邀请已重发，邮件已尝试发送；也可复制新链接'
+      : '邀请已重发。邮件未配置或发送失败，请复制新链接', 4200)
+  } finally {
+    inviting.value = false
+  }
+}
+
+function invitationStatusLabel(status: string) {
+  switch (status) {
+    case 'pending': return '待接受'
+    case 'accepted': return '已接受'
+    case 'revoked': return '已撤销'
+    case 'expired': return '已过期'
+    default: return status || '未知'
+  }
+}
+
+async function copyInviteLink() {
+  if (!inviteLink.value || copyingInvite.value) return
+  copyingInvite.value = true
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(inviteLink.value)
+    } else {
+      const input = document.getElementById('invite-link') as HTMLInputElement | null
+      if (!input) throw new Error('invite link input missing')
+      input.focus()
+      input.select()
+      document.execCommand('copy')
+    }
+    show('邀请链接已复制到剪贴板')
+  } catch {
+    show('复制失败，请手动选中链接复制', 3600)
+  } finally {
+    copyingInvite.value = false
+  }
+}
+
+function openInviteModal() {
+  inviteLink.value = ''
+  inviteEmailSent.value = null
+  inviteForm.value = { email: '', role: 'editor', ttl_hours: 72 }
   showInviteModal.value = true
-  invitations.value = await memberAPI.invitations()
-  show('邀请已重发')
+}
+
+function closeInviteModal() {
+  if (inviting.value) return
+  showInviteModal.value = false
+  inviteLink.value = ''
+  inviteEmailSent.value = null
 }
 
 async function changeMemberRole(member: any) {
@@ -781,7 +849,7 @@ onMounted(load)
     </section>
 
     <section v-if="activeSection === 'organization'" class="settings-section" role="tabpanel">
-      <div class="settings-section-head"><div><h2>组织与权限</h2><p class="muted">成员访问、生成额度与本地存储</p></div><div v-if="canManageQuota && authStore.state.enabled" class="toolbar"><button class="btn" @click="showMemberModal = true">添加成员</button><button class="btn btn-primary" @click="showInviteModal = true; inviteLink = ''">创建邀请</button></div></div>
+      <div class="settings-section-head"><div><h2>组织与权限</h2><p class="muted">成员访问、生成额度与本地存储</p></div><div v-if="canManageQuota && authStore.state.enabled" class="toolbar"><button class="btn" @click="showMemberModal = true">添加成员</button><button class="btn btn-primary" @click="openInviteModal">创建邀请</button></div></div>
       <div class="panel">
         <h3>生成配额</h3>
         <div class="field-grid"><div class="field"><label>每日任务上限</label><input v-model.number="quota.daily_job_limit" type="number" min="1" max="100000" :disabled="!canManageQuota" /></div><div class="field"><label>并发任务上限</label><input v-model.number="quota.max_active_jobs" type="number" min="1" max="1000" :disabled="!canManageQuota" /></div><div class="field"><label>每日预算（CNY，0 为不限）</label><input v-model.number="quota.daily_budget_cny" type="number" min="0" step="0.01" :disabled="!canManageQuota" /></div><div class="field"><label>预算预警阈值（%）</label><input v-model.number="quota.budget_warning_percent" type="number" min="1" max="100" :disabled="!canManageQuota" /></div></div>
@@ -797,12 +865,12 @@ onMounted(load)
         <thead><tr><th>邀请邮箱</th><th>角色</th><th>状态</th><th>有效期</th><th></th></tr></thead>
         <tbody>
           <tr v-for="invitation in invitations" :key="invitation.id">
-            <td>{{ invitation.email }}</td><td>{{ invitation.role }}</td><td>{{ invitation.status }}</td><td>{{ invitation.expires_at }}</td>
+            <td>{{ invitation.email }}</td><td>{{ invitation.role }}</td><td><span class="invite-status" :data-status="invitation.status">{{ invitationStatusLabel(invitation.status) }}</span></td><td>{{ invitation.expires_at }}</td>
             <td><div v-if="invitation.status === 'pending' || invitation.status === 'expired'" class="toolbar" style="margin:0"><button class="btn" @click="resendInvitation(invitation)">重发</button><button v-if="invitation.status === 'pending'" class="btn btn-danger" @click="revokeInvitation(invitation)">撤销</button></div></td>
           </tr>
         </tbody>
         </table>
-        <div v-else class="empty">没有待处理邀请</div>
+        <div v-else class="surface-empty empty" role="status"><strong>没有待处理邀请</strong><span class="muted">创建安全邀请后，成员可通过邮件或链接加入组织</span></div>
       </div>
       <div v-if="canManageQuota && authStore.state.enabled" class="panel"><h3>组织成员</h3><table class="table">
         <thead><tr><th>成员</th><th>邮箱</th><th>角色</th><th></th></tr></thead>
@@ -827,7 +895,7 @@ onMounted(load)
 
     <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="service-toggle-grid"><label class="settings-check"><input v-model="form.is_active" type="checkbox" /> 启用服务</label><label class="settings-check" :class="{ disabled: !form.is_active }"><input v-model="form.is_default" type="checkbox" :disabled="!form.is_active" /> 设为默认</label></div><div class="service-test-row"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="testDraftService"><FlaskConical :size="14" aria-hidden="true" />{{ testingDraftService ? '测试中…' : '测试当前配置' }}</button><span v-if="serviceTestResult" role="status">{{ serviceTestResult }}</span></div><p v-if="serviceError" class="form-error" role="alert">{{ serviceError }}</p><div class="modal-actions"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingService || testingDraftService">{{ savingService ? '保存中…' : editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
-    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="2" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
+    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="5" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
 
     <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" ref="promptContentInput" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-picker settings-span"><span>插入变量</span><div><button v-for="(label, variable) in promptVariableLabels" :key="variable" type="button" :aria-label="`插入变量 ${label}`" :title="promptToken(variable)" @click="insertPromptVariable(variable)"><strong>{{ label }}</strong><code>{{ promptToken(variable) }}</code></button></div></div></div><p v-if="promptFormError" class="form-error" role="alert">{{ promptFormError }}</p><div v-if="promptDraftPreview" class="prompt-draft-preview" role="status"><strong>草稿预览</strong><div class="prompt-preview-result">{{ promptDraftPreview }}</div></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft" @click="promptForm = null">取消</button><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft || !promptForm.content.trim()" @click="previewPromptForm">{{ previewingPromptDraft ? '检查中…' : '检查并预览' }}</button><button type="submit" class="btn btn-primary" :disabled="savingPrompt || previewingPromptDraft">{{ savingPrompt ? '保存中…' : promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
 
@@ -855,7 +923,29 @@ onMounted(load)
 
     <div v-if="showMemberModal" class="modal-mask" @click.self="showMemberModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="member-modal-title" @submit.prevent="addMember"><h3 id="member-modal-title">添加成员</h3><div class="field"><label for="member-email">邮箱</label><input id="member-email" v-model="memberForm.email" type="email" /></div><div class="field"><label for="member-name">显示名称</label><input id="member-name" v-model="memberForm.display_name" /></div><div class="field"><label for="member-password">初始密码</label><input id="member-password" v-model="memberForm.password" type="password" placeholder="12-128 个字符" /></div><div class="field"><label for="member-role">角色</label><select id="member-role" v-model="memberForm.role"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="modal-actions"><button type="button" class="btn" @click="showMemberModal = false">取消</button><button type="submit" class="btn btn-primary">添加成员</button></div></form></div>
 
-    <div v-if="showInviteModal" class="modal-mask" @click.self="showInviteModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title" @submit.prevent="inviteMember"><h3 id="invite-modal-title">创建邀请</h3><template v-if="!inviteLink"><div class="field"><label for="invite-email">邀请邮箱</label><input id="invite-email" v-model="inviteForm.email" type="email" /></div><div class="field"><label for="invite-role">邀请角色</label><select id="invite-role" v-model="inviteForm.role"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="field"><label for="invite-hours">有效小时</label><input id="invite-hours" v-model.number="inviteForm.ttl_hours" type="number" min="1" max="168" /></div></template><div v-else class="field"><label for="invite-link">邀请链接</label><input id="invite-link" :value="inviteLink" readonly /></div><div class="modal-actions"><button type="button" class="btn" @click="showInviteModal = false">{{ inviteLink ? '完成' : '取消' }}</button><button v-if="!inviteLink" type="submit" class="btn btn-primary">创建安全邀请</button></div></form></div>
+    <div v-if="showInviteModal" class="modal-mask" @click.self="closeInviteModal">
+      <form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title" aria-describedby="invite-modal-help" @keydown.esc="closeInviteModal" @submit.prevent="inviteMember">
+        <h3 id="invite-modal-title">{{ inviteLink ? '邀请已就绪' : '创建邀请' }}</h3>
+        <p id="invite-modal-help" class="muted invite-modal-help">{{ inviteLink ? '将链接发给成员完成加入；若已配置 SMTP，系统也会尝试发送邮件。' : '生成一次性安全邀请链接。未配置邮件时，可手动复制链接发送。' }}</p>
+        <template v-if="!inviteLink">
+          <div class="field"><label for="invite-email">邀请邮箱</label><input id="invite-email" v-model="inviteForm.email" type="email" required autocomplete="email" :disabled="inviting" /></div>
+          <div class="field"><label for="invite-role">邀请角色</label><select id="invite-role" v-model="inviteForm.role" :disabled="inviting"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div>
+          <div class="field"><label for="invite-hours">有效小时</label><input id="invite-hours" v-model.number="inviteForm.ttl_hours" type="number" min="1" max="168" :disabled="inviting" /></div>
+        </template>
+        <div v-else class="invite-success">
+          <div class="invite-delivery" role="status" :data-sent="inviteEmailSent ? 'true' : 'false'">
+            <strong>{{ inviteEmailSent ? '邮件已尝试发送' : '请手动分享链接' }}</strong>
+            <span class="muted">{{ inviteEmailSent ? '若收件箱未收到，可直接复制下方链接。' : '当前未成功发送邮件（未配置 SMTP 或发送失败）。' }}</span>
+          </div>
+          <div class="field"><label for="invite-link">邀请链接</label><input id="invite-link" :value="inviteLink" readonly /></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" :disabled="inviting" @click="closeInviteModal">{{ inviteLink ? '完成' : '取消' }}</button>
+          <button v-if="inviteLink" type="button" class="btn btn-primary" :disabled="copyingInvite" @click="copyInviteLink">{{ copyingInvite ? '复制中…' : '复制链接' }}</button>
+          <button v-else type="submit" class="btn btn-primary" :disabled="inviting || !inviteForm.email.trim()">{{ inviting ? '创建中…' : '创建安全邀请' }}</button>
+        </div>
+      </form>
+    </div>
 
     <div v-if="showPasswordModal" class="modal-mask" @click.self="showPasswordModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title" @submit.prevent="changePassword"><h3 id="password-modal-title">修改密码</h3><div class="field"><label for="current-password">当前密码</label><input id="current-password" v-model="passwordForm.current" type="password" /></div><div class="field"><label for="new-password">新密码</label><input id="new-password" v-model="passwordForm.next" type="password" /></div><div class="field"><label for="confirm-password">确认新密码</label><input id="confirm-password" v-model="passwordForm.confirm" type="password" /></div><div class="modal-actions"><button type="button" class="btn" @click="showPasswordModal = false">取消</button><button type="submit" class="btn btn-primary">更新密码</button></div></form></div>
 

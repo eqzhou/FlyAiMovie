@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
@@ -484,7 +485,27 @@ func (r *Runner) loadSkill(agentType string) string {
 			content = strings.TrimSpace(content[3+i+4:])
 		}
 	}
-	return "## Skill\n" + content
+	sections := []string{strings.TrimSpace(content)}
+	refDir := filepath.Join(r.SkillsDir, agentType, "reference")
+	entries, err := os.ReadDir(refDir)
+	if err == nil {
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+				continue
+			}
+			body, readErr := os.ReadFile(filepath.Join(refDir, entry.Name()))
+			if readErr != nil {
+				continue
+			}
+			trimmed := strings.TrimSpace(string(body))
+			if trimmed == "" {
+				continue
+			}
+			sections = append(sections, "### "+strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))+"\n"+trimmed)
+		}
+	}
+	return "## Skill\n" + strings.Join(sections, "\n\n")
 }
 
 func defaultPrompt(agentType string) string {

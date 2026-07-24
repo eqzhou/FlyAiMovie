@@ -25,13 +25,38 @@ func NewSMTPPasswordResetSender(cfg config.EmailConfig) *SMTPPasswordResetSender
 	return &SMTPPasswordResetSender{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.From, ResetURLBase: strings.TrimRight(cfg.ResetURLBase, "/")}
 }
 
-func (s *SMTPPasswordResetSender) SendPasswordReset(email, token string, expiresAt time.Time) error {
+func (s *SMTPPasswordResetSender) configured() error {
 	if s == nil || s.Host == "" || s.Port <= 0 || s.Username == "" || s.Password == "" || s.From == "" || !strings.HasPrefix(strings.ToLower(s.ResetURLBase), "https://") {
-		return fmt.Errorf("SMTP password reset sender is not configured")
+		return fmt.Errorf("SMTP mailer is not configured")
+	}
+	return nil
+}
+
+func (s *SMTPPasswordResetSender) SendPasswordReset(email, token string, expiresAt time.Time) error {
+	if err := s.configured(); err != nil {
+		return err
 	}
 	link := s.ResetURLBase + "/password-reset/" + url.PathEscape(token)
 	subject := "FlyAiMovie password reset"
 	body := fmt.Sprintf("Hello,\n\nUse this secure link to set a new FlyAiMovie password:\n%s\n\nThis link expires at %s UTC and can only be used once.\n\nIf you did not request this, ignore this email.\n", link, expiresAt.UTC().Format(time.RFC3339))
+	return s.send(email, subject, body)
+}
+
+func (s *SMTPPasswordResetSender) SendInvitation(email, organizationName, role, token string, expiresAt time.Time) error {
+	if err := s.configured(); err != nil {
+		return err
+	}
+	org := strings.TrimSpace(organizationName)
+	if org == "" {
+		org = "a FlyAiMovie workspace"
+	}
+	link := s.ResetURLBase + "/invite/" + url.PathEscape(token)
+	subject := "FlyAiMovie invitation"
+	body := fmt.Sprintf("Hello,\n\nYou have been invited to join %s as %s.\n\nAccept the invitation with this secure link:\n%s\n\nThis link expires at %s UTC and can only be used once.\n\nIf you did not expect this invitation, ignore this email.\n", org, strings.TrimSpace(role), link, expiresAt.UTC().Format(time.RFC3339))
+	return s.send(email, subject, body)
+}
+
+func (s *SMTPPasswordResetSender) send(email, subject, body string) error {
 	msg := "From: " + s.From + "\r\n" + "To: " + email + "\r\n" + "Subject: " + subject + "\r\n" + "MIME-Version: 1.0\r\n" + "Content-Type: text/plain; charset=UTF-8\r\n\r\n" + body
 	auth := smtp.PlainAuth("", s.Username, s.Password, s.Host)
 	address := net.JoinHostPort(s.Host, fmt.Sprintf("%d", s.Port))
