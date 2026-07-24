@@ -115,11 +115,20 @@ const stages = computed(() => [
   { id: 'script', label: '剧本', detail: status.value?.has_script ? '已就绪' : '待完成', complete: Boolean(status.value?.has_script) },
   { id: 'cast', label: '角色与场景', detail: `${status.value?.characters || 0} 角色 · ${status.value?.scenes || 0} 场景`, complete: Boolean(status.value?.characters && status.value?.scenes) },
   { id: 'grid', label: '宫格帧', detail: `${status.value?.storyboards || 0} 个镜头`, complete: Boolean(status.value?.storyboards) },
-  { id: 'boards', label: '分镜与视频', detail: `${status.value?.with_video || 0} 个视频`, complete: Boolean(status.value?.with_video) },
+  {
+    id: 'boards',
+    label: '分镜与视频',
+    detail: `${status.value?.with_video || 0} 视频 · ${status.value?.with_tts || 0} 配音`,
+    complete: Boolean(status.value?.with_video),
+  },
   { id: 'export', label: '合成导出', detail: episode.value?.video_url ? '成片完成' : `${status.value?.composed || 0} 个已合成`, complete: Boolean(episode.value?.video_url) },
 ])
 const currentStageIndex = computed(() => Math.max(0, stages.value.findIndex((stage) => stage.id === tab.value)))
+const currentStage = computed(() => stages.value[currentStageIndex.value] || stages.value[0])
+const previousStage = computed(() => stages.value[currentStageIndex.value - 1] || null)
 const nextStage = computed(() => stages.value[currentStageIndex.value + 1] || null)
+const completedStageCount = computed(() => stages.value.filter((stage) => stage.complete).length)
+const stageProgressLabel = computed(() => `${completedStageCount.value}/${stages.value.length} 阶段完成 · 总进度 ${progressPct.value}%`)
 
 const progressPct = computed(() => {
   if (!status.value) return 0
@@ -1197,18 +1206,32 @@ onUnmounted(stopPoll)
 
     <section class="production-overview" aria-label="制作进度">
       <div class="production-summary">
-        <div class="production-stats">
-          <span class="stat-chip">剧本 <strong>{{ status?.has_script ? '✓' : '—' }}</strong></span>
-          <span class="stat-chip">角色 <strong>{{ status?.characters || 0 }}</strong></span>
-          <span class="stat-chip">场景 <strong>{{ status?.scenes || 0 }}</strong></span>
-          <span class="stat-chip">分镜 <strong>{{ status?.storyboards || 0 }}</strong></span>
-          <span class="stat-chip">视频 <strong>{{ status?.with_video || 0 }}</strong></span>
-          <span class="stat-chip">配音 <strong>{{ status?.with_tts || 0 }}</strong></span>
-          <span class="stat-chip">合成 <strong>{{ status?.composed || 0 }}</strong></span>
+        <div class="production-stats" aria-label="资产统计">
+          <span class="stat-chip" :class="status?.has_script ? 'done' : 'pending'">剧本 <strong>{{ status?.has_script ? '✓' : '—' }}</strong></span>
+          <span class="stat-chip" :class="(status?.characters || 0) > 0 ? 'done' : 'pending'">角色 <strong>{{ status?.characters || 0 }}</strong></span>
+          <span class="stat-chip" :class="(status?.scenes || 0) > 0 ? 'done' : 'pending'">场景 <strong>{{ status?.scenes || 0 }}</strong></span>
+          <span class="stat-chip" :class="(status?.storyboards || 0) > 0 ? 'done' : 'pending'">分镜 <strong>{{ status?.storyboards || 0 }}</strong></span>
+          <span class="stat-chip" :class="(status?.with_video || 0) > 0 ? 'done' : 'pending'">视频 <strong>{{ status?.with_video || 0 }}</strong></span>
+          <span class="stat-chip" :class="(status?.with_tts || 0) > 0 ? 'done' : 'pending'">配音 <strong>{{ status?.with_tts || 0 }}</strong></span>
+          <span class="stat-chip" :class="(status?.composed || 0) > 0 || episode?.video_url ? 'done' : 'pending'">合成 <strong>{{ status?.composed || 0 }}</strong></span>
         </div>
         <div class="production-progress">
-          <div class="production-progress-label"><span>制作进度</span><strong>{{ progressPct }}%</strong></div>
-          <div class="progress-bar"><i :style="`width: ${progressPct}%`"></i></div>
+          <div class="production-progress-label">
+            <span>制作进度</span>
+            <strong>{{ progressPct }}%</strong>
+          </div>
+          <div
+            class="progress-bar"
+            :class="{ active: hasActiveProduction || hasActiveJobs }"
+            role="progressbar"
+            :aria-valuenow="progressPct"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="stageProgressLabel"
+          >
+            <i :style="`width: ${progressPct}%`"></i>
+          </div>
+          <p class="production-progress-meta">{{ stageProgressLabel }}</p>
         </div>
       </div>
 
@@ -1219,12 +1242,20 @@ onUnmounted(stopPoll)
           class="stage-tab"
           :class="{ active: tab === stage.id, complete: stage.complete }"
           role="tab"
-          :aria-label="stage.label"
+          :id="`workbench-stage-${stage.id}`"
+          :aria-controls="`workbench-stage-panel-${stage.id}`"
+          :aria-label="`${stage.label}${stage.complete ? '，已完成' : ''}`"
           :aria-selected="tab === stage.id"
+          :aria-current="tab === stage.id ? 'step' : undefined"
+          :tabindex="tab === stage.id ? 0 : -1"
+          :title="`${stage.label} · ${stage.detail}${stage.complete ? ' · 已完成' : ''}`"
           @click="selectStage(stage.id)"
         >
           <span class="stage-index" aria-hidden="true">{{ stage.complete ? '✓' : index + 1 }}</span>
-          <span class="stage-copy"><strong>{{ stage.label }}</strong><small>{{ stage.detail }}</small></span>
+          <span class="stage-copy">
+            <strong>{{ stage.label }}</strong>
+            <small>{{ stage.detail }}</small>
+          </span>
         </button>
       </div>
     </section>
@@ -1232,11 +1263,40 @@ onUnmounted(stopPoll)
     <div class="wb-shell">
       <div class="wb-main">
         <div class="stage-commandbar">
-          <div><span>阶段 {{ currentStageIndex + 1 }} / {{ stages.length }}</span><strong>{{ stages[currentStageIndex].label }}</strong></div>
-          <button v-if="nextStage" class="btn stage-next" @click="selectStage(nextStage.id)">下一步：{{ nextStage.label }}<ArrowRight :size="15" aria-hidden="true" /></button>
+          <div class="stage-commandbar-copy">
+            <span>阶段 {{ currentStageIndex + 1 }} / {{ stages.length }}</span>
+            <strong>{{ currentStage.label }}</strong>
+            <small>{{ currentStage.detail }}</small>
+          </div>
+          <div class="stage-commandbar-actions">
+            <button
+              v-if="previousStage"
+              class="btn stage-prev"
+              type="button"
+              :aria-label="`返回上一阶段：${previousStage.label}`"
+              @click="selectStage(previousStage.id)"
+            >
+              <ArrowLeft :size="15" aria-hidden="true" />{{ previousStage.label }}
+            </button>
+            <button
+              v-if="nextStage"
+              class="btn stage-next"
+              type="button"
+              @click="selectStage(nextStage.id)"
+            >
+              下一步：{{ nextStage.label }}<ArrowRight :size="15" aria-hidden="true" />
+            </button>
+            <span v-else class="stage-complete-flag" role="status">全部阶段已走完</span>
+          </div>
         </div>
         <!-- SCRIPT -->
-        <div v-if="tab==='script'" class="panel">
+        <div
+          v-if="tab==='script'"
+          id="workbench-stage-panel-script"
+          class="panel"
+          role="tabpanel"
+          aria-labelledby="workbench-stage-script"
+        >
           <div v-if="canEdit" class="toolbar">
             <button class="btn btn-primary" :disabled="!!busy" @click="saveContent">保存原文</button>
             <button class="btn" :disabled="!!busy" @click="runAgent('script_rewriter', '请将当前集内容改写为格式化剧本并保存')">AI 改写剧本</button>
@@ -1254,7 +1314,13 @@ onUnmounted(stopPoll)
         </div>
 
         <!-- CAST -->
-        <div v-else-if="tab==='cast'" class="cast-layout">
+        <div
+          v-else-if="tab==='cast'"
+          id="workbench-stage-panel-cast"
+          class="cast-layout"
+          role="tabpanel"
+          aria-labelledby="workbench-stage-cast"
+        >
           <div class="panel">
             <div v-if="canEdit" class="toolbar">
               <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('extractor', '请提取本集角色与场景并去重保存')">AI 提取</button>
@@ -1340,7 +1406,13 @@ onUnmounted(stopPoll)
         </div>
 
         <!-- GRID -->
-        <div v-else-if="tab==='grid'" class="panel">
+        <div
+          v-else-if="tab==='grid'"
+          id="workbench-stage-panel-grid"
+          class="panel"
+          role="tabpanel"
+          aria-labelledby="workbench-stage-grid"
+        >
           <div v-if="canEdit" class="toolbar">
             <div class="seg">
               <button :disabled="!!busy" :class="{ active: gridMode==='first_frame' }" @click="selectGridMode('first_frame')">首帧宫格</button>
@@ -1408,7 +1480,13 @@ onUnmounted(stopPoll)
         </div>
 
         <!-- BOARDS -->
-        <div v-else-if="tab==='boards'" class="panel">
+        <div
+          v-else-if="tab==='boards'"
+          id="workbench-stage-panel-boards"
+          class="panel"
+          role="tabpanel"
+          aria-labelledby="workbench-stage-boards"
+        >
           <div v-if="canEdit" class="toolbar">
             <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('storyboard_breaker', '请根据当前剧本完整拆解分镜并保存')">AI 拆解分镜</button>
             <button class="btn" :disabled="!!busy" @click="addStoryboard"><Plus :size="15" aria-hidden="true" />添加分镜</button>
@@ -1479,7 +1557,13 @@ onUnmounted(stopPoll)
         </div>
 
         <!-- EXPORT -->
-        <div v-else class="panel">
+        <div
+          v-else
+          id="workbench-stage-panel-export"
+          class="panel"
+          role="tabpanel"
+          aria-labelledby="workbench-stage-export"
+        >
           <div v-if="canEdit" class="toolbar">
             <button class="btn" :disabled="!!busy" @click="composeAll">批量合成镜头</button>
             <button class="btn btn-primary" :disabled="!!busy" @click="mergeAll">拼接导出成片</button>
