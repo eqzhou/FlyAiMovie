@@ -199,3 +199,13 @@ func TestRunnerExecToolContracts(t *testing.T) {
 		t.Fatalf("scene=%+v err=%v", scene, err)
 	}
 }
+
+func TestFinalizeAgentSummary(t *testing.T) {
+	got := finalizeAgentSummary("script_rewriter", "正在读取第1集原始内容以便改写为格式化剧本。", []map[string]any{{"toolName": "save_script", "result": map[string]any{"saved": true}}})
+	if got != "已完成剧本改写并保存。" {
+		t.Fatalf("summary=%q", got)
+	}
+	if got := finalizeAgentSummary("extractor", "提取完成，已保存角色与场景。", []map[string]any{{"toolName": "save_dedup_characters"}}); got != "提取完成，已保存角色与场景。" {
+		t.Fatalf("kept summary=%q", got)
+	}
+}

@@ -134,18 +134,20 @@ func (r *Runner) RunObserved(ctx context.Context, organizationID uint, agentType
 		maxIterations = *agentConfig.MaxIterations
 	}
 	// Phase 1: model produces structured actions (JSON) then we execute tools server-side.
-	user := fmt.Sprintf(`项目ID=%d 集ID=%d
-用户指令：%s
+	user := fmt.Sprintf(`项目ID=%d 剧集ID=%d
+用户请求：%s
 
-请严格按 JSON 输出（不要 markdown 代码块）：
+你必须只输出 JSON（不要 markdown，不要自然语言寒暄）：
 {
-  "actions": [
-    {"tool":"工具名","args":{...}}
-  ],
-  "summary": "给用户的中文总结"
+  "actions":[{"tool":"工具名","args":{...}}],
+  "summary":"给用户的中文总结"
 }
 
-可用工具取决于 agent 类型。`, dramaID, episodeID, message)
+规则：
+1. 第一轮若信息不足，可先调用只读工具。
+2. 若已有足够上下文，actions 必须直接包含写入工具（save_script / save_dedup_characters / save_dedup_scenes / save_storyboards / assign_voice / generate_grid_prompt）。
+3. summary 必须是完成后的结果说明，不要写“正在读取/准备中”。
+4. 可用工具取决于 agent 类型。`, dramaID, episodeID, message)
 
 	raw, err := ai.ChatWithMaxTokens(ctx, cfg, system, user, temperature, maxTokens)
 	if err != nil {
@@ -193,10 +195,13 @@ func (r *Runner) RunObserved(ctx context.Context, organizationID uint, agentType
 	needsWritePass := r.needsWritePass(agentType, plan.Actions)
 	if maxIterations > 1 && needsWritePass {
 		ctxJSON, _ := json.Marshal(toolResults)
-		user2 := fmt.Sprintf(`下面是工具读取结果，请基于结果输出最终可执行 JSON（含写入工具）：
+		user2 := fmt.Sprintf(`下面是工具读取结果，请基于结果输出最终可执行 JSON（必须含写入工具）：
 %s
 
-要求：必须包含写入工具（save_script / save_dedup_characters / save_dedup_scenes / save_storyboards / assign_voice / generate_grid_prompt 之一）。
+要求：
+1. 必须包含写入工具（save_script / save_dedup_characters / save_dedup_scenes / save_storyboards / assign_voice / generate_grid_prompt 之一）。
+2. 不要只返回读取工具。
+3. summary 写完成后的结果，不要写“正在…”。
 仅输出 JSON。`, string(ctxJSON))
 		secondTemperature := temperature
 		if secondTemperature > 0.3 {
@@ -382,44 +387,147 @@ func (r *Runner) needsWritePass(agentType string, actions []AgentAction) bool {
 	}
 }
 
-func (r *Runner) ensureWrites(observer EventObserver, organizationID uint, agentType string, dramaID, episodeID uint, summary string, toolCalls *[]map[string]any, toolResults *[]map[string]any) {
+func finalizeAgentSummary(agentType, summary string, toolResults []map[string]any) string {
+	summary = strings.TrimSpace(summary)
+	hasWrite := false
+	for _, tr := range toolResults {
+		name, _ := tr["toolName"].(string)
+		switch name {
+		case "save_script", "save_dedup_characters", "save_dedup_scenes", "save_storyboards", "assign_voice", "generate_grid_prompt":
+			hasWrite = true
+		}
+	}
+	if !hasWrite {
+		return summary
+	}
+	planning := summary == "" || strings.Contains(summary, "正在") || strings.Contains(summary, "准备") || strings.Contains(summary, "已请求读取")
+	if !planning {
+		return summary
+	}
 	switch agentType {
 	case "script_rewriter":
-		// if summary looks like a script and no save happened, save it
-		saved := false
-		for _, tr := range *toolResults {
-			if tr["toolName"] == "save_script" {
-				saved = true
-			}
-		}
-		if !saved && strings.Contains(summary, "##") {
-			call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, "save_script", map[string]any{"script": summary})
-			*toolCalls = append(*toolCalls, call)
-			*toolResults = append(*toolResults, result)
-		}
+		return "已完成剧本改写并保存。"
+	case "extractor":
+		return "已完成角色与场景提取并保存。"
+	case "storyboard_breaker":
+		return "已完成分镜拆解并保存。"
 	case "voice_assigner":
-		// auto assign from seed voices if no assign happened
-		hasAssign := false
+		return "已完成音色分配。"
+	case "grid_prompt_generator":
+		return "已生成宫格提示词。"
+	default:
+		return "已完成写入。"
+	}
+}
+
+func (r *Runner) ensureWrites(observer EventObserver, organizationID uint, agentType string, dramaID, episodeID uint, summary string, toolCalls *[]map[string]any, toolResults *[]map[string]any) {
+	hasTool := func(name string) bool {
 		for _, tr := range *toolResults {
-			if tr["toolName"] == "assign_voice" {
-				hasAssign = true
+			if tr["toolName"] == name {
+				return true
 			}
 		}
-		if !hasAssign {
-			var chars []models.Character
-			db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL AND (voice_style = '' OR voice_style IS NULL)", organizationID, dramaID).Find(&chars)
-			var voices []models.AIVoice
-			db.DB.Where("organization_id = ?", organizationID).Find(&voices)
-			if len(voices) == 0 {
-				return
+		return false
+	}
+	runTool := func(name string, args map[string]any) {
+		call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, name, args)
+		*toolCalls = append(*toolCalls, call)
+		*toolResults = append(*toolResults, result)
+	}
+
+	switch agentType {
+	case "script_rewriter":
+		if hasTool("save_script") {
+			return
+		}
+		script := strings.TrimSpace(summary)
+		if !strings.Contains(script, "##") {
+			// Prefer source content over a planning sentence so write pass still lands.
+			var episode models.Episode
+			if err := db.DB.Where("organization_id = ? AND id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, episodeID, dramaID).First(&episode).Error; err == nil {
+				source := strings.TrimSpace(episode.Content)
+				if source == "" {
+					source = strings.TrimSpace(episode.ScriptContent)
+				}
+				if source != "" {
+					script = formatOfflineScript(source)
+				}
 			}
-			for i, ch := range chars {
-				v := voices[i%len(voices)]
-				args := map[string]any{"character_id": ch.ID, "voice_id": v.VoiceID, "voice_provider": v.Provider}
-				call, result := r.executeObservedTool(observer, agentType, organizationID, dramaID, episodeID, "assign_voice", args)
-				*toolCalls = append(*toolCalls, call)
-				*toolResults = append(*toolResults, result)
+		}
+		if script == "" {
+			return
+		}
+		runTool("save_script", map[string]any{"script": script})
+
+	case "extractor":
+		needChars := !hasTool("save_dedup_characters")
+		needScenes := !hasTool("save_dedup_scenes")
+		if !needChars && !needScenes {
+			return
+		}
+		var episode models.Episode
+		if err := db.DB.Where("organization_id = ? AND id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, episodeID, dramaID).First(&episode).Error; err != nil {
+			return
+		}
+		source := strings.TrimSpace(episode.ScriptContent)
+		if source == "" {
+			source = strings.TrimSpace(episode.Content)
+		}
+		if source == "" {
+			return
+		}
+		if needChars {
+			if chars := extractOfflineCharacters(source); len(chars) > 0 {
+				runTool("save_dedup_characters", map[string]any{"characters": chars})
 			}
+		}
+		if needScenes {
+			if scenes := extractOfflineScenes(source); len(scenes) > 0 {
+				runTool("save_dedup_scenes", map[string]any{"scenes": scenes})
+			}
+		}
+
+	case "storyboard_breaker":
+		if hasTool("save_storyboards") {
+			return
+		}
+		var episode models.Episode
+		if err := db.DB.Where("organization_id = ? AND id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, episodeID, dramaID).First(&episode).Error; err != nil {
+			return
+		}
+		source := strings.TrimSpace(episode.ScriptContent)
+		if source == "" {
+			source = strings.TrimSpace(episode.Content)
+		}
+		if source == "" {
+			return
+		}
+		var scenes []models.Scene
+		_ = db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, dramaID).Order("id").Find(&scenes).Error
+		if shots := extractOfflineStoryboards(source, scenes); len(shots) > 0 {
+			runTool("save_storyboards", map[string]any{"storyboards": shots})
+		}
+
+	case "grid_prompt_generator":
+		if hasTool("generate_grid_prompt") {
+			return
+		}
+		runTool("generate_grid_prompt", map[string]any{"episode_id": episodeID, "rows": 2, "cols": 2, "mode": "first_frame"})
+
+	case "voice_assigner":
+		if hasTool("assign_voice") {
+			return
+		}
+		var chars []models.Character
+		db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL AND (voice_style = '' OR voice_style IS NULL)", organizationID, dramaID).Find(&chars)
+		var voices []models.AIVoice
+		db.DB.Where("organization_id = ?", organizationID).Find(&voices)
+		if len(voices) == 0 || len(chars) == 0 {
+			return
+		}
+		for i, ch := range chars {
+			v := voices[i%len(voices)]
+			runTool("assign_voice", map[string]any{"character_id": ch.ID, "voice_id": v.VoiceID, "voice_provider": v.Provider})
 		}
 	}
 }
@@ -895,6 +1003,140 @@ func uniqueAgentIDs(value any) []uint {
 	return result
 }
 
+func formatOfflineScript(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
+	}
+	if strings.Contains(source, "##") {
+		return source
+	}
+	return "## S01 | 内景 · 场景 | 日\n\n" + source + "\n"
+}
+
+func extractOfflineCharacters(text string) []map[string]any {
+	chars := []map[string]any{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if i := strings.IndexAny(line, "：:"); i > 0 && i < 12 {
+			name := strings.TrimSpace(line[:i])
+			name = strings.TrimSpace(regexp.MustCompile(`[（(].+?[)）]`).ReplaceAllString(name, ""))
+			if name == "" || seen[name] || ignoreSpeaker.MatchString(name) {
+				continue
+			}
+			if !strings.Contains(name, " ") && len([]rune(name)) <= 8 {
+				seen[name] = true
+				chars = append(chars, map[string]any{"name": name, "role": "角色", "description": name, "appearance": name})
+			}
+		}
+	}
+	if len(chars) == 0 {
+		chars = []map[string]any{{"name": "角色A", "role": "主角", "description": "自动提取占位", "appearance": "待补充"}}
+	}
+	return chars
+}
+
+func extractOfflineScenes(text string) []map[string]any {
+	scenes := []map[string]any{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "##") {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		loc, tm := "场景", "日"
+		if len(parts) >= 2 {
+			loc = strings.TrimSpace(strings.ReplaceAll(parts[1], "内景", ""))
+			loc = strings.TrimSpace(strings.ReplaceAll(loc, "外景", ""))
+			loc = strings.Trim(loc, " ·")
+		}
+		if len(parts) >= 3 {
+			tm = strings.TrimSpace(parts[2])
+		}
+		key := loc + "|" + tm
+		if loc != "" && !seen[key] {
+			seen[key] = true
+			scenes = append(scenes, map[string]any{"location": loc, "time": tm, "prompt": loc + ", " + tm + ", cinematic"})
+		}
+	}
+	if len(scenes) == 0 {
+		// free-form: first line often has location cue
+		loc := "主场景"
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// naive: take first short clause
+			loc = line
+			if len([]rune(loc)) > 16 {
+				loc = string([]rune(loc)[:16])
+			}
+			break
+		}
+		scenes = []map[string]any{{"location": loc, "time": "日", "prompt": loc + ", daytime, cinematic"}}
+	}
+	return scenes
+}
+
+func extractOfflineStoryboards(text string, scenes []models.Scene) []map[string]any {
+	lines := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "##") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		lines = []string{"开场建立环境", "角色互动", "情绪落点"}
+	}
+	shots := []map[string]any{}
+	chunk := (len(lines) + 2) / 3
+	if chunk < 1 {
+		chunk = 1
+	}
+	sceneID := uint(0)
+	location, timeOfDay := "主场景", "日"
+	if len(scenes) > 0 {
+		sceneID = scenes[0].ID
+		if scenes[0].Location != "" {
+			location = scenes[0].Location
+		}
+		if scenes[0].Time != "" {
+			timeOfDay = scenes[0].Time
+		}
+	}
+	for i := 0; i < len(lines) && len(shots) < 8; i += chunk {
+		end := i + chunk
+		if end > len(lines) {
+			end = len(lines)
+		}
+		desc := strings.Join(lines[i:end], " ")
+		n := len(shots) + 1
+		shot := map[string]any{
+			"title": fmt.Sprintf("镜头%d", n), "shot_type": "中景", "angle": "平视", "movement": "固定",
+			"location": location, "time": timeOfDay, "action": desc, "description": desc,
+			"dialogue": "", "image_prompt": "cinematic shot, " + desc, "video_prompt": "0-4秒：" + desc, "duration": 12,
+		}
+		if sceneID > 0 {
+			shot["scene_id"] = sceneID
+		}
+		shots = append(shots, shot)
+	}
+	for _, line := range lines {
+		if strings.ContainsAny(line, "：:") {
+			if len(shots) > 0 {
+				shots[0]["dialogue"] = line
+			}
+			break
+		}
+	}
+	return shots
+}
+
 func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID, episodeID uint, message string, chatErr error) (*ChatResult, bool) {
 	switch agentType {
 	case "script_rewriter":
@@ -906,10 +1148,10 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 		if src == "" {
 			src = ep.ScriptContent
 		}
-		if src == "" {
+		script := formatOfflineScript(src)
+		if script == "" {
 			return nil, false
 		}
-		script := "## S01 | 内景 · 场景 | 日\n\n" + src + "\n"
 		if _, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_script", map[string]any{"script": script}); err != nil {
 			return nil, false
 		}
@@ -923,48 +1165,8 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 		if text == "" {
 			text = ep.Content
 		}
-		// naive name extraction: lines like 角色： or known Chinese names patterns "xxx："
-		chars := []map[string]any{}
-		scenes := []map[string]any{}
-		seenC, seenS := map[string]bool{}, map[string]bool{}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "##") {
-				// ## S01 | 内景 · 咖啡厅 | 雨夜
-				parts := strings.Split(line, "|")
-				loc, tm := "场景", "日"
-				if len(parts) >= 2 {
-					loc = strings.TrimSpace(strings.ReplaceAll(parts[1], "内景", ""))
-					loc = strings.TrimSpace(strings.ReplaceAll(loc, "外景", ""))
-					loc = strings.Trim(loc, " ·")
-				}
-				if len(parts) >= 3 {
-					tm = strings.TrimSpace(parts[2])
-				}
-				key := loc + "|" + tm
-				if loc != "" && !seenS[key] {
-					seenS[key] = true
-					scenes = append(scenes, map[string]any{"location": loc, "time": tm, "prompt": loc + ", " + tm + ", cinematic"})
-				}
-			}
-			if i := strings.IndexAny(line, "：:"); i > 0 && i < 12 {
-				name := strings.TrimSpace(line[:i])
-				name = strings.TrimSpace(regexp.MustCompile(`[（(].+?[)）]`).ReplaceAllString(name, ""))
-				if name != "" && !seenC[name] && !ignoreSpeaker.MatchString(name) {
-					// filter stage directions
-					if !strings.Contains(name, " ") && len([]rune(name)) <= 8 {
-						seenC[name] = true
-						chars = append(chars, map[string]any{"name": name, "role": "角色", "description": name})
-					}
-				}
-			}
-		}
-		if len(chars) == 0 {
-			chars = []map[string]any{{"name": "角色A", "role": "主角", "description": "自动提取占位"}}
-		}
-		if len(scenes) == 0 {
-			scenes = []map[string]any{{"location": "主场景", "time": "日", "prompt": "main location, daytime, cinematic"}}
-		}
+		chars := extractOfflineCharacters(text)
+		scenes := extractOfflineScenes(text)
 		if _, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_dedup_characters", map[string]any{"characters": chars}); err != nil {
 			return &ChatResult{Type: "failed", Text: "离线角色写入失败，请重试。", ToolResults: []map[string]any{{"toolName": "save_dedup_characters", "result": "Error: " + err.Error()}}}, true
 		}
@@ -981,52 +1183,10 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 		if text == "" {
 			text = ep.Content
 		}
-		// split into beats by non-empty lines
-		lines := []string{}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "##") {
-				continue
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) == 0 {
-			lines = []string{"开场建立环境", "角色互动", "情绪落点"}
-		}
-		// group into up to 6 shots
-		shots := []map[string]any{}
-		chunk := (len(lines) + 2) / 3
-		if chunk < 1 {
-			chunk = 1
-		}
-		for i := 0; i < len(lines) && len(shots) < 8; i += chunk {
-			end := i + chunk
-			if end > len(lines) {
-				end = len(lines)
-			}
-			desc := strings.Join(lines[i:end], " ")
-			n := len(shots) + 1
-			shots = append(shots, map[string]any{
-				"title":     fmt.Sprintf("镜头%d", n),
-				"shot_type": "中景", "angle": "平视", "movement": "固定",
-				"location": "主场景", "time": "日",
-				"action": desc, "description": desc,
-				"dialogue": "", "image_prompt": "cinematic shot, " + desc,
-				"video_prompt": "0-4秒：" + desc,
-				"duration":     12,
-			})
-		}
-		// attach dialogue lines if any
-		for _, line := range lines {
-			if strings.ContainsAny(line, "：:") {
-				if len(shots) > 0 {
-					shots[0]["dialogue"] = line
-					break
-				}
-			}
-		}
-		_, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_storyboards", map[string]any{"storyboards": shots})
-		if err != nil {
+		var scenes []models.Scene
+		_ = db.DB.Where("organization_id = ? AND drama_id = ? AND deleted_at IS NULL", organizationID, dramaID).Order("id").Find(&scenes).Error
+		shots := extractOfflineStoryboards(text, scenes)
+		if _, err := r.execTool(agentType, organizationID, dramaID, episodeID, "save_storyboards", map[string]any{"storyboards": shots}); err != nil {
 			return nil, false
 		}
 		return &ChatResult{Type: "done", Text: fmt.Sprintf("（离线回退）已拆解 %d 个分镜。文本模型不可用：%v", len(shots), chatErr)}, true
