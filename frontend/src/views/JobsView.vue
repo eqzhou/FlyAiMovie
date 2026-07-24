@@ -304,7 +304,7 @@ onUnmounted(() => {
     <div v-if="error" class="auth-error" role="alert">{{ error }}</div>
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
     <div v-if="activeTab === 'jobs'" class="panel audit-table-wrap">
-      <table class="table jobs-table">
+      <table v-if="jobs.length" class="table jobs-table">
         <thead><tr><th v-if="canManageTasks"></th><th>任务</th><th>状态</th><th>进度</th><th>厂商</th><th>尝试</th><th>更新时间</th><th>操作</th></tr></thead>
         <tbody>
           <template v-for="job in jobs" :key="job.id">
@@ -329,10 +329,17 @@ onUnmounted(() => {
           </template>
         </tbody>
       </table>
-      <div v-if="!loading && !jobs.length" class="empty">暂无任务</div>
+      <div v-if="loading && !jobs.length" class="page-loading" role="status" aria-live="polite">
+        <div class="page-loading-mark" aria-hidden="true"></div>
+        <div><strong>加载任务中</strong><p class="muted" style="margin:6px 0 0">同步生成任务与阶段日志…</p></div>
+      </div>
+      <div v-else-if="!loading && !jobs.length" class="empty jobs-empty">
+        <strong>暂无任务</strong>
+        <span class="muted">在工作台发起图片、视频、配音或合成后，任务会显示在这里。</span>
+      </div>
     </div>
     <div v-else class="panel audit-table-wrap">
-      <table class="table agent-runs-table">
+      <table v-if="agentRuns.length" class="table agent-runs-table">
         <thead><tr><th>运行</th><th>Agent</th><th>状态</th><th>关联范围</th><th>开始时间</th><th>完成时间</th><th>操作</th></tr></thead>
         <tbody><tr v-for="run in agentRuns" :key="run.id">
           <td>#{{ run.id }}<div v-if="run.retry_of_id" class="agent-retry-origin">重试自 #{{ run.retry_of_id }}</div></td>
@@ -348,7 +355,14 @@ onUnmounted(() => {
           </div></td>
         </tr></tbody>
       </table>
-      <div v-if="!loading && !agentRuns.length" class="empty">暂无 Agent 运行记录</div>
+      <div v-if="loading && !agentRuns.length" class="page-loading" role="status" aria-live="polite">
+        <div class="page-loading-mark" aria-hidden="true"></div>
+        <div><strong>加载 Agent 运行记录</strong><p class="muted" style="margin:6px 0 0">同步工具调用与执行结果…</p></div>
+      </div>
+      <div v-else-if="!loading && !agentRuns.length" class="empty jobs-empty">
+        <strong>暂无 Agent 运行记录</strong>
+        <span class="muted">剧本改写、提取、分镜拆解等 Agent 执行后会出现在此列表。</span>
+      </div>
     </div>
 
     <div v-if="agentDetail" class="modal-mask" @click.self="closeAgentDetail">

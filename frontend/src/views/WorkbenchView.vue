@@ -1681,7 +1681,13 @@ onUnmounted(stopPoll)
     <div v-if="busy" class="toast busy">处理中：{{ busy }}</div>
   </div>
   <div v-else-if="loading" class="page">
-    <div class="empty" role="status" aria-live="polite">正在加载本集…</div>
+    <div class="page-loading" role="status" aria-live="polite">
+      <div class="page-loading-mark" aria-hidden="true"></div>
+      <div>
+        <strong>正在加载本集</strong>
+        <p class="muted" style="margin:6px 0 0">同步剧本、角色、分镜与任务状态…</p>
+      </div>
+    </div>
   </div>
   <div v-else class="page">
     <div class="panel load-error" role="alert">

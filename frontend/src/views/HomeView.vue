@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Trash2 } from 'lucide-vue-next'
+import { Clapperboard, Plus, Trash2 } from 'lucide-vue-next'
 import { dramaAPI } from '../api'
 import { authStore } from '../auth'
 
@@ -19,11 +19,12 @@ const canManageProjects = computed(() => !authStore.state.enabled || authStore.s
 
 async function load() {
   loading.value = true
+  err.value = ''
   try {
     const data = await dramaAPI.list()
     dramas.value = data.items || []
   } catch (e: any) {
-    err.value = e.message
+    err.value = e.message || '项目列表加载失败'
   } finally {
     loading.value = false
   }
@@ -100,14 +101,26 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h1 class="page-title">短剧项目</h1>
-        <p class="page-desc">{{ dramas.length }} 个项目 · 一句话到成片</p>
+        <p class="page-desc">{{ loading ? '正在同步项目…' : `${dramas.length} 个项目 · 一句话到成片` }}</p>
       </div>
       <button v-if="canManageProjects" class="btn btn-primary" @click="openCreate"><Plus :size="16" aria-hidden="true" />新建项目</button>
     </div>
 
-    <p v-if="err" class="muted">{{ err }}</p>
-    <div v-if="loading" class="muted">加载中…</div>
-    <div v-else class="grid">
+    <div v-if="err" class="inline-alert" role="alert">
+      <div><strong>项目列表加载失败</strong><span>{{ err }}</span></div>
+      <button class="btn" type="button" @click="load">重试</button>
+    </div>
+
+    <div v-if="loading" class="grid" aria-busy="true" aria-label="项目加载中">
+      <div v-for="n in 6" :key="n" class="card project-card skeleton-card" aria-hidden="true">
+        <div class="skeleton skeleton-line short"></div>
+        <div class="skeleton skeleton-line title"></div>
+        <div class="skeleton skeleton-line"></div>
+        <div class="card-footer"><div class="skeleton skeleton-bar"></div><div class="skeleton skeleton-line tiny"></div></div>
+      </div>
+    </div>
+
+    <div v-else-if="!err" class="grid">
       <article
         v-for="d in dramas"
         :key="d.id"
@@ -120,6 +133,7 @@ onMounted(load)
             <button v-if="canManageProjects" class="btn btn-ghost" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
           </div>
           <h3 class="project-title">{{ d.title }}</h3>
+          <p v-if="d.description" class="project-snippet">{{ d.description }}</p>
           <div class="project-meta">
             <span v-if="d.style" class="style-tag">{{ styleLabel(d.style) }}</span>
             <span>角色 {{ d.characters?.length || 0 }}</span>
@@ -127,12 +141,20 @@ onMounted(load)
           </div>
         </div>
         <div class="card-footer">
-          <div class="progress-mini-track"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
+          <div class="progress-mini-track" :aria-label="`完成度 ${progress(d)}%`"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
       </article>
-      <button v-if="!dramas.length && canManageProjects" class="card empty project-empty-action" type="button" @click="openCreate">还没有项目，点击创建</button>
-      <div v-else-if="!dramas.length" class="card empty">暂无项目</div>
+      <button v-if="!dramas.length && canManageProjects" class="card empty project-empty-action home-empty" type="button" @click="openCreate">
+        <span class="empty-icon" aria-hidden="true"><Clapperboard :size="28" /></span>
+        <strong>还没有项目，点击创建</strong>
+        <span class="muted">从一句话大纲开始，自动走到分镜、配音与成片导出。</span>
+      </button>
+      <div v-else-if="!dramas.length" class="card empty home-empty">
+        <span class="empty-icon" aria-hidden="true"><Clapperboard :size="28" /></span>
+        <strong>暂无项目</strong>
+        <span class="muted">当前账号为只读成员，等待管理员创建短剧项目。</span>
+      </div>
     </div>
 
     <div v-if="showCreate && canManageProjects" class="modal-mask" @click.self="closeCreate">

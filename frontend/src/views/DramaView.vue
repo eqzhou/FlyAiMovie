@@ -147,7 +147,15 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="loading" class="page"><div class="muted">加载项目中…</div></div>
+  <div v-if="loading" class="page">
+    <div class="page-loading" role="status" aria-live="polite">
+      <div class="page-loading-mark" aria-hidden="true"></div>
+      <div>
+        <strong>正在打开项目</strong>
+        <p class="muted" style="margin:6px 0 0">加载剧集、资产与生成配置…</p>
+      </div>
+    </div>
+  </div>
   <div v-else-if="error" class="page"><div class="load-error"><h2>项目加载失败</h2><p class="muted">{{ error }}</p><button class="btn" @click="load">重新加载</button></div></div>
   <div v-else-if="drama" class="page">
     <div class="page-head">

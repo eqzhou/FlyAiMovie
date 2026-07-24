@@ -184,11 +184,36 @@ test('mobile: project home contains long content and keeps navigation destinatio
   await expect(navigation.getByRole('link', { name: '任务' })).toBeVisible()
   await expect(navigation.getByRole('link', { name: '设置' })).toBeVisible()
   await expect(navigation.getByRole('button', { name: '退出登录' })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: /切换主题/ })).toBeVisible()
   await expectInsideViewport(navigation, viewport)
   await expectNoPageOverflow(page)
 
   await page.keyboard.press('Escape')
   await expect(navigation).toBeHidden()
+})
+
+test('desktop: theme toggle cycles light/dark/system and persists choice', async ({ page }) => {
+  await mockProjectHome(page, true)
+  await page.addInitScript(() => localStorage.setItem('theme', 'light'))
+  await page.goto('/')
+
+  const themeButton = page.getByRole('button', { name: /切换主题/ })
+  await expect(themeButton).toBeVisible()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：浅色')
+
+  await themeButton.click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：深色')
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('theme'))).toBe('dark')
+
+  await themeButton.click()
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：跟随系统')
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('theme'))).toBe('system')
+
+  await themeButton.click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：浅色')
 })
 
 test('desktop: workbench actions and stage navigation do not overflow at 1024px', async ({ page }) => {

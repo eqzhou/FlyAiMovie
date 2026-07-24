@@ -50,9 +50,10 @@ async function submit() {
 <template>
   <main class="auth-page">
     <form class="auth-form" @submit.prevent="submit">
-      <div class="brand auth-brand"><span class="brand-mark"></span><span>FlyAiMovie</span></div>
-      <h1>{{ isSetup ? '初始化制作空间' : '登录制作空间' }}</h1>
-      <p v-if="resetRequested" class="muted">如果该邮箱存在账号，恢复说明会发送到邮箱。</p>
+      <div class="brand auth-brand"><span class="brand-mark" aria-hidden="true"></span><span>FlyAiMovie</span></div>
+      <h1>{{ isSetup ? '初始化制作空间' : (resetMode ? '找回密码' : '登录制作空间') }}</h1>
+      <p class="auth-subtitle">{{ isSetup ? '创建 owner 账号后即可配置 AI 服务并开始制作。' : (resetMode ? '输入注册邮箱，我们会发送一次性恢复链接。' : '从大纲到成片的本地 AI 短剧工作台。') }}</p>
+      <p v-if="resetRequested" class="muted" role="status">如果该邮箱存在账号，恢复说明会发送到邮箱。</p>
       <div v-if="isSetup" class="field">
         <label for="organization-name">空间名称</label>
         <input id="organization-name" v-model.trim="organizationName" required maxlength="100" autocomplete="organization" />

@@ -1,12 +1,70 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LogOut, Menu, X } from 'lucide-vue-next'
+import { LogOut, Menu, X, Sun, Moon, Monitor } from 'lucide-vue-next'
 import { authStore } from './auth'
 
 const router = useRouter()
 const route = useRoute()
 const navigationOpen = ref(false)
+
+type Theme = 'light' | 'dark' | 'system'
+const THEME_ORDER: Theme[] = ['system', 'light', 'dark']
+const THEME_LABEL: Record<Theme, string> = {
+  system: '跟随系统',
+  light: '浅色',
+  dark: '深色',
+}
+
+function readStoredTheme(): Theme {
+  const stored = localStorage.getItem('theme')
+  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
+}
+
+const currentTheme = ref<Theme>(readStoredTheme())
+const mediaQuery = typeof window !== 'undefined'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null
+
+function resolveDataTheme(theme: Theme): 'light' | 'dark' {
+  if (theme === 'system') {
+    return mediaQuery?.matches ? 'dark' : 'light'
+  }
+  return theme
+}
+
+function applyTheme(theme: Theme) {
+  currentTheme.value = theme
+  localStorage.setItem('theme', theme)
+  document.documentElement.setAttribute('data-theme', resolveDataTheme(theme))
+}
+
+function onSystemThemeChange() {
+  if (currentTheme.value === 'system') {
+    document.documentElement.setAttribute('data-theme', resolveDataTheme('system'))
+  }
+}
+
+// Apply before paint when possible (script setup runs before mount in SPA shell).
+if (typeof document !== 'undefined') {
+  document.documentElement.setAttribute('data-theme', resolveDataTheme(currentTheme.value))
+}
+
+onMounted(() => {
+  applyTheme(currentTheme.value)
+  mediaQuery?.addEventListener('change', onSystemThemeChange)
+})
+
+onBeforeUnmount(() => {
+  mediaQuery?.removeEventListener('change', onSystemThemeChange)
+})
+
+function cycleTheme() {
+  const currentIndex = THEME_ORDER.indexOf(currentTheme.value)
+  applyTheme(THEME_ORDER[(currentIndex + 1) % THEME_ORDER.length])
+}
+
+const themeButtonLabel = computed(() => `切换主题，当前：${THEME_LABEL[currentTheme.value]}`)
 
 watch(() => route.fullPath, () => { navigationOpen.value = false })
 
@@ -27,7 +85,7 @@ async function switchOrganization(event: Event) {
   <div class="app-shell">
     <header v-if="!authStore.state.enabled || authStore.state.actor" class="topbar" @keydown.esc="navigationOpen = false">
       <router-link to="/" class="brand">
-        <span class="brand-mark"></span>
+        <span class="brand-mark" aria-hidden="true"></span>
         <span>FlyAiMovie</span>
       </router-link>
       <button
@@ -49,9 +107,24 @@ async function switchOrganization(event: Event) {
           <option v-for="organization in authStore.state.organizations" :key="organization.id" :value="organization.id">{{ organization.name }}</option>
         </select>
         <span v-if="authStore.state.actor" class="nav-identity">{{ authStore.state.actor.organization.name }} · {{ authStore.state.actor.user.display_name }}</span>
-        <button v-if="authStore.state.actor" class="nav-logout" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="16" aria-hidden="true" /></button>
+
+        <button
+          class="nav-theme-toggle"
+          type="button"
+          :title="themeButtonLabel"
+          :aria-label="themeButtonLabel"
+          @click="cycleTheme"
+        >
+          <Monitor v-if="currentTheme === 'system'" :size="16" aria-hidden="true" />
+          <Sun v-else-if="currentTheme === 'light'" :size="16" aria-hidden="true" />
+          <Moon v-else :size="16" aria-hidden="true" />
+        </button>
+
+        <button v-if="authStore.state.actor" class="nav-logout" type="button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="16" aria-hidden="true" /></button>
       </nav>
     </header>
-    <router-view />
+    <main class="app-main">
+      <router-view />
+    </main>
   </div>
 </template>

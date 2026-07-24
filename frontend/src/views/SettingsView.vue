@@ -693,7 +693,13 @@ onMounted(load)
       <button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">安全与数据</button>
     </div>
     <div v-if="loadError" class="inline-alert" role="alert"><div><strong>部分设置暂未更新</strong><span>{{ loadError }}</span></div><button class="btn" type="button" @click="load">重试加载</button></div>
-    <div v-else-if="loading" class="settings-loading" role="status">正在同步设置…</div>
+    <div v-else-if="loading" class="page-loading" role="status" aria-live="polite">
+      <div class="page-loading-mark" aria-hidden="true"></div>
+      <div>
+        <strong>正在同步设置</strong>
+        <p class="muted" style="margin:6px 0 0">加载 AI 服务、音色、提示词与组织信息…</p>
+      </div>
+    </div>
 
     <section v-if="activeSection === 'services'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
