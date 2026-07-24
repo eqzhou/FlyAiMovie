@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,5 +64,18 @@ func TestProbeConnectionFallsBackToNonBillableReachabilityCheck(t *testing.T) {
 	result, err := ProbeConnection(context.Background(), AIConfig{Provider: "vidu", BaseURL: server.URL, APIKey: "key", Model: "vidu-model"})
 	if err != nil || result.Status != "ok" || !strings.Contains(result.Detail, "未触发生成任务") {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestHumanizeProviderProbeError(t *testing.T) {
+	msg := humanizeProviderProbeError(fmt.Errorf("provider host resolves only to disallowed addresses"))
+	if msg == "" || msg == "连接失败：provider host resolves only to disallowed addresses" {
+		// Should rewrite disallowed-address case into operator guidance.
+		if !strings.Contains(msg, "受保护的地址") && !strings.Contains(msg, "fake-ip") {
+			t.Fatalf("unexpected humanized message: %q", msg)
+		}
+	}
+	if got := humanizeProviderProbeError(fmt.Errorf("x509: certificate signed by unknown authority")); !strings.Contains(got, "TLS") {
+		t.Fatalf("tls humanize=%q", got)
 	}
 }

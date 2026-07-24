@@ -167,6 +167,19 @@ function show(m: string, duration = 2800) {
   }, duration)
 }
 
+function humanizeError(error: unknown, fallback = '操作失败') {
+  const raw = error instanceof Error ? error.message : String(error || '')
+  const message = raw.trim() || fallback
+  if (/连接失败|厂商|凭据|模型|超时|证书|域名/.test(message)) return message
+  if (/provider connection failed/i.test(message)) return message.replace(/^provider connection failed:\s*/i, '连接失败：')
+  if (/invalid body/i.test(message)) return '请求参数无效'
+  if (/not found/i.test(message)) return '资源不存在或无权访问'
+  if (/too long/i.test(message)) return '字段过长，请缩短后再试'
+  if (/api_key is required/i.test(message)) return '更换厂商、类型或 Base URL 后需要重新填写 API Key'
+  return message
+}
+
+
 async function load() {
   loading.value = true
   loadError.value = ''
@@ -426,7 +439,7 @@ async function saveService() {
     originalServiceIdentity.value = emptyServiceIdentity()
     await load()
   } catch (error) {
-    serviceError.value = error instanceof Error ? error.message : 'AI 服务保存失败'
+    serviceError.value = humanizeError(error, 'AI 服务保存失败')
   } finally {
     savingService.value = false
   }
@@ -438,7 +451,7 @@ async function testService(config: any) {
     const result = await settingsAPI.testAIConfig(config.id)
     show(`${result.detail} · ${result.latency_ms} ms`)
   } catch (error) {
-    show(`连接失败：${error instanceof Error ? error.message : '未知错误'}`)
+    show(humanizeError(error, '连接失败'), 4200)
   } finally {
     testingConfigID.value = null
   }
@@ -457,7 +470,7 @@ async function testDraftService() {
     const result = await settingsAPI.testAIConfigDraft({ id: editingConfigID.value || undefined, ...form.value })
     serviceTestResult.value = `${result.detail} · ${result.latency_ms} ms`
   } catch (error) {
-    serviceError.value = `连接失败：${error instanceof Error ? error.message : '未知错误'}`
+    serviceError.value = humanizeError(error, '连接失败')
   } finally {
     testingDraftService.value = false
   }
@@ -788,7 +801,7 @@ onMounted(load)
             </tr>
           </tbody>
         </table>
-        <div v-if="!configs.length" class="empty">尚未配置 AI 服务</div>
+        <div v-if="!configs.length" class="surface-empty empty" role="status"><strong>尚未配置 AI 服务</strong><span class="muted">添加文本、图片、视频或音频服务后即可在工作台调用。</span></div>
       </div>
     </section>
 
@@ -806,7 +819,7 @@ onMounted(load)
           <thead><tr><th>音色</th><th>Voice ID</th><th>厂商</th><th>语言</th><th>类型</th><th>状态</th><th></th></tr></thead>
           <tbody><tr v-for="voice in filteredVoices" :key="`${voice.provider}-${voice.voice_id}`"><td><strong>{{ voice.voice_name || voice.voice_id }}</strong><audio v-if="voicePreviewURLs[voice.voice_id]" :aria-label="`${voice.voice_name || voice.voice_id}试听音频`" :src="voicePreviewURLs[voice.voice_id]" controls preload="metadata" /></td><td><code>{{ voice.voice_id }}</code></td><td>{{ voice.provider }}</td><td>{{ voice.language || '未标注' }}</td><td>{{ voice.capabilities || '通用' }}</td><td><span class="job-status" :class="voice.is_active ? 'succeeded' : 'canceled'">{{ voice.is_active ? '启用' : '失效' }}</span></td><td><button v-if="canPreviewVoices && voice.is_active" class="btn" :disabled="!!previewingVoiceID || !voicePreviewText.trim()" :aria-label="`试听${voice.voice_name || voice.voice_id}`" @click="previewVoice(voice)">{{ previewingVoiceID === voice.voice_id ? '生成中…' : '试听' }}</button></td></tr></tbody>
         </table>
-        <div v-else class="empty">{{ voiceCatalog.length ? '没有匹配的音色' : '尚未同步音色' }}</div>
+        <div v-else class="surface-empty empty" role="status"><strong>{{ voiceCatalog.length ? '没有匹配的音色' : '尚未同步音色' }}</strong><span class="muted">{{ voiceCatalog.length ? '试试调整搜索关键词' : '配置音频服务后点击同步音色' }}</span></div>
       </div>
     </section>
 
@@ -834,7 +847,7 @@ onMounted(load)
             </tr>
           </tbody>
         </table>
-        <div v-else class="empty">{{ promptTemplates.length ? '没有匹配的提示词模板' : '尚未创建提示词模板' }}</div>
+        <div v-else class="surface-empty empty" role="status"><strong>{{ promptTemplates.length ? '没有匹配的提示词模板' : '尚未创建提示词模板' }}</strong><span class="muted">{{ promptTemplates.length ? '试试调整筛选条件' : '可新建模板或使用内置默认提示词' }}</span></div>
       </div>
     </section>
 
@@ -893,9 +906,9 @@ onMounted(load)
       </div>
     </section>
 
-    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="service-toggle-grid"><label class="settings-check"><input v-model="form.is_active" type="checkbox" /> 启用服务</label><label class="settings-check" :class="{ disabled: !form.is_active }"><input v-model="form.is_default" type="checkbox" :disabled="!form.is_active" /> 设为默认</label></div><div class="service-test-row"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="testDraftService"><FlaskConical :size="14" aria-hidden="true" />{{ testingDraftService ? '测试中…' : '测试当前配置' }}</button><span v-if="serviceTestResult" role="status">{{ serviceTestResult }}</span></div><p v-if="serviceError" class="form-error" role="alert">{{ serviceError }}</p><div class="modal-actions"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingService || testingDraftService">{{ savingService ? '保存中…' : editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
+    <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="service-toggle-grid"><label class="settings-check"><input v-model="form.is_active" type="checkbox" /> 启用服务</label><label class="settings-check" :class="{ disabled: !form.is_active }"><input v-model="form.is_default" type="checkbox" :disabled="!form.is_active" /> 设为默认</label></div><div class="service-test-row"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="testDraftService"><FlaskConical :size="14" aria-hidden="true" />{{ testingDraftService ? '测试中…' : '测试当前配置' }}</button><span v-if="serviceTestResult" class="service-test-ok" role="status">{{ serviceTestResult }}</span></div><p v-if="serviceError" class="form-error" role="alert">{{ serviceError }}</p><div class="modal-actions"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingService || testingDraftService">{{ savingService ? '保存中…' : editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
-    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="5" /></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
+    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="5" /><p class="field-help muted">复杂提取/分镜建议 3–5；越高耗时与费用越高。</p></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
 
     <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" ref="promptContentInput" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-picker settings-span"><span>插入变量</span><div><button v-for="(label, variable) in promptVariableLabels" :key="variable" type="button" :aria-label="`插入变量 ${label}`" :title="promptToken(variable)" @click="insertPromptVariable(variable)"><strong>{{ label }}</strong><code>{{ promptToken(variable) }}</code></button></div></div></div><p v-if="promptFormError" class="form-error" role="alert">{{ promptFormError }}</p><div v-if="promptDraftPreview" class="prompt-draft-preview" role="status"><strong>草稿预览</strong><div class="prompt-preview-result">{{ promptDraftPreview }}</div></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft" @click="promptForm = null">取消</button><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft || !promptForm.content.trim()" @click="previewPromptForm">{{ previewingPromptDraft ? '检查中…' : '检查并预览' }}</button><button type="submit" class="btn btn-primary" :disabled="savingPrompt || previewingPromptDraft">{{ savingPrompt ? '保存中…' : promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
 

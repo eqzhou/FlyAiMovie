@@ -995,3 +995,20 @@ label.btn:has(.file-input-hidden:focus-visible) { outline: 2px solid var(--accen
 .invite-status[data-status="accepted"] { background: color-mix(in srgb, var(--ok, #16a34a) 16%, transparent); color: var(--ok, #16a34a); }
 .invite-status[data-status="expired"] { background: color-mix(in srgb, var(--warn, #d97706) 16%, transparent); color: var(--warn, #d97706); }
 .invite-status[data-status="revoked"] { background: color-mix(in srgb, var(--danger, #dc2626) 14%, transparent); color: var(--danger, #dc2626); }
+
+.field-help {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.service-test-ok {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ok, #16a34a) 28%, var(--border));
+  background: color-mix(in srgb, var(--ok, #16a34a) 10%, var(--bg-elev));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}

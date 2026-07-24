@@ -43,24 +43,24 @@ func ProbeConnection(ctx context.Context, cfg AIConfig) (*ConnectionProbeResult,
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("provider connection failed: %w", err)
+		return nil, fmt.Errorf("%s", humanizeProviderProbeError(err))
 	}
 	defer resp.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if readErr != nil {
-		return nil, fmt.Errorf("read provider response: %w", readErr)
+		return nil, fmt.Errorf("读取厂商响应失败：%v", readErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, fmt.Errorf("provider rejected the credential (HTTP %d)", resp.StatusCode)
+			return nil, fmt.Errorf("厂商拒绝了凭据（HTTP %d），请检查 API Key 与权限", resp.StatusCode)
 		}
 		if plan.verifyModel || resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("provider probe returned HTTP %d", resp.StatusCode)
+			return nil, fmt.Errorf("厂商探测返回 HTTP %d", resp.StatusCode)
 		}
 	}
 	if cfg.Model != "" && plan.verifyModel {
 		if found, known := probeResponseContainsModel(body, cfg.Model); known && !found {
-			return nil, fmt.Errorf("configured model %q was not returned by the provider", cfg.Model)
+			return nil, fmt.Errorf("厂商未返回配置的模型 %q，请确认模型名是否正确", cfg.Model)
 		}
 	}
 	detail := "连接可达；厂商未提供无费用模型枚举，未触发生成任务"
@@ -138,4 +138,27 @@ func probeResponseContainsModel(body []byte, model string) (bool, bool) {
 
 func probeResult(cfg AIConfig, started time.Time, detail string) *ConnectionProbeResult {
 	return &ConnectionProbeResult{Status: "ok", Provider: cfg.Provider, Model: cfg.Model, LatencyMS: time.Since(started).Milliseconds(), Detail: detail}
+}
+
+func humanizeProviderProbeError(err error) string {
+	if err == nil {
+		return "厂商连接失败"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "disallowed addresses"):
+		return "连接失败：厂商域名解析到了受保护的地址。若使用 Clash fake-ip，请确保后端已支持该路由；企业内网域名可配置 AI_PROVIDER_PRIVATE_HOSTS 与 AI_PROVIDER_CA_FILE"
+	case strings.Contains(msg, "provider address is not allowed"):
+		return "连接失败：厂商地址不被允许（私网/回环/元数据地址需显式放行）"
+	case strings.Contains(msg, "x509"):
+		return "连接失败：TLS 证书校验未通过。企业自签证书可设置 AI_PROVIDER_CA_FILE"
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "Timeout") || strings.Contains(msg, "deadline"):
+		return "连接失败：访问厂商超时，请检查网络、代理与 Base URL"
+	case strings.Contains(msg, "no such host") || strings.Contains(msg, "resolve provider host"):
+		return "连接失败：无法解析厂商域名，请检查 Base URL 与 DNS"
+	case strings.Contains(msg, "connection refused"):
+		return "连接失败：厂商拒绝连接，请检查 Base URL 与本地代理"
+	default:
+		return "连接失败：" + msg
+	}
 }

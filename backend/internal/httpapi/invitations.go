@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -195,6 +196,7 @@ func (s *Server) deliverInvitationEmail(organizationName, email, role, token str
 		sender = NoopInvitationSender{}
 	}
 	if err := sender.SendInvitation(email, organizationName, role, token, expiresAt); err != nil {
+		log.Printf("invitation email delivery failed for %s: %v", email, err)
 		return false
 	}
 	return true

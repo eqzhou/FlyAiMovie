@@ -79,11 +79,14 @@ func providerHTTPClient(timeout time.Duration) *http.Client {
 
 // lookupProviderIPs resolves provider hostnames with a public-DNS fallback.
 // Local Clash/MacPacket fake-ip DNS often returns 198.18.0.0/15 addresses that
-// would otherwise trip SSRF guards for legitimate public API gateways.
+// are valid proxy routes for the original public hostname. Prefer those answers
+// over public DNS replacement so traffic still goes through the local proxy.
 func lookupProviderIPs(ctx context.Context, host string, allowPrivate bool) ([]net.IP, error) {
 	ips, err := net.LookupIP(host)
-	if err == nil && (allowPrivate || hasSafeProviderIP(ips)) {
-		return ips, nil
+	if err == nil {
+		if allowPrivate || hasSafeProviderIP(ips) || onlyProxyFakeIPs(ips) {
+			return ips, nil
+		}
 	}
 	if allowPrivate {
 		if err != nil {
@@ -97,9 +100,6 @@ func lookupProviderIPs(ctx context.Context, host string, allowPrivate bool) ([]n
 	}
 	if err != nil {
 		return nil, err
-	}
-	if fallbackErr != nil {
-		return ips, nil
 	}
 	return ips, nil
 }

@@ -333,7 +333,7 @@ onUnmounted(() => {
         <div class="page-loading-mark" aria-hidden="true"></div>
         <div><strong>加载任务中</strong><p class="muted" style="margin:6px 0 0">同步生成任务与阶段日志…</p></div>
       </div>
-      <div v-else-if="!loading && !jobs.length" class="empty jobs-empty">
+      <div v-else-if="!loading && !jobs.length" class="surface-empty empty jobs-empty">
         <strong>暂无任务</strong>
         <span class="muted">在工作台发起图片、视频、配音或合成后，任务会显示在这里。</span>
       </div>
@@ -359,7 +359,7 @@ onUnmounted(() => {
         <div class="page-loading-mark" aria-hidden="true"></div>
         <div><strong>加载 Agent 运行记录</strong><p class="muted" style="margin:6px 0 0">同步工具调用与执行结果…</p></div>
       </div>
-      <div v-else-if="!loading && !agentRuns.length" class="empty jobs-empty">
+      <div v-else-if="!loading && !agentRuns.length" class="surface-empty empty jobs-empty">
         <strong>暂无 Agent 运行记录</strong>
         <span class="muted">剧本改写、提取、分镜拆解等 Agent 执行后会出现在此列表。</span>
       </div>
