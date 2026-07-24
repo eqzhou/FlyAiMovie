@@ -861,6 +861,6 @@ onMounted(load)
 
     <div v-if="showDeleteModal" class="modal-mask" @click.self="showDeleteModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" @submit.prevent="deleteOrganization"><h3 id="delete-modal-title">永久删除组织</h3><p class="muted">此操作会删除组织及其全部数据，无法撤销。</p><div class="field"><label for="delete-password">当前密码</label><input id="delete-password" v-model="deleteForm.password" type="password" /></div><div class="field"><label for="delete-confirmation">输入组织标识 {{ authStore.state.actor?.organization.slug }}</label><input id="delete-confirmation" v-model="deleteForm.confirmation" /></div><div class="modal-actions"><button type="button" class="btn" @click="showDeleteModal = false">取消</button><button type="submit" class="btn btn-danger">确认永久删除</button></div></form></div>
 
-    <div v-if="toast" class="toast">{{ toast }}</div>
+    <div v-if="toast" class="toast" role="status">{{ toast }}</div>
   </div>
 </template>

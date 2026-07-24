@@ -218,7 +218,8 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await expect(historyDialog.getByText('初始 {{drama_title}}', { exact: true })).toBeVisible()
   await historyDialog.getByRole('button', { name: '恢复 v1' }).click()
   expect(restoredPromptVersion).toBeDefined()
-  await expect(page.getByRole('status').getByText('已恢复为新版本', { exact: true })).toBeVisible()
+  await expect(page.locator('.toast').filter({ hasText: '已恢复为新版本' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '提示词列表已刷新' })).toBeVisible()
 
   await settingsNavigation.getByRole('tab', { name: '音色库' }).click()
   await expect(page.getByRole('row', { name: /少女/ })).toContainText('启用')

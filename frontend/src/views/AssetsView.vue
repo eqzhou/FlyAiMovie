@@ -9,6 +9,8 @@ const router = useRouter()
 const drama = ref<any>(null)
 const assets = ref<any[]>([])
 const storyboards = ref<any[]>([])
+const projectLoading = ref(true)
+const projectError = ref('')
 const loading = ref(false)
 const busy = ref('')
 const message = ref('')
@@ -247,19 +249,51 @@ watch(applyEpisodeId, loadStoryboards)
 watch(() => uploadForm.value.episode_id, loadUploadStoryboards)
 watch(() => uploadForm.value.target, () => { uploadForm.value.target_id = 0 })
 async function loadProject() {
+	const request = ++projectRequest
+	projectLoading.value = true
+	projectError.value = ''
 	episodeFilter.value = 0
 	applyEpisodeId.value = 0
 	storyboards.value = []
 	assets.value = []
-	await loadDrama()
-	await Promise.all([loadAssets(), loadStoryboards()])
+	drama.value = null
+	try {
+		const result = await dramaAPI.get(dramaId.value)
+		if (request !== projectRequest) return
+		drama.value = result
+		if (!episodes.value.some((episode) => episode.id === applyEpisodeId.value)) {
+			applyEpisodeId.value = episodes.value[0]?.id || 0
+		}
+		await Promise.all([loadAssets(), loadStoryboards()])
+	} catch (error: any) {
+		if (request !== projectRequest) return
+		projectError.value = error?.message || '项目加载失败'
+		drama.value = null
+	} finally {
+		if (request === projectRequest) projectLoading.value = false
+	}
 }
 watch(dramaId, loadProject)
 onMounted(loadProject)
 </script>
 
 <template>
-  <div class="page" v-if="drama">
+  <div v-if="projectLoading" class="page">
+    <div class="page-loading" role="status" aria-live="polite">
+      <div class="page-loading-mark" aria-hidden="true"></div>
+      <div>
+        <strong>正在打开素材库</strong>
+        <p class="muted" style="margin:6px 0 0">同步项目素材、分类与分镜绑定…</p>
+      </div>
+    </div>
+  </div>
+  <div v-else-if="projectError" class="page">
+    <div class="inline-alert" role="alert">
+      <div><strong>素材库打开失败</strong><span>{{ projectError }}</span></div>
+      <button class="btn" type="button" @click="loadProject">重试</button>
+    </div>
+  </div>
+  <div class="page" v-else-if="drama">
     <div class="page-head">
       <div>
         <h1 class="page-title">{{ drama.title }} · 素材库</h1>
@@ -337,7 +371,17 @@ onMounted(loadProject)
         </div>
       </article>
     </div>
-    <div v-else-if="!loading" class="empty">当前筛选条件下暂无素材</div>
+    <div v-else-if="loading" class="page-loading" role="status" aria-live="polite">
+      <div class="page-loading-mark" aria-hidden="true"></div>
+      <div>
+        <strong>加载素材中</strong>
+        <p class="muted" style="margin:6px 0 0">按类型、剧集与分类同步素材列表…</p>
+      </div>
+    </div>
+    <div v-else class="empty surface-empty">
+      <strong>当前筛选条件下暂无素材</strong>
+      <span class="muted">试试切换类型/剧集，或上传图片、视频、音频到项目素材库。</span>
+    </div>
 
     <div v-if="editing" class="modal-mask" @click.self="editing = null">
       <div class="modal">
@@ -397,6 +441,6 @@ onMounted(loadProject)
       </div>
     </div>
 
-    <div v-if="message" class="toast">{{ message }}</div>
+    <div v-if="message" class="toast" role="status">{{ message }}</div>
   </div>
 </template>

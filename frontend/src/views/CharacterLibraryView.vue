@@ -145,7 +145,15 @@ onMounted(load)
 
     <div v-if="loadError" class="inline-alert" role="alert"><div><strong>角色库加载不完整</strong><span>{{ loadError }}</span></div><button class="btn" type="button" @click="load">重试加载</button></div>
 
-    <div v-if="loading" class="panel character-library-list"><div class="empty" role="status">正在加载角色模板…</div></div>
+    <div v-if="loading" class="panel character-library-list">
+      <div class="page-loading" role="status" aria-live="polite">
+        <div class="page-loading-mark" aria-hidden="true"></div>
+        <div>
+          <strong>正在加载角色模板</strong>
+          <p class="muted" style="margin:6px 0 0">同步跨项目角色设定、形象与音色…</p>
+        </div>
+      </div>
+    </div>
     <div v-else class="panel character-library-list">
       <table v-if="filteredTemplates.length" class="table character-library-table">
         <thead><tr><th>形象</th><th>名称</th><th>角色定位</th><th>音色</th><th></th></tr></thead>
@@ -191,6 +199,6 @@ onMounted(load)
       </form>
     </div>
 
-    <div v-if="message" class="toast">{{ message }}</div>
+    <div v-if="message" class="toast" role="status">{{ message }}</div>
   </div>
 </template>

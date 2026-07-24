@@ -58,8 +58,13 @@ onMounted(() => load(1))
       <span class="muted">共 {{ total }} 条</span>
     </div>
 
+    <div v-if="error" class="inline-alert" role="alert">
+      <div><strong>审计日志加载失败</strong><span>{{ error }}</span></div>
+      <button class="btn" type="button" @click="load()">重试</button>
+    </div>
+
     <div class="panel audit-table-wrap">
-      <table class="table audit-table">
+      <table v-if="rows.length" class="table audit-table">
         <thead><tr><th>时间</th><th>成员</th><th>动作</th><th>资源</th><th>结果</th><th>来源 IP</th></tr></thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id">
@@ -72,8 +77,17 @@ onMounted(() => load(1))
           </tr>
         </tbody>
       </table>
-      <div v-if="!loading && !rows.length" class="empty">暂无审计记录</div>
-      <div v-if="error" class="auth-error">{{ error }}</div>
+      <div v-if="loading && !rows.length" class="page-loading" role="status" aria-live="polite">
+        <div class="page-loading-mark" aria-hidden="true"></div>
+        <div>
+          <strong>加载审计记录</strong>
+          <p class="muted" style="margin:6px 0 0">同步组织内写操作与结果状态…</p>
+        </div>
+      </div>
+      <div v-else-if="!loading && !error && !rows.length" class="empty surface-empty">
+        <strong>暂无审计记录</strong>
+        <span class="muted">创建项目、修改配置或执行生成后，写操作会记录在这里。</span>
+      </div>
     </div>
 
     <div class="audit-pagination">

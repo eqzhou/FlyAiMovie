@@ -1677,8 +1677,8 @@ onUnmounted(stopPoll)
       </div>
     </div>
 
-    <div v-if="toast" class="toast">{{ toast }}</div>
-    <div v-if="busy" class="toast busy">处理中：{{ busy }}</div>
+    <div v-if="toast" class="toast" role="status">{{ toast }}</div>
+    <div v-if="busy" class="toast busy" role="status" aria-live="polite">处理中：{{ busy }}</div>
   </div>
   <div v-else-if="loading" class="page">
     <div class="page-loading" role="status" aria-live="polite">

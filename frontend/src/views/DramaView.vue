@@ -219,6 +219,6 @@ onMounted(load)
       </form>
     </div>
 
-    <div v-if="message" class="toast">{{ message }}</div>
+    <div v-if="message" class="toast" role="status">{{ message }}</div>
   </div>
 </template>
