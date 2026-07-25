@@ -88,6 +88,7 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - 真实 OpenAI / MiniMax / 火山 / Vidu / 阿里 smoke（需对应 `SMOKE_*` 密钥）。
 - 真实 SMTP 邀请与密码恢复 smoke（需 `SMOKE_SMTP_*` 与 `SMOKE_APP_URL_BASE`）。
 - 本机无 Docker CLI；Compose 冷启动 / PostgreSQL 卷恢复依赖 CI 或候选机。
+- GitHub Actions `verify` 当前因账号账单/额度失败而无法调度 runner（annotation: "recent account payments have failed or your spending limit needs to be increased"），因此 CI 侧 Docker 冷启动与 SBOM artifact 上传也被阻塞；恢复计费后应重跑 `main` 上的 `verify`。
 - 正式 SPDX/CycloneDX 许可证结论、法务与模型/肖像/声音授权归档仍需发布流程人工完成。
 
 
