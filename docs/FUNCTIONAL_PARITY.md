@@ -26,6 +26,8 @@
 - 设置与角色库采用顶部分类导航和列表主体；新增、编辑、导入集中在弹窗，AI 服务可在保存前测试当前模型、Base URL 与密钥组合，并禁止把旧密钥复用到变更后的端点。
 - 提示词设置支持搜索、分类和状态过滤；新建或编辑模板可在保存前由服务端按变量白名单检查并渲染草稿，不产生模板或版本记录；镜头帧、镜头视频、宫格构图、角色/场景/道具形象与自动制作媒体阶段会自动套用组织模板，内容为空时不会用纯模板兜底。
 
+2026-07-25 产品入口收口：项目详情页补齐角色/场景 CRUD、生成形象/场景图、角色试听与存入角色库、场景复制/迁移，以及剧集标题与 AI 服务绑定编辑；首页项目元数据编辑与道具编辑删除此前已上主干。用户可观察的管理入口已与工作台/API 对齐。
+
 仍存在的差异属于有意的 clean-room 技术实现差异或外部验收门槛：后端使用 Go + PostgreSQL/SQLite，不采用上游 TypeScript/Mastra/Drizzle；真实厂商、真实 SMTP、公开 HTTPS 和许可证归档仍需对应账号或发布环境，不能由 Mock/契约测试替代。
 
 | 编号 | 用户能力 | 可观察结果 | 当前实现 | 自动验收 |
@@ -33,8 +35,8 @@
 | P-01 | 创建短剧与多集 | 项目和指定集数持久化，可继续编辑 | 已验收 | `TestMockAgentAndGridWorkflow` |
 | P-02 | 小说/大纲改写 | 生成结构化剧本并写回单集 | 已验收：Mock Agent 通过公开 HTTP 路由写回剧集脚本 | `TestMockAgentAndGridWorkflow` |
 | P-03 | 提取角色与场景 | 去重后关联项目/单集 | 已验收：Mock Agent 通过公开 HTTP 路由写回并按项目关联 | `TestMockAgentAndGridWorkflow` |
-| P-04 | 角色资产 | 上传/生成形象，批量生成，分配音色并试听 | 已验收 Mock 主路径：角色创建/剧集关联、Mock 形象生成、组织级音色分配和样本生成、素材库登记；角色试听拒绝跨项目剧集且只使用本组织音频配置 | `TestMockAssetGenerationWorkflow`、`TestCharacterVoiceSampleUsesOrganizationConfigAndEpisode`、上传/角色归属回归测试 |
-| P-05 | 场景与道具资产 | 创建、编辑、生成和复用素材 | 已验收 Mock 主路径：场景/道具创建、Mock 形象生成、素材库登记和跨项目归属校验 | `TestMockAssetGenerationWorkflow`、`TestImageUploadBindsPropAndRegistersAsset`、素材归属回归测试 |
+| P-04 | 角色资产 | 上传/生成形象，批量生成，分配音色并试听 | 已验收 Mock 主路径：角色创建/剧集关联、Mock 形象生成、组织级音色分配和样本生成、素材库登记；角色试听拒绝跨项目剧集且只使用本组织音频配置。项目资产页与工作台均支持新增/编辑/删除、生成形象、试听与存入角色库 | `TestMockAssetGenerationWorkflow`、`TestCharacterVoiceSampleUsesOrganizationConfigAndEpisode`、上传/角色归属回归测试、`frontend/tests/e2e/account-settings-assets.spec.ts` |
+| P-05 | 场景与道具资产 | 创建、编辑、生成和复用素材 | 已验收 Mock 主路径：场景/道具创建、Mock 形象生成、素材库登记和跨项目归属校验。项目资产页支持角色/场景/道具完整管理，场景可复制/迁移到剧集，道具支持编辑/删除/生成图 | `TestMockAssetGenerationWorkflow`、`TestImageUploadBindsPropAndRegistersAsset`、素材归属回归测试、`frontend/tests/e2e/account-settings-assets.spec.ts` |
 | P-06 | 分镜拆解与编辑 | 得到有序镜头，可增删改镜头字段 | 已验收：Mock Agent 写回有序分镜；工作台支持手工新增、字段编辑和删除，API 另有归属回归覆盖 | `TestMockAgentAndGridWorkflow`、router 资源归属测试、`frontend/tests/e2e/workbench.spec.ts` |
 | P-07 | 宫格工作流 | 生成提示词和宫格图，切分并分配到镜头帧 | 已验收：Mock HTTP 流程覆盖提示词、出图、FFmpeg 切分和首帧写回；切片与目标槽位持久化，可重新分配到首帧、尾帧或分镜板并原子处理槽位冲突；首尾模式在付费生成前校验宫格容量和镜头对；旧历史只读并提供安全重生成路径 | `TestMockAgentAndGridWorkflow`、`TestGridCellCanBeReassignedAndAssignmentPersists`、`TestGridRequestsRejectUnsafeStoryboardCountsBeforeGeneration`、工作台 E2E |
 | P-08 | 镜头帧生成 | 支持首帧、尾帧、分镜板和批量生成 | 已验收 Mock 主路径：三类帧均可在工作台直接生成并预览；非法帧类型返回 400；帧/视频/TTS 批量入口在执行前校验分镜集归属 | `TestMockPipelineEndToEnd`、`TestMockAgentAndGridWorkflow`、`TestStoryboardFrameGenerationValidatesAndPersistsComposedFrame`、`TestBatchGenerationRejectsStoryboardsFromAnotherEpisode`、Live browser E2E |
@@ -89,6 +91,8 @@
 5. 商业发布前单独审计依赖、FFmpeg 构建、字体、图标、模型服务条款、声音和肖像授权。
 
 ## 下一阶段完成标准
+
+L1 用户可观察功能对等（项目/工作台入口一致）已完成。以下为 L2 商业发布门槛，依赖真实账号与发布环境：
 
 - 使用真实 OpenAI、MiniMax、火山、Vidu、阿里账号执行 smoke test，并归档供应商协议版本与测试证据。
 - 使用真实 SMTP 账号验收组织邀请和密码恢复投递。

@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/artifacts/sbom}"
+# Resolve relative OUT against ROOT so subshells that cd into backend/frontend
+# still write into the intended inventory directory.
+if [[ "$OUT" != /* ]]; then
+  OUT="$ROOT/$OUT"
+fi
 mkdir -p "$OUT"
 
 {
