@@ -82,13 +82,14 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - Go 模块依赖已升级：`golang.org/x/net`、`golang.org/x/text`、`golang.org/x/crypto`、`github.com/jackc/pgx/v5`；`go test ./...` 通过。
 - 本机 Go toolchain 已升级到 **1.26.5**；`govulncheck ./...` 对代码可达漏洞报告 **0**。
 - SQLite Compose 冷启动：修复 `ai_voices.updated_at` 旧库迁移后，本机 Colima + `docker compose -f docker-compose.sqlite.yml` 可 healthy 启动，并在空闲端口（如 `15790`）通过 `GET /api/v1/health`；注意本机 `5679/5680` 可能被 Node/SSH 转发占用。
+- PostgreSQL Compose 冷启动/卷恢复：`docker compose -f docker-compose.yml` 在本机 Colima 上 app+postgres 均 healthy；`force-recreate` 保留 volume 后仍可通过 `GET /api/v1/health`（验证端口如 `15791`）。
 - 厂商/SMTP live smoke 测试在本机可跳过运行；未配置 `SMOKE_*` 时不会假阳性通过。
 
 仍依赖外部账号或环境，不能在本机闭环：
 
 - 真实 OpenAI / MiniMax / 火山 / Vidu / 阿里 smoke（需对应 `SMOKE_*` 密钥）。
 - 真实 SMTP 邀请与密码恢复 smoke（需 `SMOKE_SMTP_*` 与 `SMOKE_APP_URL_BASE`）。
-- 本机无 Docker CLI；Compose 冷启动 / PostgreSQL 卷恢复依赖 CI 或候选机。
+- GitHub Actions `verify` 仍因账单/额度无法调度 runner；本机 Colima 已可做 SQLite/PostgreSQL Compose 冷启动与卷 recreate 验证，正式发布 CI 侧仍需恢复账单后重跑。
 - GitHub Actions `verify` 当前因账号账单/额度失败而无法调度 runner（annotation: "recent account payments have failed or your spending limit needs to be increased"），因此 CI 侧 Docker 冷启动与 SBOM artifact 上传也被阻塞；恢复计费后应重跑 `main` 上的 `verify`。
 - 正式 SPDX/CycloneDX 许可证结论、法务与模型/肖像/声音授权归档仍需发布流程人工完成。
 
