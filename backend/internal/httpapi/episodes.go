@@ -160,16 +160,50 @@ func (s *Server) deleteEpisode(c *gin.Context) {
 		return
 	}
 	now := response.Now()
-	result := organizationDB(c).Model(&models.Episode{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]any{
-		"deleted_at": now,
-		"updated_at": now,
+	err = organizationDB(c).Transaction(func(tx *gorm.DB) error {
+		var episode models.Episode
+		if err := activeTx(tx).First(&episode, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&episode).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		// Soft-delete dependents owned by this episode so they cannot keep mutating.
+		if err := tx.Model(&models.Storyboard{}).Where("episode_id = ? AND deleted_at IS NULL", episode.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Scene{}).Where("episode_id = ? AND deleted_at IS NULL", episode.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		// Cancel active production runs so workers stop advancing a deleted episode.
+		if err := tx.Model(&models.ProductionRun{}).Where("episode_id = ? AND status = ?", episode.ID, "queued").Updates(map[string]any{
+			"status":              "canceled",
+			"status_message":      "剧集已删除",
+			"cancel_requested_at": now,
+			"completed_at":        now,
+			"lease_owner":         "",
+			"lease_expires_at":    nil,
+			"updated_at":          now,
+		}).Error; err != nil {
+			return err
+		}
+		return nil
 	})
-	if result.Error != nil {
-		response.ServerError(c, "failed to delete episode")
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		response.NotFound(c, "episode not found")
 		return
 	}
-	if result.RowsAffected == 0 {
-		response.NotFound(c, "episode not found")
+	if err != nil {
+		response.ServerError(c, "failed to delete episode")
 		return
 	}
 	response.Success(c, nil)

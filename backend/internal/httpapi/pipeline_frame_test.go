@@ -667,3 +667,62 @@ func TestMoveStoryboardReordersWithinEpisode(t *testing.T) {
 		t.Fatalf("move deleted status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }
+
+func TestDeleteEpisodeCascadesSoftDeleteToOwnedDependents(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"剧集级联删除","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	detail := requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ := detail["episodes"].([]any)
+	if len(episodes) == 0 {
+		t.Fatal("drama should auto-create at least one episode")
+	}
+	episodeID := uintField(t, episodes[0].(map[string]any), "id")
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("seed episode configs status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Shared drama-level scene should remain after episode delete.
+	sharedScene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"location":"共享场景","time":"日","prompt":"shared"}`)
+	sharedSceneID := uintField(t, sharedScene, "id")
+
+	ownedScene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"location":"本集场景","time":"夜","prompt":"owned"}`)
+	ownedSceneID := uintField(t, ownedScene, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"scene_id":`+itoa(ownedSceneID)+`,"title":"本集镜头","image_prompt":"quiet room"}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	run := requestData(t, router, http.MethodPost, "/api/v1/productions", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`}`)
+	runID := uintField(t, run, "id")
+
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(episodeID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Owned dependents must become unavailable for mutation/generation.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID), `{"title":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-frame", `{"frame_type":"first_frame"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("generate cascaded storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/scenes/"+itoa(ownedSceneID), `{"location":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded owned scene status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/scenes/"+itoa(ownedSceneID)+"/generate-image", `{"episode_id":`+itoa(episodeID)+`}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("generate cascaded owned scene status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Shared drama scene remains editable.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/scenes/"+itoa(sharedSceneID), `{"location":"共享仍可改"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("update shared scene status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Active production run for the deleted episode should be canceled.
+	runDetail := requestData(t, router, http.MethodGet, "/api/v1/productions/"+itoa(runID), "")
+	if status, _ := runDetail["status"].(string); status != "canceled" {
+		t.Fatalf("production status=%q want canceled body=%v", status, runDetail)
+	}
+}
