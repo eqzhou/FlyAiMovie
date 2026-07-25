@@ -92,9 +92,12 @@
 
 ## 下一阶段完成标准
 
-L1 用户可观察功能对等（项目/工作台入口一致）已完成。以下为 L2 商业发布门槛，依赖真实账号与发布环境：
+L1 用户可观察功能对等（项目/工作台入口一致）已完成。
+L2 中可本机自动完成的部分（SBOM 路径、依赖漏洞、Go 1.26.5、WebKit 项目级 E2E、SQLite/PostgreSQL Compose 冷启动与备份回滚演练）已完成并记入 `docs/COMMERCIAL_RELEASE.md`。
+
+仍依赖真实账号/发布流程的门槛：
 
 - 使用真实 OpenAI、MiniMax、火山、Vidu、阿里账号执行 smoke test，并归档供应商协议版本与测试证据。
 - 使用真实 SMTP 账号验收组织邀请和密码恢复投递。
-- 在发布 CI 补跑 WebKit，并在干净 Docker/PostgreSQL 环境验证初始化、数据卷恢复和数据库备份回滚。
-- 生成 SBOM、执行依赖漏洞与许可证扫描，并完成 FFmpeg 构建、字体、图标、声音、肖像和模型条款的法务归档。
+- 恢复 GitHub Actions 账单/额度后，在发布 CI 重跑 `verify`（含 WebKit 与 SBOM artifact 上传）。
+- 使用已审核许可证扫描工具生成正式 SPDX/CycloneDX 结论，并完成 FFmpeg 构建、字体、图标、声音、肖像和模型条款的法务归档。

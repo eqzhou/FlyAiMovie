@@ -52,7 +52,7 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - Mock 全链路 E2E、厂商契约测试和关键包 80% 以上覆盖率；
 - 当前核心 Go 全包覆盖率实测为 80.1%，Mock/契约测试和 Chromium 桌面/移动浏览器 E2E 已通过；仍没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test，不得把真实供应商链路标记为已完成。
 - OpenAI/Sora 视频 Adapter 已依据官方 Videos API 完成创建、轮询、鉴权下载和本地首帧契约测试；尾帧与多参考输入会明确拒绝。真实账号 smoke test 通过前不得标记为生产可用。
-- Docker CLI 在当前验收机不可用，Compose 冷启动、PostgreSQL 干净环境初始化和数据卷恢复仍须在发布 CI/候选机执行。
+- 本机 Colima 已完成 SQLite/PostgreSQL Compose 冷启动、volume `force-recreate` 与 `pg_dump/pg_restore` 探针；GitHub Actions `verify` 仍因账单/额度无法调度，CI 侧证据需恢复计费后重跑归档。
 - 依赖漏洞扫描、SBOM、许可证归档和法务复核；
 - 生产密钥管理、TLS、反向代理、监控和告警。
 - `AI_CONFIG_ENCRYPTION_KEY` 或外部 Secret Manager 保护 AI 厂商密钥；旧明文配置需迁移并轮换。
@@ -90,8 +90,6 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 
 - 真实 OpenAI / MiniMax / 火山 / Vidu / 阿里 smoke（需对应 `SMOKE_*` 密钥）。
 - 真实 SMTP 邀请与密码恢复 smoke（需 `SMOKE_SMTP_*` 与 `SMOKE_APP_URL_BASE`）。
-- GitHub Actions `verify` 仍因账单/额度无法调度 runner；本机 Colima 已可做 SQLite/PostgreSQL Compose 冷启动与卷 recreate 验证，正式发布 CI 侧仍需恢复账单后重跑。
-- GitHub Actions `verify` 当前因账号账单/额度失败而无法调度 runner（annotation: "recent account payments have failed or your spending limit needs to be increased"），因此 CI 侧 Docker 冷启动与 SBOM artifact 上传也被阻塞；恢复计费后应重跑 `main` 上的 `verify`。
 - 正式 SPDX/CycloneDX 许可证结论、法务与模型/肖像/声音授权归档仍需发布流程人工完成。
 
 
