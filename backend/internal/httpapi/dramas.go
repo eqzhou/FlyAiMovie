@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -237,15 +238,84 @@ func (s *Server) updateDrama(c *gin.Context) {
 }
 
 func (s *Server) deleteDrama(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	now := response.Now()
-	result := organizationDB(c).Model(&models.Drama{}).Where("id = ? AND deleted_at IS NULL", id).Update("deleted_at", now)
-	if result.Error != nil {
-		response.ServerError(c, "failed to delete drama")
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid drama id")
 		return
 	}
-	if result.RowsAffected == 0 {
+	now := response.Now()
+	err = organizationDB(c).Transaction(func(tx *gorm.DB) error {
+		var drama models.Drama
+		if err := activeTx(tx).First(&drama, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&drama).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+
+		var episodeIDs []uint
+		if err := activeTx(tx).Model(&models.Episode{}).Where("drama_id = ?", drama.ID).Pluck("id", &episodeIDs).Error; err != nil {
+			return err
+		}
+
+		// Soft-delete every active episode under the drama.
+		if err := tx.Model(&models.Episode{}).Where("drama_id = ? AND deleted_at IS NULL", drama.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		// Soft-delete drama-owned resources that should no longer be mutable.
+		if err := tx.Model(&models.Character{}).Where("drama_id = ? AND deleted_at IS NULL", drama.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Scene{}).Where("drama_id = ? AND deleted_at IS NULL", drama.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Prop{}).Where("drama_id = ? AND deleted_at IS NULL", drama.ID).Updates(map[string]any{
+			"deleted_at": now,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+
+		if len(episodeIDs) > 0 {
+			if err := tx.Model(&models.Storyboard{}).Where("episode_id IN ? AND deleted_at IS NULL", episodeIDs).Updates(map[string]any{
+				"deleted_at": now,
+				"updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+			// Cancel active production runs so workers stop advancing deleted drama content.
+			if err := tx.Model(&models.ProductionRun{}).Where("episode_id IN ? AND status = ?", episodeIDs, "queued").Updates(map[string]any{
+				"status":              "canceled",
+				"status_message":      "项目已删除",
+				"cancel_requested_at": now,
+				"completed_at":        now,
+				"lease_owner":         "",
+				"lease_expires_at":    nil,
+				"updated_at":          now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		response.NotFound(c, "剧本不存在")
+		return
+	}
+	if err != nil {
+		response.ServerError(c, "failed to delete drama")
 		return
 	}
 	response.Success(c, nil)

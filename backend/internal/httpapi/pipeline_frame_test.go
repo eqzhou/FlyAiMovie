@@ -294,20 +294,6 @@ func TestSoftDeletedResourcesRejectMutations(t *testing.T) {
 		t.Fatalf("update active episode status=%d body=%s", resp.Code, resp.Body.String())
 	}
 
-	// Soft-delete the drama and ensure dependent creates reject it.
-	if resp := performRequest(router, http.MethodDelete, "/api/v1/dramas/"+itoa(dramaID), "", nil); resp.Code != http.StatusOK {
-		t.Fatalf("delete drama status=%d body=%s", resp.Code, resp.Body.String())
-	}
-	if resp := performRequest(router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁"}`, nil); resp.Code != http.StatusBadRequest {
-		t.Fatalf("create character on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
-	}
-	if resp := performRequest(router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"location":"站台","time":"夜"}`, nil); resp.Code != http.StatusBadRequest {
-		t.Fatalf("create scene on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
-	}
-	if resp := performRequest(router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱"}`, nil); resp.Code != http.StatusBadRequest {
-		t.Fatalf("create prop on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
-	}
-
 	// Soft-delete the episode via API and ensure further writes are rejected.
 	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(episodeID), "", nil); resp.Code != http.StatusOK {
 		t.Fatalf("delete episode status=%d body=%s", resp.Code, resp.Body.String())
@@ -321,7 +307,22 @@ func TestSoftDeletedResourcesRejectMutations(t *testing.T) {
 	if resp := performRequest(router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"新镜头"}`, nil); resp.Code != http.StatusBadRequest && resp.Code != http.StatusNotFound {
 		t.Fatalf("create storyboard on deleted episode status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
+	// Soft-delete the drama and ensure dependent creates reject it.
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/dramas/"+itoa(dramaID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create character on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"location":"站台","time":"夜"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create scene on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create prop on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
 }
+
 
 func TestCopyEpisodeDuplicatesScriptScenesAndStoryboards(t *testing.T) {
 	_, router := testServerRouter(t)
@@ -721,6 +722,68 @@ func TestDeleteEpisodeCascadesSoftDeleteToOwnedDependents(t *testing.T) {
 	}
 
 	// Active production run for the deleted episode should be canceled.
+	runDetail := requestData(t, router, http.MethodGet, "/api/v1/productions/"+itoa(runID), "")
+	if status, _ := runDetail["status"].(string); status != "canceled" {
+		t.Fatalf("production status=%q want canceled body=%v", status, runDetail)
+	}
+}
+
+func TestDeleteDramaCascadesSoftDeleteToOwnedDependents(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"项目级联删除","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	detail := requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ := detail["episodes"].([]any)
+	if len(episodes) == 0 {
+		t.Fatal("drama should auto-create at least one episode")
+	}
+	episodeID := uintField(t, episodes[0].(map[string]any), "id")
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("seed episode configs status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	character := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"林舟","role":"男主"}`)
+	characterID := uintField(t, character, "id")
+	scene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"location":"客厅","time":"夜","prompt":"owned"}`)
+	sceneID := uintField(t, scene, "id")
+	prop := requestData(t, router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱","prompt":"leather"}`)
+	propID := uintField(t, prop, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"scene_id":`+itoa(sceneID)+`,"title":"开场","image_prompt":"quiet room"}`)
+	storyboardID := uintField(t, storyboard, "id")
+	run := requestData(t, router, http.MethodPost, "/api/v1/productions", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`}`)
+	runID := uintField(t, run, "id")
+
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/dramas/"+itoa(dramaID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/dramas/"+itoa(dramaID), "", nil); resp.Code != http.StatusNotFound {
+		t.Fatalf("delete drama twice status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Drama dependents must become unavailable for mutation/generation.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"content":"deleted drama"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/characters/"+itoa(characterID), `{"name":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded character status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/scenes/"+itoa(sceneID), `{"location":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded scene status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/props/"+itoa(propID), `{"name":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded prop status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID), `{"title":"删除后仍改"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update cascaded storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/storyboards/"+itoa(storyboardID)+"/generate-frame", `{"frame_type":"first_frame"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("generate cascaded storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Active production run for the deleted drama should be canceled.
 	runDetail := requestData(t, router, http.MethodGet, "/api/v1/productions/"+itoa(runID), "")
 	if status, _ := runDetail["status"].(string); status != "canceled" {
 		t.Fatalf("production status=%q want canceled body=%v", status, runDetail)
