@@ -209,12 +209,16 @@ async function load() {
 }
 
 async function addMember() {
-  await memberAPI.create(memberForm.value)
-  memberForm.value = { email: '', display_name: '', password: '', role: 'editor' }
-  showMemberModal.value = false
-  show('成员已添加')
-  members.value = await memberAPI.list()
-  await authStore.refreshOrganizations()
+  try {
+    await memberAPI.create(memberForm.value)
+    memberForm.value = { email: '', display_name: '', password: '', role: 'editor' }
+    showMemberModal.value = false
+    show('成员已添加')
+    members.value = await memberAPI.list()
+    await authStore.refreshOrganizations()
+  } catch (error) {
+    show(error instanceof Error ? error.message : '添加成员失败')
+  }
 }
 
 async function inviteMember() {
@@ -229,6 +233,8 @@ async function inviteMember() {
       ? '邀请已创建，邮件已尝试发送；也可复制链接备用'
       : '邀请已创建。邮件未配置或发送失败，请复制链接发送给成员', 4200)
     invitations.value = await memberAPI.invitations()
+  } catch (error) {
+    show(error instanceof Error ? error.message : '创建邀请失败')
   } finally {
     inviting.value = false
   }
@@ -236,8 +242,13 @@ async function inviteMember() {
 
 async function revokeInvitation(invitation: any) {
   if (!confirm(`撤销发往 ${invitation.email} 的邀请？`)) return
-  await memberAPI.revokeInvitation(invitation.id)
-  invitations.value = await memberAPI.invitations()
+  try {
+    await memberAPI.revokeInvitation(invitation.id)
+    invitations.value = await memberAPI.invitations()
+    show('邀请已撤销')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '撤销邀请失败')
+  }
 }
 
 async function resendInvitation(invitation: any) {
@@ -252,6 +263,8 @@ async function resendInvitation(invitation: any) {
     show(result.email_sent
       ? '邀请已重发，邮件已尝试发送；也可复制新链接'
       : '邀请已重发。邮件未配置或发送失败，请复制新链接', 4200)
+  } catch (error) {
+    show(error instanceof Error ? error.message : '重发邀请失败')
   } finally {
     inviting.value = false
   }
@@ -303,53 +316,84 @@ function closeInviteModal() {
 }
 
 async function changeMemberRole(member: any) {
-  await memberAPI.update(member.user_id, member.role)
-  show('角色已更新')
+  try {
+    await memberAPI.update(member.user_id, member.role)
+    show('角色已更新')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '更新角色失败')
+    await load()
+  }
 }
 
 async function removeMember(member: any) {
   if (!confirm(`移除 ${member.email}？`)) return
-  await memberAPI.remove(member.user_id)
-  members.value = await memberAPI.list()
+  try {
+    await memberAPI.remove(member.user_id)
+    members.value = await memberAPI.list()
+    show('成员已移除')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '移除成员失败')
+  }
 }
 
 async function changePassword() {
   if (passwordForm.value.next !== passwordForm.value.confirm) { show('两次新密码不一致'); return }
-  await authStore.changePassword(passwordForm.value.current, passwordForm.value.next)
-  passwordForm.value = { current: '', next: '', confirm: '' }
-  showPasswordModal.value = false
-  show('密码已更新')
+  try {
+    await authStore.changePassword(passwordForm.value.current, passwordForm.value.next)
+    passwordForm.value = { current: '', next: '', confirm: '' }
+    showPasswordModal.value = false
+    show('密码已更新')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '修改密码失败')
+  }
 }
 
 async function exportOrganization() {
-  const data = await organizationDataAPI.export()
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${authStore.state.actor?.organization.slug || 'organization'}-export.json`
-  anchor.click()
-  URL.revokeObjectURL(url)
+  try {
+    const data = await organizationDataAPI.export()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${authStore.state.actor?.organization.slug || 'organization'}-export.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    show('组织数据已导出')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '导出失败')
+  }
 }
 
 async function deleteOrganization() {
   if (!confirm('永久删除组织及其全部数据？此操作无法撤销。')) return
-  await organizationDataAPI.remove(deleteForm.value.password, deleteForm.value.confirmation)
-  await authStore.logout()
-  await router.replace('/login')
+  try {
+    await organizationDataAPI.remove(deleteForm.value.password, deleteForm.value.confirmation)
+    await authStore.logout()
+    await router.replace('/login')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '删除组织失败')
+  }
 }
 
 async function saveQuota() {
-  await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs, daily_budget_cny: quota.value.daily_budget_cny, budget_warning_percent: quota.value.budget_warning_percent })
-  show('生成配额已保存')
-  quota.value = await quotaAPI.get()
+  try {
+    await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs, daily_budget_cny: quota.value.daily_budget_cny, budget_warning_percent: quota.value.budget_warning_percent })
+    show('生成配额已保存')
+    quota.value = await quotaAPI.get()
+  } catch (error) {
+    show(error instanceof Error ? error.message : '保存配额失败')
+  }
 }
 
 async function purgeCache() {
   if (!confirm('清理当前组织的过期缓存？')) return
-  await cacheAPI.purge()
-  cache.value = await cacheAPI.stats()
-  show('过期缓存已清理')
+  try {
+    await cacheAPI.purge()
+    cache.value = await cacheAPI.stats()
+    show('过期缓存已清理')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '清理缓存失败')
+  }
 }
 
 function formatBytes(value: number) {
@@ -507,8 +551,13 @@ watch(() => promptForm.value?.content, () => {
 
 async function remove(id: number) {
   if (!confirm('删除该配置？')) return
-  await settingsAPI.deleteAIConfig(id)
-  await load()
+  try {
+    await settingsAPI.deleteAIConfig(id)
+    await load()
+    show('AI 服务已删除')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '删除 AI 服务失败')
+  }
 }
 
 async function syncVoices() {
@@ -679,9 +728,13 @@ async function renderPreview() {
 
 async function restorePrompt(template: any) {
   if (!confirm(`恢复「${template.name}」的内置模板？`)) return
-  await settingsAPI.restorePromptTemplate(template.id)
-  promptTemplates.value = await settingsAPI.promptTemplates()
-  show('已恢复内置模板')
+  try {
+    await settingsAPI.restorePromptTemplate(template.id)
+    promptTemplates.value = await settingsAPI.promptTemplates()
+    show('已恢复内置模板')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '恢复模板失败')
+  }
 }
 
 async function openPromptHistory(template: any) {
@@ -740,17 +793,25 @@ function formatRevisionTime(value: string) {
 
 async function removePrompt(template: any) {
   if (!confirm(`删除「${template.name}」？`)) return
-  await settingsAPI.deletePromptTemplate(template.id)
-  promptTemplates.value = await settingsAPI.promptTemplates()
-  show('提示词已删除')
+  try {
+    await settingsAPI.deletePromptTemplate(template.id)
+    promptTemplates.value = await settingsAPI.promptTemplates()
+    show('提示词已删除')
+  } catch (error) {
+    show(error instanceof Error ? error.message : '删除模板失败')
+  }
 }
 
 async function saveAgent() {
   if (!agentForm.value) return
-  await settingsAPI.upsertAgentConfig(agentForm.value)
-  show('Agent 配置已保存')
-  agentForm.value = null
-  await load()
+  try {
+    await settingsAPI.upsertAgentConfig(agentForm.value)
+    show('Agent 配置已保存')
+    agentForm.value = null
+    await load()
+  } catch (error) {
+    show(error instanceof Error ? error.message : '保存 Agent 配置失败')
+  }
 }
 
 onMounted(load)

@@ -236,7 +236,7 @@ func (s *Server) applyAsset(c *gin.Context) {
 		return
 	}
 	var storyboard models.Storyboard
-	if err := organizationDB(c).First(&storyboard, body.StoryboardID).Error; err != nil {
+	if err := findActiveStoryboard(c, body.StoryboardID, &storyboard); err != nil {
 		response.NotFound(c, "storyboard not found")
 		return
 	}

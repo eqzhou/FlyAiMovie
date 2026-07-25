@@ -137,7 +137,7 @@ func (s *Server) createDrama(c *gin.Context) {
 func (s *Server) getDrama(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var d models.Drama
-	if err := organizationDB(c).First(&d, id).Error; err != nil || d.DeletedAt != nil {
+	if err := findActiveDrama(c, uint(id), &d); err != nil {
 		response.NotFound(c, "剧本不存在")
 		return
 	}
@@ -224,7 +224,7 @@ func (s *Server) updateDrama(c *gin.Context) {
 		response.BadRequest(c, "at least one drama field is required")
 		return
 	}
-	result := organizationDB(c).Model(&models.Drama{}).Where("id = ?", id).Updates(updates)
+	result := organizationDB(c).Model(&models.Drama{}).Where("id = ? AND deleted_at IS NULL", id).Updates(updates)
 	if result.Error != nil {
 		response.ServerError(c, "failed to update drama")
 		return

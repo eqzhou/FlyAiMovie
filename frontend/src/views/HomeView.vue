@@ -73,8 +73,12 @@ function closeCreate() {
 
 async function delDrama(d: any) {
   if (!confirm(`删除项目「${d.title}」？`)) return
-  await dramaAPI.del(d.id)
-  await load()
+  try {
+    await dramaAPI.del(d.id)
+    await load()
+  } catch (e: any) {
+    err.value = e.message || '删除项目失败'
+  }
 }
 
 function fmtDate(s?: string) {

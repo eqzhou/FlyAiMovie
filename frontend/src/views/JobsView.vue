@@ -140,25 +140,41 @@ async function toggleEvents(job: any) {
     expanded.value = null
     return
   }
-  events.value = { ...events.value, [job.id]: await jobsAPI.events(job.id) }
-  expanded.value = job.id
+  try {
+    events.value = { ...events.value, [job.id]: await jobsAPI.events(job.id) }
+    expanded.value = job.id
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '加载任务事件失败'
+  }
 }
 
 async function cancel(job: any) {
-  await jobsAPI.cancel(job.id)
-  await load()
+  try {
+    await jobsAPI.cancel(job.id)
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '取消任务失败'
+  }
 }
 
 async function retry(job: any) {
-  await jobsAPI.retry(job.id)
-  await load()
+  try {
+    await jobsAPI.retry(job.id)
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '重试任务失败'
+  }
 }
 
 async function batchCancel() {
   if (!cancellableSelected.value.length) return
-  await jobsAPI.batchCancel(cancellableSelected.value)
-  selected.value = []
-  await load()
+  try {
+    await jobsAPI.batchCancel(cancellableSelected.value)
+    selected.value = []
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '批量取消失败'
+  }
 }
 
 async function openAgentDetail(run: any) {

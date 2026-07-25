@@ -23,3 +23,6 @@ logs/*.log
 
 # Generated SBOM / release inventories
 artifacts/
+
+# Accidental sqlite artifacts from misconfigured DSN paths
+**/postgres:/

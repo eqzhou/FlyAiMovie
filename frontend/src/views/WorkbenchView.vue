@@ -373,9 +373,16 @@ function stopPoll() {
 }
 
 async function saveContent() {
-  await episodeAPI.update(episode.value.id, { content: rawContent.value })
-  show('已保存原文')
-  await load()
+  busy.value = 'save-content'
+  try {
+    await episodeAPI.update(episode.value.id, { content: rawContent.value })
+    show('已保存原文')
+    await load()
+  } catch (error: any) {
+    show(error.message || '保存原文失败')
+  } finally {
+    busy.value = ''
+  }
 }
 
 function openEpisodeConfig() {
@@ -665,10 +672,14 @@ async function voiceSample(c: any) {
 }
 
 async function assignVoice(c: any, voiceId: string, provider = 'minimax') {
-  await characterAPI.update(c.id, { voice_style: voiceId, voice_provider: provider })
-  show(`已分配音色 ${voiceId}`)
-  assignCharId.value = null
-  await refreshAssets()
+  try {
+    await characterAPI.update(c.id, { voice_style: voiceId, voice_provider: provider })
+    show(`已分配音色 ${voiceId}`)
+    assignCharId.value = null
+    await refreshAssets()
+  } catch (e: any) {
+    show(e.message || '分配音色失败')
+  }
 }
 
 async function genFrame(sb: any, frameType = 'first_frame') {

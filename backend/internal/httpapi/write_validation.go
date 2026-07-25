@@ -117,6 +117,18 @@ func activeResourceQuery(c *gin.Context) *gorm.DB {
 	return organizationDB(c).Where("deleted_at IS NULL")
 }
 
+func findActiveDrama(c *gin.Context, id uint, drama *models.Drama) error {
+	return activeResourceQuery(c).First(drama, id).Error
+}
+
+func findActiveEpisode(c *gin.Context, id uint, episode *models.Episode) error {
+	return activeResourceQuery(c).First(episode, id).Error
+}
+
+func activeTx(tx *gorm.DB) *gorm.DB {
+	return tx.Where("deleted_at IS NULL")
+}
+
 func findActiveCharacter(c *gin.Context, id uint, character *models.Character) error {
 	return activeResourceQuery(c).First(character, id).Error
 }

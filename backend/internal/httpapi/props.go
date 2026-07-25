@@ -48,7 +48,7 @@ func (s *Server) createProp(c *gin.Context) {
 		return
 	}
 	var drama models.Drama
-	if err := organizationDB(c).First(&drama, body.DramaID).Error; err != nil {
+	if err := findActiveDrama(c, body.DramaID, &drama); err != nil {
 		response.BadRequest(c, "drama not found")
 		return
 	}
@@ -151,7 +151,7 @@ func (s *Server) propGenerateImage(c *gin.Context) {
 	var configID *uint
 	if body.EpisodeID > 0 {
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, body.EpisodeID).Error; err != nil {
+		if err := findActiveEpisode(c, body.EpisodeID, &ep); err != nil {
 			response.BadRequest(c, "episode not found")
 			return
 		}
@@ -162,10 +162,10 @@ func (s *Server) propGenerateImage(c *gin.Context) {
 		configID = ep.ImageConfigID
 	}
 	var drama models.Drama
-	organizationDB(c).First(&drama, prop.DramaID)
+	_ = findActiveDrama(c, prop.DramaID, &drama)
 	var ep models.Episode
 	if body.EpisodeID > 0 {
-		organizationDB(c).First(&ep, body.EpisodeID)
+		_ = findActiveEpisode(c, body.EpisodeID, &ep)
 	}
 	resolution := prompttemplate.PropImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, prop, "")
 	prompt := strings.TrimSpace(resolution.Prompt)

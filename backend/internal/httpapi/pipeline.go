@@ -80,12 +80,12 @@ func (s *Server) storyboardGenerateFrame(c *gin.Context) {
 		epID = *body.EpisodeID
 	}
 	var ep models.Episode
-	if err := organizationDB(c).First(&ep, epID).Error; err != nil {
+	if err := findActiveEpisode(c, epID, &ep); err != nil {
 		response.NotFound(c, "episode not found")
 		return
 	}
 	var drama models.Drama
-	organizationDB(c).First(&drama, ep.DramaID)
+	_ = findActiveDrama(c, ep.DramaID, &drama)
 	characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
 	resolution := prompttemplate.FramePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.FrameType, body.Prompt, characterNames, sceneNames)
 	prompt := strings.TrimSpace(resolution.Prompt)
@@ -177,12 +177,12 @@ func (s *Server) batchGenerateFrames(c *gin.Context) {
 			continue
 		}
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+		if err := findActiveEpisode(c, sb.EpisodeID, &ep); err != nil {
 			errs = append(errs, fmt.Sprintf("sb %d: episode not found", id))
 			continue
 		}
 		var drama models.Drama
-		organizationDB(c).First(&drama, ep.DramaID)
+		_ = findActiveDrama(c, ep.DramaID, &drama)
 		characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
 		resolution := prompttemplate.FramePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.FrameType, "", characterNames, sceneNames)
 		prompt := strings.TrimSpace(resolution.Prompt)
@@ -295,12 +295,12 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 			continue
 		}
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+		if err := findActiveEpisode(c, sb.EpisodeID, &ep); err != nil {
 			errs = append(errs, fmt.Sprintf("sb %d: episode not found", id))
 			continue
 		}
 		var drama models.Drama
-		organizationDB(c).First(&drama, ep.DramaID)
+		_ = findActiveDrama(c, ep.DramaID, &drama)
 		characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
 		resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, "", characterNames, sceneNames)
 		prompt := strings.TrimSpace(resolution.Prompt)
@@ -370,7 +370,7 @@ func (s *Server) batchGenerateTTS(c *gin.Context) {
 			continue
 		}
 		var ep models.Episode
-		organizationDB(c).First(&ep, sb.EpisodeID)
+		_ = findActiveEpisode(c, sb.EpisodeID, &ep)
 		job, err := s.Jobs.CreateQueuedOrganization(currentOrganizationID(c), "tts.generate", "storyboard_tts", id, "", ep.AudioConfigID)
 		if err != nil {
 			fail++
@@ -405,12 +405,12 @@ func (s *Server) storyboardGenerateVideo(c *gin.Context) {
 		return
 	}
 	var ep models.Episode
-	if err := organizationDB(c).First(&ep, sb.EpisodeID).Error; err != nil {
+	if err := findActiveEpisode(c, sb.EpisodeID, &ep); err != nil {
 		response.NotFound(c, "episode not found")
 		return
 	}
 	var drama models.Drama
-	organizationDB(c).First(&drama, ep.DramaID)
+	_ = findActiveDrama(c, ep.DramaID, &drama)
 	characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
 	resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, body.Prompt, characterNames, sceneNames)
 	prompt := strings.TrimSpace(resolution.Prompt)

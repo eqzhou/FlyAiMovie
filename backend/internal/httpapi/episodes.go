@@ -95,7 +95,7 @@ func (s *Server) updateEpisode(c *gin.Context) {
 		return
 	}
 	var episode models.Episode
-	if err := organizationDB(c).First(&episode, id).Error; err != nil {
+	if err := findActiveEpisode(c, uint(id), &episode); err != nil {
 		response.NotFound(c, "episode not found")
 		return
 	}

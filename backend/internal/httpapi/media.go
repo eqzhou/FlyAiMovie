@@ -62,7 +62,7 @@ func (s *Server) createImage(c *gin.Context) {
 	}
 	if configID == nil && body.EpisodeID != nil {
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, *body.EpisodeID).Error; err == nil {
+		if err := findActiveEpisode(c, *body.EpisodeID, &ep); err == nil {
 			configID = ep.ImageConfigID
 		}
 	}
@@ -169,9 +169,9 @@ func (s *Server) createVideo(c *gin.Context) {
 			}
 			if body.Prompt == "" {
 				var ep models.Episode
-				organizationDB(c).First(&ep, sb.EpisodeID)
+				_ = findActiveEpisode(c, sb.EpisodeID, &ep)
 				var drama models.Drama
-				organizationDB(c).First(&drama, ep.DramaID)
+				_ = findActiveDrama(c, ep.DramaID, &drama)
 				characterNames, sceneNames := promptAssetNames(c, ep.DramaID, &sb)
 				resolution := prompttemplate.VideoPrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sb, "", characterNames, sceneNames)
 				body.Prompt = strings.TrimSpace(resolution.Prompt)
@@ -195,7 +195,7 @@ func (s *Server) createVideo(c *gin.Context) {
 	}
 	if configID == nil && body.EpisodeID != nil {
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, *body.EpisodeID).Error; err == nil {
+		if err := findActiveEpisode(c, *body.EpisodeID, &ep); err == nil {
 			configID = ep.VideoConfigID
 		}
 	}
@@ -695,7 +695,7 @@ func (s *Server) mergeEpisode(c *gin.Context) {
 func (s *Server) mergeStatus(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var ep models.Episode
-	if err := organizationDB(c).First(&ep, id).Error; err != nil {
+	if err := findActiveEpisode(c, uint(id), &ep); err != nil {
 		response.NotFound(c, "not found")
 		return
 	}
@@ -1038,10 +1038,16 @@ func (s *Server) gridPrompt(c *gin.Context) {
 	var drama models.Drama
 	if body.EpisodeID != nil {
 		organizationDB(c).Where("episode_id = ? AND deleted_at IS NULL", *body.EpisodeID).Order("storyboard_number").Find(&shots)
-		organizationDB(c).First(&episode, *body.EpisodeID)
-		organizationDB(c).First(&drama, episode.DramaID)
+		if err := findActiveEpisode(c, *body.EpisodeID, &episode); err != nil {
+			response.NotFound(c, "episode not found")
+			return
+		}
+		_ = findActiveDrama(c, episode.DramaID, &drama)
 	} else if body.DramaID != nil {
-		organizationDB(c).First(&drama, *body.DramaID)
+		if err := findActiveDrama(c, *body.DramaID, &drama); err != nil {
+			response.NotFound(c, "drama not found")
+			return
+		}
 	}
 	prompt, cells := s.buildGridPrompt(c, currentOrganizationID(c), drama, episode, body.Mode, body.Rows, body.Cols, shots)
 	response.Success(c, gin.H{"grid_prompt": prompt, "mode": body.Mode, "rows": body.Rows, "cols": body.Cols, "cell_prompts": cells})
@@ -1102,7 +1108,7 @@ func (s *Server) gridGenerate(c *gin.Context) {
 	}
 	if configID == nil && body.EpisodeID != nil {
 		var ep models.Episode
-		if err := organizationDB(c).First(&ep, *body.EpisodeID).Error; err == nil {
+		if err := findActiveEpisode(c, *body.EpisodeID, &ep); err == nil {
 			configID = ep.ImageConfigID
 		}
 	}

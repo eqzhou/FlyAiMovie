@@ -8,6 +8,7 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/response"
 )
 
 func TestStoryboardFrameGenerationValidatesAndPersistsComposedFrame(t *testing.T) {
@@ -269,5 +270,54 @@ func TestSoftDeletedResourcesRejectGeneration(t *testing.T) {
 	errs, ok := batch["errors"].([]any)
 	if !ok || len(errs) == 0 || !strings.Contains(fmt.Sprint(errs), "not found") {
 		t.Fatalf("batch errors=%v", batch["errors"])
+	}
+}
+
+func TestSoftDeletedResourcesRejectMutations(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"软删除写入保护","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+	episodeID := uintField(t, episode, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"开场","image_prompt":"quiet room"}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/storyboards/"+itoa(storyboardID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID), `{"title":"已删除仍写入"}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("update deleted storyboard status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"content":"before delete"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("update active episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Soft-delete the drama and ensure dependent creates reject it.
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/dramas/"+itoa(dramaID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"阿宁"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create character on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"location":"站台","time":"夜"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create scene on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/props", `{"drama_id":`+itoa(dramaID)+`,"name":"旧提箱"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("create prop on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// Soft-delete the episode directly and ensure further writes are rejected.
+	now := response.Now()
+	if err := db.DB.Model(&models.Episode{}).Where("id = ?", episodeID).Update("deleted_at", now).Error; err != nil {
+		t.Fatalf("soft-delete episode: %v", err)
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"content":"after delete"}`, nil); resp.Code != http.StatusNotFound {
+		t.Fatalf("update deleted episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"新镜头"}`, nil); resp.Code != http.StatusBadRequest && resp.Code != http.StatusNotFound {
+		t.Fatalf("create storyboard on deleted episode status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }

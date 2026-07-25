@@ -50,12 +50,12 @@ func (s *Server) createCharacter(c *gin.Context) {
 	var created models.Character
 	err := organizationDB(c).Transaction(func(tx *gorm.DB) error {
 		var drama models.Drama
-		if err := tx.First(&drama, body.DramaID).Error; err != nil {
+		if err := activeTx(tx).First(&drama, body.DramaID).Error; err != nil {
 			return err
 		}
 		if body.EpisodeID != nil {
 			var episode models.Episode
-			if err := tx.First(&episode, *body.EpisodeID).Error; err != nil {
+			if err := activeTx(tx).First(&episode, *body.EpisodeID).Error; err != nil {
 				return err
 			}
 			if episode.DramaID != body.DramaID {
@@ -77,11 +77,11 @@ func (s *Server) createCharacter(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		if err == errOwnershipMismatch {
+		if errors.Is(err, errOwnershipMismatch) {
 			c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "episode does not belong to drama"})
 			return
 		}
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.BadRequest(c, "drama or episode not found")
 			return
 		}
@@ -233,7 +233,7 @@ func (s *Server) characterGenerateImage(c *gin.Context) {
 		response.BadRequest(c, "episode_id is required")
 		return
 	}
-	if err := organizationDB(c).First(&ep, body.EpisodeID).Error; err != nil {
+	if err := findActiveEpisode(c, body.EpisodeID, &ep); err != nil {
 		response.BadRequest(c, "Episode not found")
 		return
 	}
@@ -242,7 +242,7 @@ func (s *Server) characterGenerateImage(c *gin.Context) {
 		return
 	}
 	var drama models.Drama
-	organizationDB(c).First(&drama, ch.DramaID)
+	_ = findActiveDrama(c, ch.DramaID, &drama)
 	resolution := prompttemplate.CharacterImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, ch, "")
 	prompt := strings.TrimSpace(resolution.Prompt)
 	if prompt == "" {
@@ -271,7 +271,7 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 		return
 	}
 	var ep models.Episode
-	if err := organizationDB(c).First(&ep, body.EpisodeID).Error; err != nil {
+	if err := findActiveEpisode(c, body.EpisodeID, &ep); err != nil {
 		response.BadRequest(c, "Episode not found")
 		return
 	}
@@ -288,7 +288,7 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 			continue
 		}
 		var drama models.Drama
-		organizationDB(c).First(&drama, ch.DramaID)
+		_ = findActiveDrama(c, ch.DramaID, &drama)
 		resolution := prompttemplate.CharacterImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, ch, "")
 		prompt := strings.TrimSpace(resolution.Prompt)
 		if prompt == "" {
@@ -337,12 +337,12 @@ func (s *Server) createScene(c *gin.Context) {
 	var sc models.Scene
 	err := organizationDB(c).Transaction(func(tx *gorm.DB) error {
 		var drama models.Drama
-		if err := tx.First(&drama, body.DramaID).Error; err != nil {
+		if err := activeTx(tx).First(&drama, body.DramaID).Error; err != nil {
 			return err
 		}
 		if body.EpisodeID != nil {
 			var episode models.Episode
-			if err := tx.First(&episode, *body.EpisodeID).Error; err != nil {
+			if err := activeTx(tx).First(&episode, *body.EpisodeID).Error; err != nil {
 				return err
 			}
 			if episode.DramaID != body.DramaID {
@@ -443,7 +443,7 @@ func (s *Server) sceneGenerateImage(c *gin.Context) {
 		return
 	}
 	var ep models.Episode
-	if err := organizationDB(c).First(&ep, body.EpisodeID).Error; err != nil {
+	if err := findActiveEpisode(c, body.EpisodeID, &ep); err != nil {
 		response.BadRequest(c, "Episode not found")
 		return
 	}
@@ -452,7 +452,7 @@ func (s *Server) sceneGenerateImage(c *gin.Context) {
 		return
 	}
 	var drama models.Drama
-	organizationDB(c).First(&drama, sc.DramaID)
+	_ = findActiveDrama(c, sc.DramaID, &drama)
 	resolution := prompttemplate.SceneImagePrompt(organizationDB(c), currentOrganizationID(c), drama, ep, sc, "")
 	prompt := strings.TrimSpace(resolution.Prompt)
 	if prompt == "" {
@@ -547,14 +547,14 @@ func (s *Server) createStoryboard(c *gin.Context) {
 	var sb models.Storyboard
 	err := organizationDB(c).Transaction(func(tx *gorm.DB) error {
 		var episode models.Episode
-		if err := tx.First(&episode, epID).Error; err != nil {
+		if err := activeTx(tx).First(&episode, epID).Error; err != nil {
 			return err
 		}
 		if err := validateStoryboardResources(tx, episode.DramaID, sceneID, characterIDs); err != nil {
 			return err
 		}
 		var count int64
-		if err := tx.Model(&models.Storyboard{}).Where("episode_id = ?", epID).Count(&count).Error; err != nil {
+		if err := activeTx(tx).Model(&models.Storyboard{}).Where("episode_id = ?", epID).Count(&count).Error; err != nil {
 			return err
 		}
 		ts := response.Now()
@@ -677,11 +677,11 @@ func (s *Server) updateStoryboard(c *gin.Context) {
 	}
 	err = organizationDB(c).Transaction(func(tx *gorm.DB) error {
 		var storyboard models.Storyboard
-		if err := tx.First(&storyboard, id).Error; err != nil {
+		if err := activeTx(tx).First(&storyboard, id).Error; err != nil {
 			return err
 		}
 		var episode models.Episode
-		if err := tx.First(&episode, storyboard.EpisodeID).Error; err != nil {
+		if err := activeTx(tx).First(&episode, storyboard.EpisodeID).Error; err != nil {
 			return err
 		}
 		sceneID := uint(0)
@@ -750,7 +750,7 @@ func (s *Server) storyboardTTS(c *gin.Context) {
 		return
 	}
 	var ep models.Episode
-	organizationDB(c).First(&ep, sb.EpisodeID)
+	_ = findActiveEpisode(c, sb.EpisodeID, &ep)
 	job, err := s.Jobs.CreateQueuedOrganization(currentOrganizationID(c), "tts.generate", "storyboard_tts", uint(id), "", ep.AudioConfigID)
 	if err != nil {
 		respondGenerationError(c, err)
