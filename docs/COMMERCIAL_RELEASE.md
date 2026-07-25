@@ -83,6 +83,7 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - 本机 Go toolchain 已升级到 **1.26.5**；`govulncheck ./...` 对代码可达漏洞报告 **0**。
 - SQLite Compose 冷启动：修复 `ai_voices.updated_at` 旧库迁移后，本机 Colima + `docker compose -f docker-compose.sqlite.yml` 可 healthy 启动，并在空闲端口（如 `15790`）通过 `GET /api/v1/health`；注意本机 `5679/5680` 可能被 Node/SSH 转发占用。
 - PostgreSQL Compose 冷启动/卷恢复：`docker compose -f docker-compose.yml` 在本机 Colima 上 app+postgres 均 healthy；`force-recreate` 保留 volume 后仍可通过 `GET /api/v1/health`（验证端口如 `15791`）。
+- PostgreSQL 备份回滚演练：`pg_dump -Fc` 导出后 `pg_restore` 到探针库成功，public schema 表数量一致（39），主服务 health 保持 ok。
 - 厂商/SMTP live smoke 测试在本机可跳过运行；未配置 `SMOKE_*` 时不会假阳性通过。
 
 仍依赖外部账号或环境，不能在本机闭环：
