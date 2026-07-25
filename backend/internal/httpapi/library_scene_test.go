@@ -69,3 +69,37 @@ func TestSceneMoveRequiresExplicitCrossDramaAndMovesStoryboards(t *testing.T) {
 		t.Fatalf("shot episode=%d", shot.EpisodeID)
 	}
 }
+
+func TestCharacterSaveToLibraryCreatesTemplateCopy(t *testing.T) {
+	_, router := testServerRouter(t)
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"save library","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	character := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"name":"林舟","role":"男主","appearance":"black coat","personality":"calm","description":"lead"}`)
+	characterID := uintField(t, character, "id")
+
+	saved := requestData(t, router, http.MethodPost, "/api/v1/characters/"+itoa(characterID)+"/save-to-library", `{}`)
+	templateID := uintField(t, saved, "id")
+	if saved["name"] != "林舟" || saved["appearance"] != "black coat" {
+		t.Fatalf("template fields=%+v", saved)
+	}
+
+	// mutating original character must not change saved template
+	if resp := performRequest(router, http.MethodPut, "/api/v1/characters/"+itoa(characterID), `{"appearance":"white coat"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("update character status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var template models.CharacterTemplate
+	if err := db.DB.First(&template, templateID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if template.Appearance != "black coat" {
+		t.Fatalf("template mutated with character: %q", template.Appearance)
+	}
+
+	// deleted character cannot be saved
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/characters/"+itoa(characterID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete character status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/characters/"+itoa(characterID)+"/save-to-library", `{}`, nil); resp.Code != http.StatusNotFound && resp.Code != http.StatusBadRequest {
+		t.Fatalf("save deleted character status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}

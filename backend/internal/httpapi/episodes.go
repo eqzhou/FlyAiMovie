@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,12 +10,16 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func (s *Server) registerEpisodes(api *gin.RouterGroup) {
 	g := api.Group("/episodes")
 	g.POST("", s.createEpisode)
 	g.PUT("/:id", s.updateEpisode)
+	g.DELETE("/:id", s.deleteEpisode)
+	g.POST("/:id/copy", s.copyEpisode)
+	g.POST("/:id/move", s.moveEpisode)
 	g.GET("/:id/characters", s.episodeCharacters)
 	g.GET("/:id/scenes", s.episodeScenes)
 	g.GET("/:id/storyboards", s.episodeStoryboards)
@@ -143,6 +148,327 @@ func (s *Server) updateEpisode(c *gin.Context) {
 	}
 	if err := organizationDB(c).Model(&episode).Updates(updates).Error; err != nil {
 		response.ServerError(c, "failed to update episode")
+		return
+	}
+	response.Success(c, nil)
+}
+
+func (s *Server) deleteEpisode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid episode id")
+		return
+	}
+	now := response.Now()
+	result := organizationDB(c).Model(&models.Episode{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]any{
+		"deleted_at": now,
+		"updated_at": now,
+	})
+	if result.Error != nil {
+		response.ServerError(c, "failed to delete episode")
+		return
+	}
+	if result.RowsAffected == 0 {
+		response.NotFound(c, "episode not found")
+		return
+	}
+	response.Success(c, nil)
+}
+
+func (s *Server) copyEpisode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid episode id")
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	_ = bindOptionalJSON(c, &body)
+
+	var created models.Episode
+	err = organizationDB(c).Transaction(func(tx *gorm.DB) error {
+		var source models.Episode
+		if err := activeTx(tx).First(&source, id).Error; err != nil {
+			return err
+		}
+		var drama models.Drama
+		if err := activeTx(tx).First(&drama, source.DramaID).Error; err != nil {
+			return err
+		}
+
+		var existing []models.Episode
+		if err := tx.Where("drama_id = ? AND deleted_at IS NULL", source.DramaID).Order("episode_number").Find(&existing).Error; err != nil {
+			return err
+		}
+		next := 1
+		for _, e := range existing {
+			if e.EpisodeNumber >= next {
+				next = e.EpisodeNumber + 1
+			}
+		}
+
+		now := response.Now()
+		title := strings.TrimSpace(body.Title)
+		if title == "" {
+			title = source.Title
+			if title == "" {
+				title = "第" + strconv.Itoa(next) + "集"
+			}
+			if !strings.HasSuffix(title, "（副本）") && !strings.HasSuffix(title, "(副本)") {
+				title = title + "（副本）"
+			}
+		}
+		if len([]rune(title)) > maxNameRunes {
+			return fmt.Errorf("title is too long")
+		}
+
+		created = models.Episode{
+			OrganizationID: currentOrganizationID(c),
+			DramaID:        source.DramaID,
+			EpisodeNumber:  next,
+			Title:          title,
+			Content:        source.Content,
+			ScriptContent:  source.ScriptContent,
+			Description:    source.Description,
+			Duration:       0,
+			Status:         "draft",
+			ImageConfigID:  source.ImageConfigID,
+			VideoConfigID:  source.VideoConfigID,
+			AudioConfigID:  source.AudioConfigID,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := tx.Create(&created).Error; err != nil {
+			return err
+		}
+
+		var charLinks []models.EpisodeCharacter
+		if err := tx.Where("episode_id = ?", source.ID).Find(&charLinks).Error; err != nil {
+			return err
+		}
+		for _, link := range charLinks {
+			var character models.Character
+			if err := activeTx(tx).First(&character, link.CharacterID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					continue
+				}
+				return err
+			}
+			if err := tx.Create(&models.EpisodeCharacter{
+				OrganizationID: currentOrganizationID(c),
+				EpisodeID:      created.ID,
+				CharacterID:    character.ID,
+				CreatedAt:      now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		sceneIDMap := map[uint]uint{}
+		var ownedScenes []models.Scene
+		if err := tx.Where("episode_id = ? AND deleted_at IS NULL", source.ID).Order("id").Find(&ownedScenes).Error; err != nil {
+			return err
+		}
+		for _, scene := range ownedScenes {
+			oldID := scene.ID
+			scene.ID = 0
+			scene.OrganizationID = currentOrganizationID(c)
+			scene.DramaID = created.DramaID
+			epID := created.ID
+			scene.EpisodeID = &epID
+			scene.CreatedAt = now
+			scene.UpdatedAt = now
+			scene.DeletedAt = nil
+			if err := tx.Create(&scene).Error; err != nil {
+				return err
+			}
+			sceneIDMap[oldID] = scene.ID
+		}
+
+		var sceneLinks []models.EpisodeScene
+		if err := tx.Where("episode_id = ?", source.ID).Find(&sceneLinks).Error; err != nil {
+			return err
+		}
+		for _, link := range sceneLinks {
+			if _, owned := sceneIDMap[link.SceneID]; owned {
+				continue
+			}
+			var scene models.Scene
+			if err := activeTx(tx).First(&scene, link.SceneID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					continue
+				}
+				return err
+			}
+			if err := tx.Create(&models.EpisodeScene{
+				OrganizationID: currentOrganizationID(c),
+				EpisodeID:      created.ID,
+				SceneID:        scene.ID,
+				CreatedAt:      now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		var shots []models.Storyboard
+		if err := tx.Where("episode_id = ? AND deleted_at IS NULL", source.ID).Order("storyboard_number").Find(&shots).Error; err != nil {
+			return err
+		}
+		for _, shot := range shots {
+			oldShotID := shot.ID
+			var sceneID *uint
+			if shot.SceneID != nil {
+				if mapped, ok := sceneIDMap[*shot.SceneID]; ok {
+					sceneID = &mapped
+				} else {
+					var shared models.Scene
+					if err := activeTx(tx).First(&shared, *shot.SceneID).Error; err == nil {
+						sceneID = shot.SceneID
+					}
+				}
+			}
+			copyShot := models.Storyboard{
+				OrganizationID:   currentOrganizationID(c),
+				EpisodeID:        created.ID,
+				SceneID:          sceneID,
+				StoryboardNumber: shot.StoryboardNumber,
+				Title:            shot.Title,
+				Location:         shot.Location,
+				Time:             shot.Time,
+				ShotType:         shot.ShotType,
+				Angle:            shot.Angle,
+				Movement:         shot.Movement,
+				Action:           shot.Action,
+				Result:           shot.Result,
+				Atmosphere:       shot.Atmosphere,
+				ImagePrompt:      shot.ImagePrompt,
+				VideoPrompt:      shot.VideoPrompt,
+				BGMPrompt:        shot.BGMPrompt,
+				SoundEffect:      shot.SoundEffect,
+				Dialogue:         shot.Dialogue,
+				Description:      shot.Description,
+				Duration:         shot.Duration,
+				ReferenceImages:  shot.ReferenceImages,
+				Status:           "pending",
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			}
+			if err := tx.Create(&copyShot).Error; err != nil {
+				return err
+			}
+			var sbChars []models.StoryboardCharacter
+			if err := tx.Where("storyboard_id = ?", oldShotID).Find(&sbChars).Error; err != nil {
+				return err
+			}
+			for _, link := range sbChars {
+				var character models.Character
+				if err := activeTx(tx).First(&character, link.CharacterID).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						continue
+					}
+					return err
+				}
+				if err := tx.Create(&models.StoryboardCharacter{
+					OrganizationID: currentOrganizationID(c),
+					StoryboardID:   copyShot.ID,
+					CharacterID:    character.ID,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		if drama.TotalEpisodes < next {
+			if err := tx.Model(&drama).Updates(map[string]any{
+				"total_episodes": next,
+				"updated_at":     now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		response.NotFound(c, "episode not found")
+		return
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "too long") {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ServerError(c, "failed to copy episode")
+		return
+	}
+	response.Created(c, gin.H{
+		"id": created.ID, "episode_number": created.EpisodeNumber, "title": created.Title,
+		"drama_id": created.DramaID, "status": created.Status,
+		"image_config_id": created.ImageConfigID, "video_config_id": created.VideoConfigID, "audio_config_id": created.AudioConfigID,
+	})
+}
+
+func (s *Server) moveEpisode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid episode id")
+		return
+	}
+	var body struct {
+		Direction string `json:"direction"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.BadRequest(c, "invalid body")
+		return
+	}
+	direction := strings.ToLower(strings.TrimSpace(body.Direction))
+	if direction != "up" && direction != "down" {
+		response.BadRequest(c, "direction must be up or down")
+		return
+	}
+
+	err = organizationDB(c).Transaction(func(tx *gorm.DB) error {
+		var current models.Episode
+		if err := activeTx(tx).First(&current, id).Error; err != nil {
+			return err
+		}
+		var sibling models.Episode
+		q := activeTx(tx).Where("drama_id = ?", current.DramaID)
+		if direction == "up" {
+			err = q.Where("episode_number < ?", current.EpisodeNumber).Order("episode_number desc").First(&sibling).Error
+		} else {
+			err = q.Where("episode_number > ?", current.EpisodeNumber).Order("episode_number asc").First(&sibling).Error
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("episode already at boundary")
+		}
+		if err != nil {
+			return err
+		}
+		now := response.Now()
+		// Capture numbers before Updates, because GORM mutates the model in memory.
+		currentNumber := current.EpisodeNumber
+		siblingNumber := sibling.EpisodeNumber
+		// temporary number avoids unique collisions if a composite unique index exists
+		temp := -int(current.ID)
+		if err := tx.Model(&current).Updates(map[string]any{"episode_number": temp, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&sibling).Updates(map[string]any{"episode_number": currentNumber, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&current).Updates(map[string]any{"episode_number": siblingNumber, "updated_at": now}).Error
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		response.NotFound(c, "episode not found")
+		return
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "boundary") {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ServerError(c, "failed to move episode")
 		return
 	}
 	response.Success(c, nil)

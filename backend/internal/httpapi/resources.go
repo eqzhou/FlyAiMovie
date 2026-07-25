@@ -23,6 +23,7 @@ func (s *Server) registerCharacters(api *gin.RouterGroup) {
 	g.DELETE("/:id", s.deleteCharacter)
 	g.POST("/:id/generate-voice-sample", s.characterVoiceSample)
 	g.POST("/:id/generate-image", s.characterGenerateImage)
+	g.POST("/:id/save-to-library", s.characterSaveToLibrary)
 	g.POST("/batch-generate-images", s.characterBatchImages)
 }
 
@@ -178,6 +179,40 @@ func (s *Server) deleteCharacter(c *gin.Context) {
 		return
 	}
 	response.Success(c, nil)
+}
+
+func (s *Server) characterSaveToLibrary(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		response.BadRequest(c, "invalid character id")
+		return
+	}
+	var ch models.Character
+	if err := findActiveCharacter(c, uint(id), &ch); err != nil {
+		response.NotFound(c, "character not found")
+		return
+	}
+	now := response.Now()
+	template := models.CharacterTemplate{
+		OrganizationID:  currentOrganizationID(c),
+		Name:            ch.Name,
+		Role:            ch.Role,
+		Description:     ch.Description,
+		Appearance:      ch.Appearance,
+		Personality:     ch.Personality,
+		VoiceStyle:      ch.VoiceStyle,
+		VoiceProvider:   ch.VoiceProvider,
+		ImageURL:        ch.ImageURL,
+		ReferenceImages: ch.ReferenceImages,
+		LocalPath:       ch.LocalPath,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := organizationDB(c).Create(&template).Error; err != nil {
+		response.ServerError(c, "failed to save character to library")
+		return
+	}
+	response.Created(c, template)
 }
 
 func (s *Server) characterVoiceSample(c *gin.Context) {

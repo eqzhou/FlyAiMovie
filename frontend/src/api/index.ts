@@ -61,6 +61,9 @@ export const dramaAPI = {
 export const episodeAPI = {
   create: (data: any) => api.post('/episodes', data),
   update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
+  del: (id: number) => api.del(`/episodes/${id}`),
+  copy: (id: number, data?: { title?: string }) => api.post(`/episodes/${id}/copy`, data || {}),
+  move: (id: number, direction: 'up' | 'down') => api.post(`/episodes/${id}/move`, { direction }),
   characters: (id: number) => api.get(`/episodes/${id}/characters`),
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
@@ -88,6 +91,7 @@ export const characterAPI = {
     api.post(`/characters/${id}/generate-image`, { episode_id: episodeId }),
   batchImages: (ids: number[], episodeId: number) =>
     api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId }),
+  saveToLibrary: (id: number) => api.post(`/characters/${id}/save-to-library`, {}),
   del: (id: number) => api.del(`/characters/${id}`),
 }
 

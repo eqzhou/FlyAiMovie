@@ -27,6 +27,7 @@ const styleLabels: Record<string, string> = { realistic: '写实', anime: '动�
 
 const id = computed(() => Number(route.params.id))
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
+const sortedEpisodes = computed(() => [...(drama.value?.episodes || [])].sort((a: any, b: any) => (a.episode_number || 0) - (b.episode_number || 0)))
 const projectSummary = computed(() => {
   const value = String(drama.value?.description || '').replace(/^#+\s*/gm, '').replace(/\s+/g, ' ').trim()
   return value || '暂无简介'
@@ -139,6 +140,54 @@ function openEpisode(episode: any) {
   router.push(`/drama/${id.value}/episode/${episode.episode_number}`)
 }
 
+async function delEpisode(episode: any, event?: Event) {
+  event?.stopPropagation()
+  event?.preventDefault()
+  const title = episode.title || `第 ${episode.episode_number} 集`
+  if (!confirm(`删除剧集「${title}」？相关分镜与制作记录将不再可用。`)) return
+  busy.value = `episode-del-${episode.id}`
+  try {
+    await episodeAPI.del(episode.id)
+    notify('剧集已删除')
+    await load()
+  } catch (reason) {
+    notify(reason instanceof Error ? reason.message : '删除剧集失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function copyEpisode(episode: any, event?: Event) {
+  event?.stopPropagation()
+  event?.preventDefault()
+  const title = episode.title || `第 ${episode.episode_number} 集`
+  busy.value = `episode-copy-${episode.id}`
+  try {
+    await episodeAPI.copy(episode.id)
+    notify(`已复制「${title}」`)
+    await load()
+  } catch (reason) {
+    notify(reason instanceof Error ? reason.message : '复制剧集失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function moveEpisode(episode: any, direction: 'up' | 'down', event?: Event) {
+  event?.stopPropagation()
+  event?.preventDefault()
+  busy.value = `episode-move-${episode.id}-${direction}`
+  try {
+    await episodeAPI.move(episode.id, direction)
+    notify(direction === 'up' ? '已上移' : '已下移')
+    await load()
+  } catch (reason) {
+    notify(reason instanceof Error ? reason.message : '调整顺序失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
 function statusText(status?: string) {
   return ({ draft: '草稿', processing: '制作中', completed: '已完成', failed: '失败' } as Record<string, string>)[status || ''] || status || '草稿'
 }
@@ -169,12 +218,18 @@ onMounted(load)
     </div>
 
     <section v-if="activeView === 'episodes'" class="settings-section" role="tabpanel">
-      <div class="settings-section-head"><div><h2>剧集</h2><p class="muted">{{ drama.episodes?.length || 0 }} 集 · 按制作顺序进入工作台</p></div><button v-if="canEdit" class="btn btn-primary" @click="openEpisodeDialog">新增剧集</button></div>
-      <div v-if="drama.episodes?.length" class="episode-grid">
-        <article v-for="episode in drama.episodes" :key="episode.id" class="card episode-card" role="button" tabindex="0" @click="openEpisode(episode)" @keydown.enter="openEpisode(episode)" @keydown.space.prevent="openEpisode(episode)">
+      <div class="settings-section-head"><div><h2>剧集</h2><p class="muted">{{ sortedEpisodes.length }} 集 · 按制作顺序进入工作台</p></div><button v-if="canEdit" class="btn btn-primary" @click="openEpisodeDialog">新增剧集</button></div>
+      <div v-if="sortedEpisodes.length" class="episode-grid">
+        <article v-for="(episode, episodeIndex) in sortedEpisodes" :key="episode.id" class="card episode-card" role="button" tabindex="0" @click="openEpisode(episode)" @keydown.enter="openEpisode(episode)" @keydown.space.prevent="openEpisode(episode)">
           <div class="episode-number">{{ String(episode.episode_number).padStart(2, '0') }}</div>
           <div class="episode-main"><div class="episode-title-row"><h3>{{ episode.title || `第 ${episode.episode_number} 集` }}</h3><span class="audit-status" :class="episode.status === 'failed' ? 'fail' : episode.status === 'completed' ? 'ok' : ''">{{ statusText(episode.status) }}</span></div><p class="muted">{{ episode.script_content ? '剧本已就绪' : '等待录入或生成剧本' }}</p></div>
-          <span class="episode-enter">进入工作台</span>
+          <div class="episode-actions" @click.stop>
+            <button v-if="canEdit" type="button" class="btn btn-ghost" :aria-label="`上移剧集 ${episode.title || ('第 ' + episode.episode_number + ' 集')}`" title="上移" :disabled="!!busy || episodeIndex === 0" @click="moveEpisode(episode, 'up', $event)">上移</button>
+            <button v-if="canEdit" type="button" class="btn btn-ghost" :aria-label="`下移剧集 ${episode.title || ('第 ' + episode.episode_number + ' 集')}`" title="下移" :disabled="!!busy || episodeIndex === sortedEpisodes.length - 1" @click="moveEpisode(episode, 'down', $event)">下移</button>
+            <button v-if="canEdit" type="button" class="btn btn-ghost" :aria-label="`复制剧集 ${episode.title || ('第 ' + episode.episode_number + ' 集')}`" title="复制剧集" :disabled="!!busy" @click="copyEpisode(episode, $event)">复制</button>
+            <button v-if="canEdit" type="button" class="btn btn-ghost" :aria-label="`删除剧集 ${episode.title || ('第 ' + episode.episode_number + ' 集')}`" title="删除剧集" :disabled="!!busy" @click="delEpisode(episode, $event)">删除</button>
+            <span class="episode-enter">进入工作台</span>
+          </div>
         </article>
       </div>
       <div v-else class="empty project-empty"><strong>还没有剧集</strong><span class="muted">创建第一集后即可进入 AI 制作工作台。</span><button v-if="canEdit" class="btn btn-primary" @click="openEpisodeDialog">新增剧集</button></div>

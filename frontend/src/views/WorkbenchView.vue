@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, Plus, RefreshCw, Settings2, WandSparkles } from 'lucide-vue-next'
 import {
-  agentAPI, characterAPI, composeAPI, dramaAPI, episodeAPI, gridAPI,
+  agentAPI, characterAPI, characterLibraryAPI, composeAPI, dramaAPI, episodeAPI, gridAPI,
   mergeAPI, sceneAPI, settingsAPI, storyboardAPI
   , assetAPI, jobsAPI, productionAPI, uploadAPI
 } from '../api'
@@ -69,6 +69,11 @@ const characterForm = ref<any | null>(null)
 const sceneForm = ref<any | null>(null)
 const sceneTransfer = ref<any | null>(null)
 const storyboardForm = ref<any | null>(null)
+const showCharacterLibraryImport = ref(false)
+const characterLibraryTemplates = ref<any[]>([])
+const characterLibraryQuery = ref('')
+const characterLibraryError = ref('')
+const characterLibraryLoading = ref(false)
 const selectedStoryboardId = ref<number | null>(null)
 const promptEditor = ref<any | null>(null)
 const episodeConfigForm = ref<any | null>(null)
@@ -111,6 +116,12 @@ const productionServices = computed(() => ['text', 'image', 'video', 'audio'].ma
 const missingProductionServices = computed(() => productionServices.value.filter((item) => !item.config))
 const productionReady = computed(() => missingProductionServices.value.length === 0)
 const productionUsesExternalService = computed(() => productionServices.value.some((item) => item.config && item.config.provider !== 'mock'))
+const filteredCharacterLibraryTemplates = computed(() => {
+  const keyword = characterLibraryQuery.value.trim().toLocaleLowerCase('zh-CN')
+  if (!keyword) return characterLibraryTemplates.value
+  return characterLibraryTemplates.value.filter((template) => [template.name, template.role, template.appearance, template.personality, template.voice_style]
+    .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword)))
+})
 const stages = computed(() => [
   { id: 'script', label: '剧本', detail: status.value?.has_script ? '已就绪' : '待完成', complete: Boolean(status.value?.has_script) },
   { id: 'cast', label: '角色与场景', detail: `${status.value?.characters || 0} 角色 · ${status.value?.scenes || 0} 场景`, complete: Boolean(status.value?.characters && status.value?.scenes) },
@@ -594,6 +605,55 @@ async function removeCharacter(character: any) {
     show('角色已删除')
     await refreshAssets()
   } catch (e: any) { show(e.message) }
+}
+
+async function saveCharacterToLibrary(character: any) {
+  busy.value = `char-library-${character.id}`
+  try {
+    await characterAPI.saveToLibrary(character.id)
+    show(`已将「${character.name}」保存到角色库`)
+  } catch (e: any) {
+    show(e.message || '保存到角色库失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function openCharacterLibraryImport() {
+  showCharacterLibraryImport.value = true
+  characterLibraryError.value = ''
+  characterLibraryQuery.value = ''
+  characterLibraryLoading.value = true
+  try {
+    characterLibraryTemplates.value = listOf(await characterLibraryAPI.list())
+  } catch (e: any) {
+    characterLibraryTemplates.value = []
+    characterLibraryError.value = e.message || '角色库加载失败'
+  } finally {
+    characterLibraryLoading.value = false
+  }
+}
+
+function closeCharacterLibraryImport() {
+  showCharacterLibraryImport.value = false
+  characterLibraryError.value = ''
+  characterLibraryQuery.value = ''
+}
+
+async function importCharacterFromLibrary(template: any) {
+  if (!episode.value?.id) return
+  busy.value = `char-import-${template.id}`
+  characterLibraryError.value = ''
+  try {
+    await characterLibraryAPI.import(template.id, dramaId.value, episode.value.id)
+    show(`已从角色库导入「${template.name}」`)
+    closeCharacterLibraryImport()
+    await refreshAssets()
+  } catch (e: any) {
+    characterLibraryError.value = e.message || '导入角色失败'
+  } finally {
+    busy.value = ''
+  }
 }
 
 async function editScene(scene?: any) {
@@ -1337,6 +1397,7 @@ onUnmounted(stopPoll)
               <button class="btn btn-primary" :disabled="!!busy" @click="runAgent('extractor', '请提取本集角色与场景并去重保存')">AI 提取</button>
               <button class="btn" :disabled="!!busy" @click="runAgent('voice_assigner', '请为所有角色分配音色')">AI 分配音色</button>
               <button class="btn" :disabled="!!busy || !characters.length" @click="batchCharImages">批量角色图</button>
+              <button class="btn" :disabled="!!busy" @click="openCharacterLibraryImport">从角色库导入</button>
               <button class="btn" :disabled="!!busy" @click="editCharacter()">添加角色</button>
             </div>
             <h3 class="section-title">角色</h3>
@@ -1370,6 +1431,7 @@ onUnmounted(stopPoll)
                       <button class="btn" :disabled="!!busy" @click="assignCharId = assignCharId===c.id ? null : c.id">音色</button>
                       <button class="btn" :disabled="!!busy || !c.voice_style" @click="voiceSample(c)">试听</button>
                       <button class="btn" :disabled="!!busy" @click="editCharacter(c)">编辑</button>
+                      <button class="btn" :disabled="!!busy" @click="saveCharacterToLibrary(c)">存入角色库</button>
                       <button class="btn btn-danger" :disabled="!!busy" @click="removeCharacter(c)">删除</button>
                     </div>
                   </div>
@@ -1663,6 +1725,33 @@ onUnmounted(stopPoll)
         <p v-if="characterError" class="form-error" role="alert">{{ characterError }}</p>
         <div class="modal-actions"><button class="btn" type="button" @click="characterForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'character-save' ? '保存中…' : '保存角色' }}</button></div>
       </form>
+    </div>
+
+    <div v-if="showCharacterLibraryImport" class="modal-mask" @click.self="closeCharacterLibraryImport">
+      <div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-character-library-title" @keydown.esc="closeCharacterLibraryImport">
+        <h3 id="import-character-library-title">从角色库导入</h3>
+        <p class="muted character-import-note">导入后会创建本集独立角色副本，并链接到当前剧集。</p>
+        <label class="library-search"><span class="sr-only">搜索角色模板</span><input v-model="characterLibraryQuery" type="search" aria-label="搜索角色模板" placeholder="搜索名称、定位或音色" /></label>
+        <div v-if="characterLibraryLoading" class="empty">正在加载角色库…</div>
+        <div v-else-if="filteredCharacterLibraryTemplates.length" class="list character-library-picker">
+          <div v-for="template in filteredCharacterLibraryTemplates" :key="template.id" class="list-item">
+            <div class="row between">
+              <div class="stack">
+                <h4>{{ template.name }} <span class="muted">{{ template.role || '未设置定位' }}</span></h4>
+                <p class="muted sm">{{ template.appearance || template.personality || '暂无设定' }}</p>
+                <p class="muted sm mt-6">音色：{{ template.voice_style || '未绑定' }}</p>
+              </div>
+              <div class="row column-end">
+                <img v-if="template.image_url" class="thumb" :src="template.image_url" :alt="`${template.name} 角色形象`" />
+                <button class="btn btn-primary" type="button" :disabled="!!busy" @click="importCharacterFromLibrary(template)">导入本集</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty">{{ characterLibraryTemplates.length ? '没有匹配的角色模板' : '角色库还是空的，可先把现有角色存入角色库' }}</div>
+        <p v-if="characterLibraryError" class="form-error" role="alert">{{ characterLibraryError }}</p>
+        <div class="modal-actions"><button class="btn" type="button" @click="closeCharacterLibraryImport">关闭</button></div>
+      </div>
     </div>
 
     <div v-if="sceneForm" class="modal-mask" @click.self="sceneForm=null">

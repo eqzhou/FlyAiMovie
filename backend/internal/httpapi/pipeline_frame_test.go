@@ -8,7 +8,6 @@ import (
 
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
-	"github.com/eqzhou/flyaimovie/internal/response"
 )
 
 func TestStoryboardFrameGenerationValidatesAndPersistsComposedFrame(t *testing.T) {
@@ -309,15 +308,218 @@ func TestSoftDeletedResourcesRejectMutations(t *testing.T) {
 		t.Fatalf("create prop on deleted drama status=%d body=%s", resp.Code, resp.Body.String())
 	}
 
-	// Soft-delete the episode directly and ensure further writes are rejected.
-	now := response.Now()
-	if err := db.DB.Model(&models.Episode{}).Where("id = ?", episodeID).Update("deleted_at", now).Error; err != nil {
-		t.Fatalf("soft-delete episode: %v", err)
+	// Soft-delete the episode via API and ensure further writes are rejected.
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(episodeID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(episodeID), "", nil); resp.Code != http.StatusNotFound {
+		t.Fatalf("delete episode twice status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"content":"after delete"}`, nil); resp.Code != http.StatusNotFound {
 		t.Fatalf("update deleted episode status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	if resp := performRequest(router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"title":"新镜头"}`, nil); resp.Code != http.StatusBadRequest && resp.Code != http.StatusNotFound {
 		t.Fatalf("create storyboard on deleted episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestCopyEpisodeDuplicatesScriptScenesAndStoryboards(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"剧集复制","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	detail := requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ := detail["episodes"].([]any)
+	if len(episodes) == 0 {
+		t.Fatal("drama should auto-create at least one episode")
+	}
+	episode := episodes[0].(map[string]any)
+	episodeID := uintField(t, episode, "id")
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"title":"第一集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("seed episode configs status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(episodeID), `{"content":"雨夜重逢","script_content":"## S01 | 内景 · 客厅 | 夜\n林舟：你终于来了。"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("seed episode content status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	character := requestData(t, router, http.MethodPost, "/api/v1/characters", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"name":"林舟","role":"男主"}`)
+	characterID := uintField(t, character, "id")
+	scene := requestData(t, router, http.MethodPost, "/api/v1/scenes", `{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"location":"客厅","time":"夜","prompt":"warm interior"}`)
+	sceneID := uintField(t, scene, "id")
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards", `{"episode_id":`+itoa(episodeID)+`,"scene_id":`+itoa(sceneID)+`,"title":"开场","image_prompt":"quiet room","character_ids":[`+itoa(characterID)+`]}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	sourceNumber := int(episode["episode_number"].(float64))
+	copied := requestData(t, router, http.MethodPost, "/api/v1/episodes/"+itoa(episodeID)+"/copy", `{}`)
+	copiedID := uintField(t, copied, "id")
+	if copiedID == episodeID {
+		t.Fatal("copy returned same episode id")
+	}
+	copiedNumber := int(copied["episode_number"].(float64))
+	if copiedNumber <= sourceNumber {
+		t.Fatalf("episode_number=%v want > %d", copied["episode_number"], sourceNumber)
+	}
+	if title, _ := copied["title"].(string); !strings.Contains(title, "副本") {
+		t.Fatalf("title=%q want 副本 suffix", title)
+	}
+
+	detail = requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ = detail["episodes"].([]any)
+	if len(episodes) != 2 {
+		t.Fatalf("drama episodes=%d want 2", len(episodes))
+	}
+
+	charList := requestSlice(t, router, "/api/v1/episodes/"+itoa(copiedID)+"/characters")
+	if len(charList) != 1 {
+		t.Fatalf("copied characters=%d want 1 (%v)", len(charList), charList)
+	}
+	if uintField(t, charList[0], "id") != characterID {
+		t.Fatalf("copied character should reuse original id")
+	}
+
+	sceneList := requestSlice(t, router, "/api/v1/episodes/"+itoa(copiedID)+"/scenes")
+	if len(sceneList) != 1 {
+		t.Fatalf("copied scenes=%d want 1", len(sceneList))
+	}
+	copiedSceneID := uintField(t, sceneList[0], "id")
+	if copiedSceneID == sceneID {
+		t.Fatal("owned scene should be duplicated, not shared by id")
+	}
+
+	shotList := requestSlice(t, router, "/api/v1/episodes/"+itoa(copiedID)+"/storyboards")
+	if len(shotList) != 1 {
+		t.Fatalf("copied storyboards=%d want 1", len(shotList))
+	}
+	shot := shotList[0]
+	if uintField(t, shot, "id") == storyboardID {
+		t.Fatal("storyboard should be duplicated")
+	}
+	if shot["title"] != "开场" || shot["image_prompt"] != "quiet room" {
+		t.Fatalf("storyboard fields not copied: %+v", shot)
+	}
+	if videoURL, _ := shot["video_url"].(string); videoURL != "" {
+		t.Fatalf("generated video_url should not copy: %v", videoURL)
+	}
+	cids, _ := shot["character_ids"].([]any)
+	if len(cids) != 1 || uint(cids[0].(float64)) != characterID {
+		t.Fatalf("character_ids=%v want [%d]", cids, characterID)
+	}
+
+	// Deleted episode cannot be copied.
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(episodeID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete source status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(episodeID)+"/copy", `{}`, nil); resp.Code != http.StatusNotFound {
+		t.Fatalf("copy deleted episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func requestSlice(t *testing.T, router http.Handler, path string) []map[string]any {
+	t.Helper()
+	res := performRequest(router, http.MethodGet, path, "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET %s status=%d body=%s", path, res.Code, res.Body.String())
+	}
+	payload := decodeResponse(t, res)
+	raw, ok := payload["data"].([]any)
+	if !ok {
+		t.Fatalf("GET %s: expected array data, got %#v", path, payload["data"])
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("GET %s: item is not object: %#v", path, item)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func TestMoveEpisodeReordersWithinDrama(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfigID := createMockConfig(t, router, "image")
+	videoConfigID := createMockConfig(t, router, "video")
+	audioConfigID := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"剧集重排","total_episodes":2}`)
+	dramaID := uintField(t, drama, "id")
+	detail := requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ := detail["episodes"].([]any)
+	if len(episodes) < 2 {
+		// ensure second episode exists
+		_ = requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"title":"第二集","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`)
+		detail = requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+		episodes, _ = detail["episodes"].([]any)
+	}
+	if len(episodes) < 2 {
+		t.Fatalf("need at least 2 episodes, got %d", len(episodes))
+	}
+	// normalize titles/configs for stability
+	first := episodes[0].(map[string]any)
+	second := episodes[1].(map[string]any)
+	firstID := uintField(t, first, "id")
+	secondID := uintField(t, second, "id")
+	firstNum := int(first["episode_number"].(float64))
+	secondNum := int(second["episode_number"].(float64))
+	if firstNum >= secondNum {
+		t.Fatalf("expected ordered episodes, got %d then %d", firstNum, secondNum)
+	}
+	for _, item := range []struct {
+		id    uint
+		title string
+	}{{firstID, "第一集"}, {secondID, "第二集"}} {
+		if resp := performRequest(router, http.MethodPut, "/api/v1/episodes/"+itoa(item.id), `{"title":"`+item.title+`","image_config_id":`+itoa(imageConfigID)+`,"video_config_id":`+itoa(videoConfigID)+`,"audio_config_id":`+itoa(audioConfigID)+`}`, nil); resp.Code != http.StatusOK {
+			t.Fatalf("seed episode %d status=%d body=%s", item.id, resp.Code, resp.Body.String())
+		}
+	}
+
+	// move second episode up -> should swap with first
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(secondID)+"/move", `{"direction":"up"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("move up status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	detail = requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ = detail["episodes"].([]any)
+	if len(episodes) < 2 {
+		t.Fatalf("episodes missing after move: %d", len(episodes))
+	}
+	byID := map[uint]int{}
+	for _, raw := range episodes {
+		ep := raw.(map[string]any)
+		byID[uintField(t, ep, "id")] = int(ep["episode_number"].(float64))
+	}
+	if byID[secondID] != firstNum || byID[firstID] != secondNum {
+		t.Fatalf("after move up: first=%d second=%d want first=%d second=%d", byID[firstID], byID[secondID], secondNum, firstNum)
+	}
+
+	// move back down
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(secondID)+"/move", `{"direction":"down"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("move down status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	detail = requestData(t, router, http.MethodGet, "/api/v1/dramas/"+itoa(dramaID), "")
+	episodes, _ = detail["episodes"].([]any)
+	byID = map[uint]int{}
+	for _, raw := range episodes {
+		ep := raw.(map[string]any)
+		byID[uintField(t, ep, "id")] = int(ep["episode_number"].(float64))
+	}
+	if byID[firstID] != firstNum || byID[secondID] != secondNum {
+		t.Fatalf("after move down: first=%d second=%d want first=%d second=%d", byID[firstID], byID[secondID], firstNum, secondNum)
+	}
+
+	// boundary: first episode cannot move up
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(firstID)+"/move", `{"direction":"up"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("boundary up status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	// invalid direction
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(firstID)+"/move", `{"direction":"sideways"}`, nil); resp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid direction status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	// deleted episode cannot move
+	if resp := performRequest(router, http.MethodDelete, "/api/v1/episodes/"+itoa(secondID), "", nil); resp.Code != http.StatusOK {
+		t.Fatalf("delete episode status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(router, http.MethodPost, "/api/v1/episodes/"+itoa(secondID)+"/move", `{"direction":"up"}`, nil); resp.Code != http.StatusNotFound {
+		t.Fatalf("move deleted status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }

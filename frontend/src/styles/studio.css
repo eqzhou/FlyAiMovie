@@ -478,6 +478,7 @@ button { cursor: pointer; }
 .character-library-empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 0; }
 .character-import-name { margin: 0 0 16px; font-weight: 700; }
 .character-import-note { margin: 4px 0 16px; font-size: 13px; }
+.character-library-picker { max-height: min(52vh, 420px); overflow: auto; margin: 12px 0; display: grid; gap: 10px; }
 .project-head-actions { flex: 0 0 auto; flex-wrap: nowrap; align-self: flex-start; margin: 0; }
 .project-description { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .episode-grid { display: grid; gap: 10px; }
@@ -489,6 +490,8 @@ button { cursor: pointer; }
 .episode-title-row h3 { margin: 0; font-size: 16px; }
 .episode-main p { margin: 7px 0 0; font-size: 13px; }
 .episode-enter { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.episode-actions { display: flex; align-items: center; gap: 8px; }
+.episode-actions .btn { white-space: nowrap; }
 .project-empty { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
 .project-asset-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
 .project-asset-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 9px 12px; }
@@ -909,6 +912,7 @@ label.btn:has(.file-input-hidden:focus-visible) { outline: 2px solid var(--accen
   .episode-card { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
   .episode-number { font-size: 18px; }
   .episode-enter { display: none; }
+  .episode-actions { justify-self: end; }
   .project-asset-list { padding: 0 12px; }
   .cast-layout .row.between, .export-status .row.between { flex-direction: column; }
   .row.column-end { align-items: stretch; }
