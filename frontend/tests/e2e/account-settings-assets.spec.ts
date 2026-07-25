@@ -108,9 +108,9 @@ async function mockAccountAPI(page: Page, options: {
     else if (path === '/api/v1/dramas') data = { items: [{ id: 2, title: '素材项目', episodes: [{ id: 20, episode_number: 1, title: '第一集' }] }] }
     else if (path === '/api/v1/dramas/2') data = {
       id: 2, title: '素材项目', description: '用于体验项目工作流', style: 'realistic',
-      episodes: [{ id: 20, episode_number: 1, title: '第一集', status: 'draft', script_content: '' }],
-      characters: [{ id: 50, name: '阿宁', role: '主角', appearance: '短发' }],
-      scenes: [{ id: 60, location: '旧车站', time: '夜', description: '雨夜站台' }], props: [],
+      episodes: [{ id: 20, episode_number: 1, title: '第一集', status: 'draft', script_content: '', image_config_id: 10, video_config_id: 11, audio_config_id: 12 }],
+      characters: [{ id: 50, name: '阿宁', role: '主角', appearance: '短发', voice_style: 'female-shaonv', voice_provider: 'mock' }],
+      scenes: [{ id: 60, location: '旧车站', time: '夜', description: '雨夜站台', prompt: '雨夜站台' }], props: [],
     }
     else if (path === '/api/v1/props') data = [{ id: 70, name: '旧雨伞', description: '黑色长柄伞', image_url: '' }]
     else if (path === '/api/v1/assets') data = [
@@ -424,7 +424,32 @@ test('desktop: editors can preview voices without managing the catalog', async (
 })
 
 test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
+  let createdCharacter: Request | undefined
+  let updatedCharacter: Request | undefined
+  let deletedCharacter: Request | undefined
+  let createdScene: Request | undefined
+  let updatedScene: Request | undefined
+  let copiedScene: Request | undefined
+  let updatedEpisode: Request | undefined
+  let characterImage: Request | undefined
+  let characterVoice: Request | undefined
+  let characterLibrary: Request | undefined
+  let sceneImage: Request | undefined
   await mockAccountAPI(page, { signedIn: true })
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v1/characters' && request.method() === 'POST') createdCharacter = request
+    if (path === '/api/v1/characters/50' && request.method() === 'PUT') updatedCharacter = request
+    if (path === '/api/v1/characters/50' && request.method() === 'DELETE') deletedCharacter = request
+    if (path === '/api/v1/characters/50/generate-image' && request.method() === 'POST') characterImage = request
+    if (path === '/api/v1/characters/50/generate-voice-sample' && request.method() === 'POST') characterVoice = request
+    if (path === '/api/v1/characters/50/save-to-library' && request.method() === 'POST') characterLibrary = request
+    if (path === '/api/v1/scenes' && request.method() === 'POST') createdScene = request
+    if (path === '/api/v1/scenes/60' && request.method() === 'PUT') updatedScene = request
+    if (path === '/api/v1/scenes/60/copy' && request.method() === 'POST') copiedScene = request
+    if (path === '/api/v1/scenes/60/generate-image' && request.method() === 'POST') sceneImage = request
+    if (path === '/api/v1/episodes/20' && request.method() === 'PUT') updatedEpisode = request
+  })
   await page.goto('/drama/2')
 
   await expect(page.getByRole('heading', { name: '素材项目' })).toBeVisible()
@@ -439,12 +464,69 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   await expect(episodeDialog.getByLabel('音频服务')).toHaveValue('12')
   await episodeDialog.getByRole('button', { name: '取消' }).click()
 
+  await page.locator('.episode-actions').getByRole('button', { name: '编辑剧集 第一集' }).click()
+  const editEpisodeDialog = page.getByRole('dialog', { name: '编辑剧集' })
+  await expect(editEpisodeDialog.getByLabel('标题（选填）')).toHaveValue('第一集')
+  await editEpisodeDialog.getByLabel('标题（选填）').fill('第一集·修订')
+  await editEpisodeDialog.getByRole('button', { name: '保存剧集' }).click()
+  expect(updatedEpisode?.postDataJSON()).toMatchObject({
+    title: '第一集·修订',
+    image_config_id: 10,
+    video_config_id: 11,
+    audio_config_id: 12,
+  })
+
   await projectNavigation.getByRole('tab', { name: '项目资产' }).click()
   const assetNavigation = page.getByRole('tablist', { name: '资产类型' })
   await expect(assetNavigation.getByRole('tab', { name: '角色 1' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('阿宁', { exact: true })).toBeVisible()
+
+  const characterRow = page.getByRole('row', { name: /阿宁/ })
+  await characterRow.getByRole('button', { name: '生成形象' }).click()
+  expect(characterImage?.postDataJSON()).toMatchObject({ episode_id: 20 })
+  await characterRow.getByRole('button', { name: '试听' }).click()
+  expect(characterVoice?.postDataJSON()).toMatchObject({ episode_id: 20 })
+  await characterRow.getByRole('button', { name: '存入角色库' }).click()
+  expect(characterLibrary).toBeTruthy()
+  await characterRow.getByRole('button', { name: '编辑' }).click()
+  const editCharacterDialog = page.getByRole('dialog', { name: '编辑角色' })
+  await expect(editCharacterDialog.getByLabel(/名称.*\*/)).toHaveValue('阿宁')
+  await editCharacterDialog.getByLabel('定位').fill('核心主角')
+  await editCharacterDialog.getByRole('button', { name: '保存角色' }).click()
+  expect(updatedCharacter?.postDataJSON()).toMatchObject({ name: '阿宁', role: '核心主角' })
+
+  await page.getByRole('button', { name: '添加角色' }).click()
+  const createCharacterDialog = page.getByRole('dialog', { name: '添加角色' })
+  await createCharacterDialog.getByLabel(/名称.*\*/).fill('阿澈')
+  await createCharacterDialog.getByLabel('定位').fill('配角')
+  await createCharacterDialog.getByRole('button', { name: '添加角色' }).click()
+  expect(createdCharacter?.postDataJSON()).toMatchObject({ drama_id: 2, name: '阿澈', role: '配角' })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await characterRow.getByRole('button', { name: '删除' }).click()
+  expect(deletedCharacter).toBeTruthy()
+
   await assetNavigation.getByRole('tab', { name: '场景 1' }).click()
   await expect(page.getByText('旧车站', { exact: true })).toBeVisible()
+  const sceneRow = page.getByRole('row', { name: /旧车站/ })
+  await sceneRow.getByRole('button', { name: '生成场景' }).click()
+  expect(sceneImage?.postDataJSON()).toMatchObject({ episode_id: 20 })
+  await sceneRow.getByRole('button', { name: '复制' }).click()
+  const copySceneDialog = page.getByRole('dialog', { name: '复制场景' })
+  await expect(copySceneDialog.getByLabel('目标剧集')).toHaveValue('20')
+  await copySceneDialog.getByRole('button', { name: '确认复制' }).click()
+  expect(copiedScene?.postDataJSON()).toMatchObject({ episode_id: 20 })
+  await sceneRow.getByRole('button', { name: '编辑' }).click()
+  const editSceneDialog = page.getByRole('dialog', { name: '编辑场景' })
+  await editSceneDialog.getByLabel(/地点.*\*/).fill('旧车站·站台')
+  await editSceneDialog.getByRole('button', { name: '保存场景' }).click()
+  expect(updatedScene?.postDataJSON()).toMatchObject({ location: '旧车站·站台' })
+  await page.getByRole('button', { name: '添加场景' }).click()
+  const createSceneDialog = page.getByRole('dialog', { name: '添加场景' })
+  await createSceneDialog.getByLabel(/地点.*\*/).fill('码头')
+  await createSceneDialog.getByRole('button', { name: '添加场景' }).click()
+  expect(createdScene?.postDataJSON()).toMatchObject({ drama_id: 2, location: '码头' })
+
   await assetNavigation.getByRole('tab', { name: '道具 1' }).click()
   await expect(page.getByText('旧雨伞', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '添加道具' }).click()
