@@ -75,6 +75,11 @@ func AutoMigrate(gdb *gorm.DB) error {
 	if err := gdb.Exec("DROP INDEX IF EXISTS idx_asset_grid_cell").Error; err != nil {
 		return err
 	}
+	// SQLite cannot add a NOT NULL column without a default to an existing table.
+	// Pre-create nullable timestamp columns and backfill before GORM enforces NOT NULL.
+	if err := prepareSQLiteNotNullTextColumns(gdb); err != nil {
+		return err
+	}
 	if err := gdb.AutoMigrate(
 		&models.Organization{},
 		&models.User{},
@@ -118,11 +123,59 @@ func AutoMigrate(gdb *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	// GORM may rebuild SQLite tables when promoting nullable columns to NOT NULL.
+	// Re-run the backfill so empty timestamps cannot survive the rebuild.
+	if err := prepareSQLiteNotNullTextColumns(gdb); err != nil {
+		return err
+	}
 	// Replaced by the organization-scoped composite unique index.
 	if err := gdb.Exec("DROP INDEX IF EXISTS idx_ai_voices_voice_id").Error; err != nil {
 		return err
 	}
 	return backfillPromptTemplateRevisions(gdb)
+}
+
+
+// prepareSQLiteNotNullTextColumns adds missing text timestamps as nullable, then
+// backfills them so subsequent AutoMigrate can enforce NOT NULL safely.
+func prepareSQLiteNotNullTextColumns(gdb *gorm.DB) error {
+	if gdb.Dialector.Name() != "sqlite" {
+		return nil
+	}
+	type columnTarget struct {
+		table  string
+		column string
+	}
+	targets := []columnTarget{
+		{table: "ai_voices", column: "updated_at"},
+		{table: "ai_voices", column: "created_at"},
+	}
+	ts := response.Now()
+	for _, target := range targets {
+		if !gdb.Migrator().HasTable(target.table) {
+			continue
+		}
+		if !gdb.Migrator().HasColumn(target.table, target.column) {
+			if err := gdb.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s text", target.table, target.column)).Error; err != nil {
+				return err
+			}
+		}
+		// Prefer created_at when present so rebuilt rows keep a stable timestamp.
+		query := fmt.Sprintf(
+			"UPDATE %s SET %s = COALESCE(NULLIF(%s, ''), NULLIF(created_at, ''), ?) WHERE %s IS NULL OR %s = ''",
+			target.table, target.column, target.column, target.column, target.column,
+		)
+		if target.column == "created_at" {
+			query = fmt.Sprintf(
+				"UPDATE %s SET %s = COALESCE(NULLIF(%s, ''), ?) WHERE %s IS NULL OR %s = ''",
+				target.table, target.column, target.column, target.column, target.column,
+			)
+		}
+		if err := gdb.Exec(query, ts).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func promptTemplateRevision(row models.PromptTemplate) models.PromptTemplateRevision {

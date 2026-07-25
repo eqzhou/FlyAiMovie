@@ -81,6 +81,7 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - 前端 `npm audit`（registry.npmjs.org）报告 0 vulnerabilities。
 - Go 模块依赖已升级：`golang.org/x/net`、`golang.org/x/text`、`golang.org/x/crypto`、`github.com/jackc/pgx/v5`；`go test ./...` 通过。
 - 本机 Go toolchain 已升级到 **1.26.5**；`govulncheck ./...` 对代码可达漏洞报告 **0**。
+- SQLite Compose 冷启动：修复 `ai_voices.updated_at` 旧库迁移后，本机 Colima + `docker compose -f docker-compose.sqlite.yml` 可 healthy 启动，并在空闲端口（如 `15790`）通过 `GET /api/v1/health`；注意本机 `5679/5680` 可能被 Node/SSH 转发占用。
 - 厂商/SMTP live smoke 测试在本机可跳过运行；未配置 `SMOKE_*` 时不会假阳性通过。
 
 仍依赖外部账号或环境，不能在本机闭环：

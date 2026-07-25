@@ -192,3 +192,43 @@ func TestMigrationAndSeedingReportClosedDatabase(t *testing.T) {
 		t.Fatal("seeding on closed database succeeded")
 	}
 }
+
+func TestAutoMigrateAddsAIVoiceUpdatedAtOnLegacySQLite(t *testing.T) {
+	path := t.TempDir() + "/legacy-ai-voices.db"
+	database, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create a legacy ai_voices table without updated_at to reproduce the Compose cold-start failure.
+	if err := database.Exec(`CREATE TABLE ai_voices (
+		id integer PRIMARY KEY AUTOINCREMENT,
+		voice_id text NOT NULL,
+		voice_name text NOT NULL,
+		description text,
+		language text,
+		provider text NOT NULL,
+		created_at text NOT NULL,
+		organization_id integer NOT NULL DEFAULT 0,
+		capabilities text,
+		is_active numeric NOT NULL DEFAULT true
+	)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec(`INSERT INTO ai_voices (voice_id, voice_name, provider, created_at, organization_id, is_active)
+		VALUES ('legacy-voice', 'Legacy Voice', 'mock', '2026-01-01T00:00:00Z', 1, 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatalf("AutoMigrate failed on legacy ai_voices table: %v", err)
+	}
+	if !database.Migrator().HasColumn(&models.AIVoice{}, "updated_at") {
+		t.Fatal("updated_at column was not added")
+	}
+	var voice models.AIVoice
+	if err := database.Where("voice_id = ?", "legacy-voice").First(&voice).Error; err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(voice.UpdatedAt) == "" {
+		t.Fatal("updated_at was not backfilled")
+	}
+}
