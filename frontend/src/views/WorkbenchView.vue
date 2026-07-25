@@ -1119,6 +1119,32 @@ async function removeStoryboard(storyboard: any) {
   }
 }
 
+async function copyStoryboard(storyboard: any) {
+  busy.value = `storyboard-copy-${storyboard.id}`
+  try {
+    const copied = await storyboardAPI.copy(storyboard.id)
+    show(`已复制镜头「${storyboard.title || ('#' + storyboard.storyboard_number)}」`)
+    await refreshAssets()
+    if (copied?.id) selectedStoryboardId.value = copied.id
+  } catch (error: any) {
+    show(error.message || '复制分镜失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function moveStoryboard(storyboard: any, direction: 'up' | 'down') {
+  busy.value = `storyboard-move-${storyboard.id}`
+  try {
+    await storyboardAPI.move(storyboard.id, direction)
+    show(direction === 'up' ? '镜头已上移' : '镜头已下移')
+    await refreshAssets()
+  } catch (error: any) {
+    show(error.message || '调整镜头顺序失败')
+  } finally {
+    busy.value = ''
+  }
+}
 
 async function saveShot(sb: any, fields: Record<string, any>) {
   busy.value = 'save-shot-' + sb.id
@@ -1622,6 +1648,9 @@ onUnmounted(stopPoll)
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'image_prompt','图片提示词')">改图词</button>
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'video_prompt','视频提示词')">改视频词</button>
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'dialogue','对白')">改对白</button>
+                <button class="btn btn-ghost" :disabled="!!busy || storyboards.findIndex((item) => item.id === selectedStoryboard.id) === 0" @click="moveStoryboard(selectedStoryboard, 'up')">上移</button>
+                <button class="btn btn-ghost" :disabled="!!busy || storyboards.findIndex((item) => item.id === selectedStoryboard.id) === storyboards.length - 1" @click="moveStoryboard(selectedStoryboard, 'down')">下移</button>
+                <button class="btn btn-ghost" :disabled="!!busy" @click="copyStoryboard(selectedStoryboard)">复制镜头</button>
                 <button class="btn btn-danger" :disabled="!!busy" @click="removeStoryboard(selectedStoryboard)">删除镜头</button>
               </div>
             </section>
