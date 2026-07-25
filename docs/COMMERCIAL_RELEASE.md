@@ -72,6 +72,25 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 
 ## 自动化补充（2026-07-24）
 
+## L2 门槛执行快照（2026-07-25）
+
+本机可自动完成的部分：
+
+- `make sbom` 已修复相对输出路径，可生成 `artifacts/sbom/` 依赖与 FFmpeg 证据（目录被 gitignore，发布时单独归档）。
+- 项目资产页 E2E 已在 Playwright `desktop` 与 `webkit` 通过。
+- 前端 `npm audit`（registry.npmjs.org）报告 0 vulnerabilities。
+- Go 模块依赖已升级：`golang.org/x/net`、`golang.org/x/text`、`golang.org/x/crypto`、`github.com/jackc/pgx/v5`；`go test ./...` 通过。
+- 厂商/SMTP live smoke 测试在本机可跳过运行；未配置 `SMOKE_*` 时不会假阳性通过。
+
+仍依赖外部账号或环境，不能在本机闭环：
+
+- 真实 OpenAI / MiniMax / 火山 / Vidu / 阿里 smoke（需对应 `SMOKE_*` 密钥）。
+- 真实 SMTP 邀请与密码恢复 smoke（需 `SMOKE_SMTP_*` 与 `SMOKE_APP_URL_BASE`）。
+- 本机无 Docker CLI；Compose 冷启动 / PostgreSQL 卷恢复依赖 CI 或候选机。
+- Go 标准库漏洞需升级到 Go ≥ 1.26.3/1.26.4/1.26.5（当前 toolchain 为 1.26.2）。
+- 正式 SPDX/CycloneDX 许可证结论、法务与模型/肖像/声音授权归档仍需发布流程人工完成。
+
+
 - `make sbom` / `scripts/generate-sbom.sh`：导出 Go modules、npm 依赖树、FFmpeg 版本与 license 证据到 `artifacts/sbom/`
 - CI `sbom` job 上传 artifact `sbom-inventory`
 - Playwright WebKit 项目已加入 `frontend/playwright.config.ts`，CI 安装 chromium + webkit
