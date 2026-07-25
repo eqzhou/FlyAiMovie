@@ -16,13 +16,13 @@ const busy = ref('')
 const error = ref('')
 const message = ref('')
 const showAddEpisode = ref(false)
-const showAddProp = ref(false)
+const showPropDialog = ref(false)
 const episodeError = ref('')
 const propError = ref('')
 const episodeTitleInput = ref<HTMLInputElement | null>(null)
 const propNameInput = ref<HTMLInputElement | null>(null)
 const episodeForm = ref({ title: '', image_config_id: 0, video_config_id: 0, audio_config_id: 0 })
-const propForm = ref({ name: '', description: '' })
+const propForm = ref<{ id?: number; name: string; description: string; prompt: string }>({ name: '', description: '', prompt: '' })
 const styleLabels: Record<string, string> = { realistic: '写实', anime: '动漫', cinematic: '电影感' }
 
 const id = computed(() => Number(route.params.id))
@@ -93,14 +93,28 @@ async function addEpisode() {
   }
 }
 
-async function openPropDialog() {
+async function openPropDialog(prop?: any) {
   propError.value = ''
-  showAddProp.value = true
+  propForm.value = prop
+    ? {
+        id: prop.id,
+        name: prop.name || '',
+        description: prop.description || '',
+        prompt: prop.prompt || '',
+      }
+    : { name: '', description: '', prompt: '' }
+  showPropDialog.value = true
   await nextTick()
   propNameInput.value?.focus()
 }
 
-async function addProp() {
+function closePropDialog() {
+  showPropDialog.value = false
+  propError.value = ''
+  propForm.value = { name: '', description: '', prompt: '' }
+}
+
+async function saveProp() {
   propError.value = ''
   const name = propForm.value.name.trim()
   if (!name) {
@@ -110,13 +124,22 @@ async function addProp() {
   }
   busy.value = 'prop'
   try {
-    await propAPI.create({ drama_id: id.value, name, description: propForm.value.description.trim() })
-    propForm.value = { name: '', description: '' }
-    showAddProp.value = false
-    notify('道具已添加')
+    const payload = {
+      name,
+      description: propForm.value.description.trim(),
+      prompt: propForm.value.prompt.trim(),
+    }
+    if (propForm.value.id) {
+      await propAPI.update(propForm.value.id, payload)
+      notify('道具已更新')
+    } else {
+      await propAPI.create({ drama_id: id.value, ...payload })
+      notify('道具已添加')
+    }
+    closePropDialog()
     await load()
   } catch (reason) {
-    propError.value = reason instanceof Error ? reason.message : '添加道具失败'
+    propError.value = reason instanceof Error ? reason.message : (propForm.value.id ? '更新道具失败' : '添加道具失败')
   } finally {
     busy.value = ''
   }
@@ -131,6 +154,20 @@ async function generatePropImage(prop: any) {
     await load()
   } catch (reason) {
     notify(reason instanceof Error ? reason.message : '生成道具图片失败')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function removeProp(prop: any) {
+  if (!confirm(`删除道具「${prop.name}」？`)) return
+  busy.value = `prop-del-${prop.id}`
+  try {
+    await propAPI.del(prop.id)
+    notify('道具已删除')
+    await load()
+  } catch (reason) {
+    notify(reason instanceof Error ? reason.message : '删除道具失败')
   } finally {
     busy.value = ''
   }
@@ -246,7 +283,7 @@ onMounted(load)
       <div class="panel project-asset-list">
         <table v-if="assetView === 'characters' && drama.characters?.length" class="table"><thead><tr><th>名称</th><th>定位</th><th>外观</th><th>音色</th></tr></thead><tbody><tr v-for="character in drama.characters" :key="character.id"><td><strong>{{ character.name }}</strong></td><td>{{ character.role || '未设置' }}</td><td>{{ character.appearance || character.description || '未填写' }}</td><td>{{ character.voice_style || '未绑定' }}</td></tr></tbody></table>
         <table v-else-if="assetView === 'scenes' && drama.scenes?.length" class="table"><thead><tr><th>地点</th><th>时间</th><th>描述</th></tr></thead><tbody><tr v-for="scene in drama.scenes" :key="scene.id"><td><strong>{{ scene.location }}</strong></td><td>{{ scene.time || '未设置' }}</td><td>{{ scene.description || scene.prompt || '未填写' }}</td></tr></tbody></table>
-        <table v-else-if="assetView === 'props' && propsList.length" class="table"><thead><tr><th>形象</th><th>名称</th><th>描述</th><th></th></tr></thead><tbody><tr v-for="prop in propsList" :key="prop.id"><td><img v-if="prop.image_url" class="thumb" :src="prop.image_url" :alt="prop.name" /><span v-else class="character-library-placeholder">{{ prop.name.slice(0, 1) }}</span></td><td><strong>{{ prop.name }}</strong></td><td>{{ prop.description || prop.prompt || '未填写' }}</td><td><button v-if="canEdit" class="btn" :disabled="!!busy" @click="generatePropImage(prop)">生成图片</button></td></tr></tbody></table>
+        <table v-else-if="assetView === 'props' && propsList.length" class="table"><thead><tr><th>形象</th><th>名称</th><th>描述</th><th></th></tr></thead><tbody><tr v-for="prop in propsList" :key="prop.id"><td><img v-if="prop.image_url" class="thumb" :src="prop.image_url" :alt="prop.name" /><span v-else class="character-library-placeholder">{{ prop.name.slice(0, 1) }}</span></td><td><strong>{{ prop.name }}</strong></td><td>{{ prop.description || prop.prompt || '未填写' }}</td><td><div v-if="canEdit" class="toolbar settings-table-actions"><button class="btn" :disabled="!!busy" @click="generatePropImage(prop)">生成图片</button><button class="btn" :disabled="!!busy" @click="openPropDialog(prop)">编辑</button><button class="btn btn-danger" :disabled="!!busy" @click="removeProp(prop)">删除</button></div></td></tr></tbody></table>
         <div v-else class="empty project-empty"><strong>暂无{{ assetView === 'characters' ? '角色' : assetView === 'scenes' ? '场景' : '道具' }}</strong><span class="muted">角色和场景可在剧集工作台中通过 AI 提取。</span></div>
       </div>
     </section>
@@ -263,14 +300,15 @@ onMounted(load)
       </form>
     </div>
 
-    <div v-if="showAddProp" class="modal-mask" @click.self="showAddProp = false">
-      <form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="add-prop-title" @keydown.esc="showAddProp = false" @submit.prevent="addProp">
-        <h3 id="add-prop-title">添加道具</h3>
+    <div v-if="showPropDialog" class="modal-mask" @click.self="closePropDialog">
+      <form class="modal settings-modal" role="dialog" aria-modal="true" :aria-labelledby="propForm.id ? 'edit-prop-title' : 'add-prop-title'" @keydown.esc="closePropDialog" @submit.prevent="saveProp">
+        <h3 :id="propForm.id ? 'edit-prop-title' : 'add-prop-title'">{{ propForm.id ? '编辑道具' : '添加道具' }}</h3>
         <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
         <div class="field"><label for="prop-name">名称 <span class="required-mark">*</span></label><input id="prop-name" ref="propNameInput" v-model="propForm.name" maxlength="120" required /></div>
         <div class="field"><label for="prop-description">描述</label><textarea id="prop-description" v-model="propForm.description" rows="4" maxlength="4000" /></div>
+        <div class="field"><label for="prop-prompt">画面提示词</label><textarea id="prop-prompt" v-model="propForm.prompt" rows="3" maxlength="4000" placeholder="可选，用于生成道具形象" /></div>
         <p v-if="propError" class="auth-error" role="alert">{{ propError }}</p>
-        <div class="modal-actions"><button type="button" class="btn" @click="showAddProp = false">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'prop'">{{ busy === 'prop' ? '添加中…' : '添加道具' }}</button></div>
+        <div class="modal-actions"><button type="button" class="btn" @click="closePropDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'prop'">{{ busy === 'prop' ? '保存中…' : (propForm.id ? '保存道具' : '添加道具') }}</button></div>
       </form>
     </div>
 
