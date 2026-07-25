@@ -1,17 +1,23 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Clapperboard, Plus, Trash2 } from 'lucide-vue-next'
+import { Clapperboard, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { dramaAPI } from '../api'
 import { authStore } from '../auth'
 
 const router = useRouter()
 const dramas = ref<any[]>([])
 const loading = ref(true)
-const showCreate = ref(false)
-const form = ref({ title: '', description: '', style: 'realistic', total_episodes: 1 })
+const showDialog = ref(false)
+const form = ref<{ id?: number; title: string; description: string; style: string; total_episodes: number }>({
+  title: '',
+  description: '',
+  style: 'realistic',
+  total_episodes: 1,
+})
 const err = ref('')
 const formError = ref('')
+const formBusy = ref(false)
 const titleInput = ref<HTMLInputElement | null>(null)
 const episodeInput = ref<HTMLInputElement | null>(null)
 const styleLabels: Record<string, string> = { realistic: '写实', anime: '动漫', cinematic: '电影感' }
@@ -30,7 +36,11 @@ async function load() {
   }
 }
 
-async function create() {
+function blankForm() {
+  return { title: '', description: '', style: 'realistic', total_episodes: 1 }
+}
+
+async function saveDrama() {
   formError.value = ''
   const title = form.value.title.trim()
   if (!title) {
@@ -50,25 +60,56 @@ async function create() {
     episodeInput.value?.focus()
     return
   }
+  formBusy.value = true
   try {
-    await dramaAPI.create({ ...form.value, title, total_episodes: episodeCount })
-    closeCreate()
-    form.value = { title: '', description: '', style: 'realistic', total_episodes: 1 }
+    if (form.value.id) {
+      await dramaAPI.update(form.value.id, {
+        title,
+        description: form.value.description.trim(),
+        style: form.value.style,
+      })
+    } else {
+      await dramaAPI.create({
+        title,
+        description: form.value.description.trim(),
+        style: form.value.style,
+        total_episodes: episodeCount,
+      })
+    }
+    closeDialog()
     await load()
   } catch (e: any) {
-    formError.value = e.message || '创建项目失败，请稍后重试'
+    formError.value = e.message || (form.value.id ? '更新项目失败，请稍后重试' : '创建项目失败，请稍后重试')
+  } finally {
+    formBusy.value = false
   }
 }
 
 function openCreate() {
   formError.value = ''
-  showCreate.value = true
+  form.value = blankForm()
+  showDialog.value = true
   nextTick(() => titleInput.value?.focus())
 }
 
-function closeCreate() {
+function openEdit(d: any) {
   formError.value = ''
-  showCreate.value = false
+  form.value = {
+    id: d.id,
+    title: d.title || '',
+    description: d.description || '',
+    style: d.style || 'realistic',
+    total_episodes: Number(d.total_episodes || d.episodes?.length || 1) || 1,
+  }
+  showDialog.value = true
+  nextTick(() => titleInput.value?.focus())
+}
+
+function closeDialog() {
+  formError.value = ''
+  formBusy.value = false
+  form.value = blankForm()
+  showDialog.value = false
 }
 
 async function delDrama(d: any) {
@@ -134,7 +175,10 @@ onMounted(load)
         <div>
           <div class="row between center">
             <span class="badge">{{ d.episodes?.length || 0 }} 集</span>
-            <button v-if="canManageProjects" class="btn btn-ghost" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
+            <div v-if="canManageProjects" class="toolbar project-card-actions">
+              <button class="btn btn-ghost" type="button" :aria-label="`编辑项目 ${d.title}`" title="编辑项目" @click.stop="openEdit(d)"><Pencil :size="15" aria-hidden="true" /></button>
+              <button class="btn btn-ghost" type="button" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
+            </div>
           </div>
           <h3 class="project-title">{{ d.title }}</h3>
           <p v-if="d.description" class="project-snippet">{{ d.description }}</p>
@@ -161,9 +205,9 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-if="showCreate && canManageProjects" class="modal-mask" @click.self="closeCreate">
-      <form class="modal" role="dialog" aria-modal="true" aria-labelledby="create-drama-title" novalidate @submit.prevent="create">
-        <h3 id="create-drama-title">新建短剧项目</h3>
+    <div v-if="showDialog && canManageProjects" class="modal-mask" @click.self="closeDialog">
+      <form class="modal" role="dialog" aria-modal="true" :aria-labelledby="form.id ? 'edit-drama-title' : 'create-drama-title'" novalidate @keydown.esc="closeDialog" @submit.prevent="saveDrama">
+        <h3 :id="form.id ? 'edit-drama-title' : 'create-drama-title'">{{ form.id ? '编辑短剧项目' : '新建短剧项目' }}</h3>
         <p class="form-required-note"><span class="required-mark" aria-hidden="true">*</span> 为必填项</p>
         <div class="field"><label for="drama-title">标题 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-title" ref="titleInput" v-model="form.title" placeholder="例如：雨夜重逢" maxlength="200" required :aria-invalid="!!formError && !form.title.trim()" /></div>
         <div class="field"><label for="drama-description">简介（选填）</label><textarea id="drama-description" v-model="form.description" rows="3" maxlength="10000" /></div>
@@ -174,11 +218,12 @@ onMounted(load)
             <option value="cinematic">电影感</option>
           </select>
         </div>
-        <div class="field"><label for="drama-episodes">集数 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-episodes" ref="episodeInput" v-model.number="form.total_episodes" type="number" min="1" max="50" step="1" required /></div>
+        <div v-if="!form.id" class="field"><label for="drama-episodes">集数 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-episodes" ref="episodeInput" v-model.number="form.total_episodes" type="number" min="1" max="50" step="1" required /></div>
+        <p v-else class="muted sm">已有剧集数量不会因编辑标题或风格而改变，可在项目详情中单独管理剧集。</p>
         <p v-if="formError" class="auth-error" role="alert">{{ formError }}</p>
         <div class="modal-actions">
-          <button class="btn" type="button" @click="closeCreate">取消</button>
-          <button class="btn btn-primary" type="submit">创建</button>
+          <button class="btn" type="button" :disabled="formBusy" @click="closeDialog">取消</button>
+          <button class="btn btn-primary" type="submit" :disabled="formBusy">{{ formBusy ? '保存中…' : (form.id ? '保存项目' : '创建') }}</button>
         </div>
       </form>
     </div>
