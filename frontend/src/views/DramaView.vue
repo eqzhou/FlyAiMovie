@@ -635,7 +635,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="loading" class="page">
+  <div v-if="loading && !drama" class="page">
     <div class="page-loading" role="status" aria-live="polite">
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
@@ -644,8 +644,12 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
-  <div v-else-if="error" class="page"><div class="load-error"><h2>项目加载失败</h2><p class="muted">{{ error }}</p><button class="btn" @click="load">重新加载</button></div></div>
-  <div v-else-if="drama" class="page">
+  <div v-else-if="error && !drama" class="page"><div class="load-error"><h2>项目加载失败</h2><p class="muted">{{ error }}</p><button class="btn" @click="load">重新加载</button></div></div>
+  <div v-else-if="drama" class="page" :aria-busy="loading">
+    <div v-if="error" class="inline-alert" role="alert">
+      <div><strong>部分内容暂未更新</strong><span>{{ error }}</span></div>
+      <button class="btn" type="button" :disabled="loading" @click="load">重试加载</button>
+    </div>
     <div class="page-head">
       <div><h1 class="page-title">{{ drama.title }}</h1><p class="page-desc project-description">{{ projectSummary }} · {{ projectStyle }}</p></div>
       <div class="toolbar project-head-actions"><button class="btn" @click="router.push('/')">返回项目</button><button class="btn" @click="router.push(`/drama/${id}/assets`)">素材库</button></div>

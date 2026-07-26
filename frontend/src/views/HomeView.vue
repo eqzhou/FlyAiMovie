@@ -163,7 +163,7 @@ onMounted(load)
       <button class="btn" type="button" @click="load">重试</button>
     </div>
 
-    <div v-if="loading" class="grid" aria-busy="true" aria-label="项目加载中">
+    <div v-if="loading && !dramas.length" class="grid" aria-busy="true" aria-label="项目加载中">
       <div v-for="n in 6" :key="n" class="card project-card skeleton-card" aria-hidden="true">
         <div class="skeleton skeleton-line short"></div>
         <div class="skeleton skeleton-line title"></div>
@@ -172,7 +172,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-else-if="!err" class="grid">
+    <div v-else-if="!err || dramas.length" class="grid" :aria-busy="loading">
       <article
         v-for="d in dramas"
         :key="d.id"

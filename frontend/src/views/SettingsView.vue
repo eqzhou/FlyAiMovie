@@ -26,6 +26,8 @@ const form = ref({
 const toast = ref('')
 let toastTimer: number | null = null
 const loading = ref(true)
+// 首次加载完成后置为 true：后续刷新只在原位更新，不再整页回到骨架态。
+const loaded = ref(false)
 const loadError = ref('')
 const serviceError = ref('')
 const savingService = ref(false)
@@ -215,6 +217,7 @@ async function load() {
   })
   loadError.value = failures.join('；')
   loading.value = false
+  loaded.value = true
 }
 
 async function addMember() {
@@ -952,7 +955,7 @@ onUnmounted(() => {
       <button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">安全与数据</button>
     </div>
     <div v-if="loadError" class="inline-alert" role="alert"><div><strong>部分设置暂未更新</strong><span>{{ loadError }}</span></div><button class="btn" type="button" @click="load">重试加载</button></div>
-    <div v-else-if="loading" class="page-loading" role="status" aria-live="polite">
+    <div v-else-if="loading && !loaded" class="page-loading" role="status" aria-live="polite">
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>正在同步设置</strong>
@@ -960,7 +963,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <section v-if="!loading && activeSection === 'services'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'services'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>AI 服务</h2><p class="muted">{{ configs.length }} 个已配置服务 · {{ providers.length }} 个内置厂商模板</p></div>
         <div v-if="canManageSettings" class="toolbar"><button class="btn btn-primary" @click="openCreateService"><Plus :size="16" aria-hidden="true" />添加 AI 服务</button></div>
@@ -983,7 +986,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section v-if="!loading && activeSection === 'voices'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'voices'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>音色库</h2><p class="muted">{{ voiceCatalog.length }} 个音色 · {{ voiceCatalog.filter((voice) => voice.is_active).length }} 个可用</p></div>
         <button v-if="canManageSettings" class="btn btn-primary" :disabled="syncingVoices" @click="syncVoices"><RefreshCw :size="15" aria-hidden="true" />{{ syncingVoices ? '同步中…' : '同步音色' }}</button>
@@ -1001,7 +1004,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section v-if="!loading && activeSection === 'prompts'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'prompts'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>提示词模板</h2><p class="muted">{{ promptTemplates.length }} 个模板 · 组织内生效</p></div>
         <button v-if="canManageSettings" class="btn btn-primary" @click="openCreatePrompt">新建提示词</button>
@@ -1029,7 +1032,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section v-if="!loading && activeSection === 'agents'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'agents'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>Agent 预设</h2><p class="muted">为制作流程配置模型和执行边界</p></div></div>
       <div class="panel">
         <table class="table">
@@ -1039,7 +1042,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section v-if="!loading && activeSection === 'organization'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'organization'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>组织与权限</h2><p class="muted">成员访问、生成额度与本地存储</p></div><div v-if="canManageQuota && authStore.state.enabled" class="toolbar"><button class="btn" @click="showMemberModal = true">添加成员</button><button class="btn btn-primary" @click="openInviteModal">创建邀请</button></div></div>
       <div class="panel">
         <h3>生成配额</h3>
@@ -1075,7 +1078,7 @@ onUnmounted(() => {
       </table></div>
     </section>
 
-    <section v-if="!loading && activeSection === 'security'" class="settings-section" role="tabpanel">
+    <section v-if="(loaded || !loading) && activeSection === 'security'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>安全与数据</h2><p class="muted">账户凭据、组织数据导出与删除</p></div></div>
       <div class="settings-command-list">
         <div v-if="authStore.state.enabled" class="settings-command"><div><strong>登录密码</strong><p class="muted">更新当前账户的登录密码</p></div><button class="btn" @click="showPasswordModal = true">修改密码</button></div>
