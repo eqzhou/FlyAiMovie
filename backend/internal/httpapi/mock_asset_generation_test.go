@@ -142,3 +142,85 @@ func TestCharacterAndPropImageGenerationForwardsReferenceImages(t *testing.T) {
 		t.Fatalf("batch generation dropped reference images: %q", batchGeneration.ReferenceImages)
 	}
 }
+
+// Storyboard character bindings live in storyboard_characters and are the only
+// source of truth. Create, update and list must round-trip them so the
+// workbench picker never has to keep its own copy of the relationship.
+func TestStoryboardCharacterBindingsRoundTripThroughAPI(t *testing.T) {
+	_, router := testServerRouter(t)
+	imageConfig := createMockConfig(t, router, "image")
+	videoConfig := createMockConfig(t, router, "video")
+	audioConfig := createMockConfig(t, router, "audio")
+	drama := requestData(t, router, http.MethodPost, "/api/v1/dramas", `{"title":"character bindings","total_episodes":1}`)
+	dramaID := uintField(t, drama, "id")
+	episode := requestData(t, router, http.MethodPost, "/api/v1/episodes", `{"drama_id":`+itoa(dramaID)+`,"image_config_id":`+itoa(imageConfig)+`,"video_config_id":`+itoa(videoConfig)+`,"audio_config_id":`+itoa(audioConfig)+`}`)
+	episodeID := uintField(t, episode, "id")
+
+	first := uintField(t, requestData(t, router, http.MethodPost, "/api/v1/characters",
+		`{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"name":"林舟"}`), "id")
+	second := uintField(t, requestData(t, router, http.MethodPost, "/api/v1/characters",
+		`{"drama_id":`+itoa(dramaID)+`,"episode_id":`+itoa(episodeID)+`,"name":"沈宁"}`), "id")
+
+	storyboard := requestData(t, router, http.MethodPost, "/api/v1/storyboards",
+		`{"episode_id":`+itoa(episodeID)+`,"title":"对峙","character_ids":[`+itoa(first)+`]}`)
+	storyboardID := uintField(t, storyboard, "id")
+
+	assertBoundCharacters := func(stage string, want ...uint) {
+		t.Helper()
+		shots := requestSlice(t, router, "/api/v1/episodes/"+itoa(episodeID)+"/storyboards")
+		for _, shot := range shots {
+			if uint(shot["id"].(float64)) != storyboardID {
+				continue
+			}
+			raw, ok := shot["character_ids"].([]any)
+			if !ok {
+				t.Fatalf("%s: storyboard response is missing character_ids: %#v", stage, shot)
+			}
+			got := make([]uint, 0, len(raw))
+			for _, value := range raw {
+				got = append(got, uint(value.(float64)))
+			}
+			if len(got) != len(want) {
+				t.Fatalf("%s: bound characters = %v, want %v", stage, got, want)
+			}
+			for index := range want {
+				if got[index] != want[index] {
+					t.Fatalf("%s: bound characters = %v, want %v", stage, got, want)
+				}
+			}
+			return
+		}
+		t.Fatalf("%s: storyboard %d missing from episode listing", stage, storyboardID)
+	}
+
+	assertBoundCharacters("after create", first)
+
+	// Replacing the selection must persist both ids.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID),
+		`{"character_ids":[`+itoa(first)+`,`+itoa(second)+`]}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	assertBoundCharacters("after adding a character", first, second)
+
+	// Editing an unrelated field must not disturb existing bindings.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID),
+		`{"atmosphere":"紧绷"}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("unrelated update status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	assertBoundCharacters("after unrelated field edit", first, second)
+
+	// An explicit empty array clears the relationship.
+	if resp := performRequest(router, http.MethodPut, "/api/v1/storyboards/"+itoa(storyboardID),
+		`{"character_ids":[]}`, nil); resp.Code != http.StatusOK {
+		t.Fatalf("clear status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	assertBoundCharacters("after clearing")
+
+	var remaining int64
+	if err := db.DB.Model(&models.StoryboardCharacter{}).Where("storyboard_id = ?", storyboardID).Count(&remaining).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expected storyboard_characters rows to be removed, found %d", remaining)
+	}
+}

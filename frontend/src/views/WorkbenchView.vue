@@ -133,6 +133,22 @@ const storyboardSceneOptions = computed(() => {
   }
   return options
 })
+// 与场景同理：后端按项目校验角色，而这里只加载了本集角色。若镜头绑定的是同项目
+// 其他集的角色，补一个占位项，避免保存时把看不见的绑定静默丢掉。
+const storyboardCharacterOptions = computed(() => {
+  const options = characters.value.map((character) => ({
+    id: Number(character.id),
+    label: character.name || `角色 #${character.id}`,
+  }))
+  const bound = Array.isArray(storyboardForm.value?.character_ids) ? storyboardForm.value.character_ids : []
+  for (const value of bound) {
+    const id = Number(value)
+    if (id > 0 && !options.some((option) => option.id === id)) {
+      options.push({ id, label: `角色 #${id}（其他剧集）` })
+    }
+  }
+  return options
+})
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const gridSelectionError = computed(() => {
   if (gridMode.value !== 'first_last') return ''
@@ -1185,6 +1201,28 @@ function referenceImagesToText(value: any): string {
   return raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join('\n')
 }
 
+// 镜头与角色的绑定关系保存在后端 storyboard_characters 表，分镜列表接口会同时
+// 返回 character_ids 与 characters。这里只把服务端返回值归一化成表单可用的数组，
+// 不在前端另存一份状态。
+function storyboardCharacterIDs(storyboard: any): number[] {
+  const source = Array.isArray(storyboard?.character_ids)
+    ? storyboard.character_ids
+    : Array.isArray(storyboard?.characters)
+      ? storyboard.characters.map((item: any) => item?.id)
+      : []
+  const ids = source.map((value: any) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
+  return Array.from(new Set<number>(ids))
+}
+
+function toggleStoryboardCharacter(characterID: number) {
+  const form = storyboardForm.value
+  if (!form) return
+  const current: number[] = Array.isArray(form.character_ids) ? form.character_ids : []
+  form.character_ids = current.includes(characterID)
+    ? current.filter((value) => value !== characterID)
+    : [...current, characterID]
+}
+
 function emptyStoryboardForm() {
   return {
     id: 0,
@@ -1206,6 +1244,7 @@ function emptyStoryboardForm() {
     bgm_prompt: '',
     sound_effect: '',
     reference_images: '',
+    character_ids: [] as number[],
   }
 }
 
@@ -1234,6 +1273,7 @@ async function openStoryboardForm(storyboard?: any) {
         bgm_prompt: storyboard.bgm_prompt || '',
         sound_effect: storyboard.sound_effect || '',
         reference_images: referenceImagesToText(storyboard.reference_images),
+        character_ids: storyboardCharacterIDs(storyboard),
       }
     : blank
   await nextTick()
@@ -1270,6 +1310,9 @@ async function saveStoryboard() {
     return
   }
   const sceneID = Number(form.scene_id) || 0
+  const characterIDs = Array.isArray(form.character_ids)
+    ? Array.from(new Set<number>(form.character_ids.map((value: any) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)))
+    : []
   const payload: Record<string, any> = {
     title: form.title.trim(),
     duration,
@@ -1288,6 +1331,7 @@ async function saveStoryboard() {
     bgm_prompt: form.bgm_prompt || '',
     sound_effect: form.sound_effect || '',
     reference_images: JSON.stringify(references),
+    character_ids: characterIDs,
   }
   busy.value = 'storyboard-save'
   try {
@@ -2079,6 +2123,14 @@ onUnmounted(() => {
           <div class="field"><label for="storyboard-time">时间</label><input id="storyboard-time" v-model="storyboardForm.time" maxlength="200" placeholder="如：黄昏" /></div>
           <div class="field settings-span"><label for="storyboard-atmosphere">氛围</label><input id="storyboard-atmosphere" v-model="storyboardForm.atmosphere" maxlength="200" placeholder="如：克制而伤感" /></div>
         </div>
+        <p class="storyboard-form-group">出场角色</p>
+        <div v-if="storyboardCharacterOptions.length" class="storyboard-character-picker" role="group" aria-label="出场角色">
+          <label v-for="option in storyboardCharacterOptions" :key="option.id" class="storyboard-character-option">
+            <input type="checkbox" :value="option.id" :checked="storyboardForm.character_ids.includes(option.id)" @change="toggleStoryboardCharacter(option.id)" />
+            <span>{{ option.label }}</span>
+          </label>
+        </div>
+        <p v-else class="muted sm">本集暂无角色，可先在角色阶段新增或用 AI 提取。</p>
         <p class="storyboard-form-group">镜头内容</p>
         <div class="field-grid">
           <div class="field"><label for="storyboard-action">动作</label><textarea id="storyboard-action" v-model="storyboardForm.action" rows="3" maxlength="10000" /></div>
