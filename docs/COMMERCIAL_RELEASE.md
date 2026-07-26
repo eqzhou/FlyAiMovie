@@ -52,7 +52,7 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 - Mock 全链路 E2E、厂商契约测试和关键包 80% 以上覆盖率；
 - 当前核心 Go 全包覆盖率实测为 80.1%，Mock/契约测试和 Chromium 桌面/移动浏览器 E2E 已通过；仍没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test，不得把真实供应商链路标记为已完成。
 - OpenAI/Sora 视频 Adapter 已依据官方 Videos API 完成创建、轮询、鉴权下载和本地首帧契约测试；尾帧与多参考输入会明确拒绝。真实账号 smoke test 通过前不得标记为生产可用。
-- 本机 Colima 已完成 SQLite/PostgreSQL Compose 冷启动、volume `force-recreate` 与 `pg_dump/pg_restore` 探针。GitHub Actions `verify` workflow 已移除：仓库为私有，Actions 按分钟计费，验证改为本地执行（`go test ./...`、`npm run build`、Playwright、`make sbom`）。
+- 本机 Colima 已完成 SQLite/PostgreSQL Compose 冷启动、volume `force-recreate` 与 `pg_dump/pg_restore` 探针。仓库已转为公开，GitHub Actions 对公开仓库免费，`verify` workflow 已恢复并在 `push`/`pull_request` 上运行；其 `test` job 带 PostgreSQL 18 service，与本地测试使用同一引擎。
 - 依赖漏洞扫描、SBOM、许可证归档和法务复核；
 - 生产密钥管理、TLS、反向代理、监控和告警。
 - `AI_CONFIG_ENCRYPTION_KEY` 或外部 Secret Manager 保护 AI 厂商密钥；旧明文配置需迁移并轮换。
@@ -94,8 +94,8 @@ Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须�
 
 
 - `make sbom` / `scripts/generate-sbom.sh`：导出 Go modules、npm 依赖树、FFmpeg 版本与 license 证据到 `artifacts/sbom/`
-- SBOM 证据由本地 `make sbom` 生成并归档到 `artifacts/sbom/`
-- Playwright WebKit 项目已加入 `frontend/playwright.config.ts`；本地需先执行 `npx playwright install --with-deps chromium webkit`
+- CI `sbom` job 上传 artifact `sbom-inventory`；本地等价命令为 `make sbom`
+- Playwright WebKit 项目已加入 `frontend/playwright.config.ts`，CI 安装 chromium + webkit
 - 真实厂商 smoke：`SMOKE_OPENAI_KEY` / `SMOKE_MINIMAX_KEY` / `SMOKE_VIDU_KEY` 等环境变量触发 `TestLiveSmoke*`
 - 真实 SMTP smoke：`SMOKE_SMTP_*` + `SMOKE_APP_URL_BASE` 触发 `TestLiveSmokeSMTPPasswordResetAndInvitation`
 - 邀请链路在配置 SMTP 后会发送邮件；未配置时仍返回 token 供复制链接

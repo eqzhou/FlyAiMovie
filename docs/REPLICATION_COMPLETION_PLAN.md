@@ -57,7 +57,7 @@
 | SBOM、依赖漏洞扫描 | ✅ `make sbom` + govulncheck 0 + npm audit 0 |
 | 正式 SPDX 许可证结论 / 法务归档 | ⬜ 发布流程人工完成 |
 | FFmpeg 构建合规记录 | ✅ 已进 `artifacts/sbom/` |
-| GitHub Actions `verify` 归档 | ➖ 不适用：workflow 已移除，验证在本地执行 |
+| GitHub Actions `verify` 归档 | ✅ 仓库已公开，workflow 已恢复并自动运行 |
 
 ## 3. 执行阶段
 
@@ -94,7 +94,7 @@
 2. 真实 SMTP smoke — ⬜ 外部
 3. Docker 双模式冷启动 + 恢复演练 — ✅
 4. `make sbom` + 漏洞扫描 — ✅
-5. 发布证据包路径已就绪（commit、SBOM、ffmpeg license）；验证在本地执行，不再依赖 CI 归档
+5. 发布证据包路径已就绪（commit、SBOM、ffmpeg license）；CI 已恢复自动归档，本地保留等价命令
 
 ## 4. 建议执行顺序（历史）
 
