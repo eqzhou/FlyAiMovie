@@ -8,20 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 	"gorm.io/gorm"
 )
 
 func testService(t *testing.T) *Service {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	return New(database)
 }
 

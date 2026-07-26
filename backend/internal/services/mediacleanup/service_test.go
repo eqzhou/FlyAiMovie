@@ -6,19 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func TestQueueAndProcessIsIdempotent(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/cleanup.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	store := storage.NewLocal(t.TempDir())
 	rel, absolute, err := store.Save("uploads", "private.txt", strings.NewReader("private"))
 	if err != nil {
@@ -45,13 +39,7 @@ func TestQueueAndProcessIsIdempotent(t *testing.T) {
 }
 
 func TestQueueRejectsEscapingPath(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/cleanup.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	service := New(database, storage.NewLocal(t.TempDir()))
 	if err := service.Queue(1, []string{"../outside"}); err == nil {
 		t.Fatal("expected escaping path error")
@@ -62,13 +50,7 @@ func TestQueueRequiresConfiguredServiceAndNormalizesPaths(t *testing.T) {
 	if err := (*Service)(nil).Queue(1, []string{"a"}); err == nil {
 		t.Fatal("nil service accepted")
 	}
-	database, err := db.Open(t.TempDir() + "/normalize.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	store := storage.NewLocal(t.TempDir())
 	service := New(database, store)
 	rel, absolute, err := store.Save("uploads", "one.txt", strings.NewReader("one"))
@@ -91,13 +73,7 @@ func TestQueueRequiresConfiguredServiceAndNormalizesPaths(t *testing.T) {
 }
 
 func TestProcessRecordsFailureAndRetriesMissingFiles(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/failure.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	store := storage.NewLocal(t.TempDir())
 	directory := filepath.Join(store.Root, "uploads", "non-empty")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -127,13 +103,7 @@ func TestProcessRecordsFailureAndRetriesMissingFiles(t *testing.T) {
 }
 
 func TestProcessRejectsSymlinkSwapOutsideStorageRoot(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/symlink.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	root := t.TempDir()
 	store := storage.NewLocal(root)
 	uploads := filepath.Join(root, "uploads")

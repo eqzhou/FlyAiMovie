@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/security"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func TestChatWithMaxTokensForwardsLimit(t *testing.T) {
@@ -55,13 +55,7 @@ func TestChatProviderErrorDoesNotExposeResponseBodyOrAPIKey(t *testing.T) {
 }
 
 func TestChatCachesIdenticalRequestsWithinOrganization(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/chat-cache.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	testsupport.OpenDatabase(t)
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requestCount++
@@ -97,13 +91,7 @@ func TestChatCachesIdenticalRequestsWithinOrganization(t *testing.T) {
 }
 
 func TestPreferredConfigMustMatchServiceType(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/ai.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	row := models.AIServiceConfig{
 		ServiceType: "text", Provider: "mock", Name: "text-only", BaseURL: "http://localhost",
@@ -118,13 +106,7 @@ func TestPreferredConfigMustMatchServiceType(t *testing.T) {
 }
 
 func TestTaskConfigCanLoadInactiveOriginalConfig(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/task.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	row := models.AIServiceConfig{
 		ServiceType: "video", Provider: "vidu", Name: "disabled-after-submit", BaseURL: "https://api.example.com",
@@ -143,13 +125,7 @@ func TestTaskConfigCanLoadInactiveOriginalConfig(t *testing.T) {
 }
 
 func TestOrganizationConfigCannotCrossTenant(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/org.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	row := models.AIServiceConfig{OrganizationID: 2, ServiceType: "image", Provider: "mock", Name: "tenant-b", IsActive: true, CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&row).Error; err != nil {
@@ -161,13 +137,7 @@ func TestOrganizationConfigCannotCrossTenant(t *testing.T) {
 }
 
 func TestConfigSelectionPriorityTaskFallbackAndDecryption(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/selection.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "selection-key")
 	protected, err := security.EncryptSecret("provider-secret")
 	if err != nil {
@@ -217,13 +187,7 @@ func TestConfigSelectionPriorityTaskFallbackAndDecryption(t *testing.T) {
 }
 
 func TestTaskConfigRejectsLegacyInsecureRemoteURL(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/legacy-http.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	remote := models.AIServiceConfig{OrganizationID: 7, ServiceType: "image", Provider: "openai", Name: "legacy-http", BaseURL: "http://api.example.com", APIKey: "secret", Model: "image", IsActive: true, CreatedAt: now, UpdatedAt: now}
 	local := models.AIServiceConfig{OrganizationID: 7, ServiceType: "text", Provider: "openai_local", Name: "local-http", BaseURL: "http://127.0.0.1:11434", Model: "local", IsActive: true, CreatedAt: now, UpdatedAt: now}

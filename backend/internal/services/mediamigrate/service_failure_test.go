@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -311,13 +311,7 @@ func TestMigrateRollsBackWhenReferenceRewriteFails(t *testing.T) {
 // Audio migrations rewrite the audio reference set (character voice samples, storyboard
 // TTS audio) and must leave image-only columns untouched.
 func TestReplaceMediaReferencesHandlesAudioAndVideoKinds(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/kinds.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	oldAudio := "https://cdn.example/old.mp3"
 	oldVideo := "https://cdn.example/old.mp4"

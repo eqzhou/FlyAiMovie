@@ -5,19 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func TestSaveStoryboardsIsTransactionalAndEnforcesOwnership(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/agents.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	dramaA := models.Drama{Title: "A", CreatedAt: now, UpdatedAt: now}
 	dramaB := models.Drama{Title: "B", CreatedAt: now, UpdatedAt: now}
@@ -49,7 +43,7 @@ func TestSaveStoryboardsIsTransactionalAndEnforcesOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = saveStoryboards(0, episode.ID, map[string]any{"storyboards": []map[string]any{{
+	_, err := saveStoryboards(0, episode.ID, map[string]any{"storyboards": []map[string]any{{
 		"title": "invalid", "scene_id": foreignScene.ID, "character_ids": []any{float64(foreignCharacter.ID)},
 	}}})
 	if err == nil {
@@ -91,13 +85,7 @@ func TestSaveStoryboardsIsTransactionalAndEnforcesOwnership(t *testing.T) {
 }
 
 func TestOfflineFallbackAgentsPersistWorkflow(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/offline-agents.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	drama := models.Drama{OrganizationID: 7, Title: "独立短剧", CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&drama).Error; err != nil {

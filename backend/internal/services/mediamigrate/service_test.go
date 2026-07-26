@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func TestIsRemote(t *testing.T) {
@@ -26,13 +26,7 @@ func TestIsRemote(t *testing.T) {
 }
 
 func TestReplaceMediaReferencesIsOrganizationScoped(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/migration.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	oldURL := "https://cdn.example/old.png"
 	owned := models.Character{OrganizationID: 7, DramaID: 1, Name: "owned", ImageURL: oldURL, CreatedAt: now, UpdatedAt: now}
@@ -170,13 +164,7 @@ func TestMigrationKindHelpers(t *testing.T) {
 
 func testMigrationService(t *testing.T) *Service {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/migration-service.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	return &Service{DB: database, Store: storage.NewLocal(t.TempDir())}
 }
 

@@ -21,7 +21,7 @@
 cp .env.example .env
 docker compose up --build
 
-# 单机 SQLite + 本地 data 目录
+# 单机 SQLite + 本地 data 目录（轻量试用；正式使用与自动化测试均以 PostgreSQL 为准）
 docker compose -f docker-compose.sqlite.yml up --build
 ```
 
@@ -71,7 +71,7 @@ docker compose -f docker-compose.sqlite.yml up --build
 ## 配置
 
 - `configs/config.yaml`：端口默认 5679，启动脚本通过 `PORT=8088` 覆盖
-- 数据库：本地正式配置使用 PostgreSQL（`flyaimovie` 数据库）；SQLite 文件 `data/flyaimovie.db` 保留作旧数据备份
+- 数据库：本地正式配置、自动化测试与手工验证统一使用 PostgreSQL（业务库为 `flyaimovie`）；SQLite 仅保留为 Docker 轻量试用模式，`data/flyaimovie.db` 是旧数据备份
 - 素材：源码目录中的既有素材会复制到运行目录，服务新生成的素材保存在 `~/.local/share/flyaimovie/data/storage/`
 - `server.rate_limit_per_minute`：所有 `/api` 路由按直连来源 IP 限流，默认每分钟 600 次；不信任 `X-Forwarded-For`
 - `AI_CONFIG_ENCRYPTION_KEY`：生产环境必填；启用后新旧 AI 厂商密钥会以 AES-GCM 密文保存在数据库中
@@ -103,8 +103,85 @@ curl http://127.0.0.1:8088/api/v1/health
 以下 live 测试会创建并永久删除测试组织，只能用于空的 disposable 数据库：
 
 ```bash
-E2E_DISPOSABLE=1 E2E_PASSWORD='12-128 位临时密码' ./scripts/e2e-live.sh
+E2E_DISPOSABLE=1 E2E_PASSWORD='12-72 字节临时密码' ./scripts/e2e-live.sh
 ./scripts/dev-up.sh  # 重新播种 Mock 配置
-cd frontend && E2E_DISPOSABLE=1 E2E_PASSWORD='12-128 位临时密码' npm run test:e2e:live
+cd frontend && E2E_DISPOSABLE=1 E2E_PASSWORD='12-72 字节临时密码' npm run test:e2e:live
 cd .. && ./scripts/dev-up.sh  # 恢复为空安装并重新播种
 ```
+
+## 后端测试与验证数据库
+
+后端测试跑在 **PostgreSQL** 上，与生产使用同一个数据库引擎。
+
+这不是可选项。项目早期测试跑在 SQLite、生产跑 PostgreSQL，这个差异实际掩盖过两个缺陷，两次都是全部测试通过但线上行为错误：
+
+- **列默认值**：GORM 对带 `default` 标签的零值字段会从 INSERT 中省略，API 传入 `is_active:false` 被静默存成 `true`。
+- **并发与锁语义**：`jobs.Cancel` 读取任务行时没有加 `FOR UPDATE`。PostgreSQL 的 Read Committed 下这次读不阻塞，会拿到陈旧状态通过终态检查，随后的条件更新才撞上行锁并匹配 0 行，于是把「任务刚好完成」错报成 500，而不是语义正确的 409。SQLite 的全局写锁让并发取消直接失败并触发重试，重试时读到已终结状态，反而得到正确结果。
+
+两者的共同点是：数据库引擎不同，行为就不同，而测试用的引擎恰好掩盖了问题。测试与生产使用同一引擎才能让这类问题在提交前暴露。
+
+```bash
+cd backend
+go test ./... -count=1
+```
+
+每个测试通过 `internal/testsupport` 自动获得一个独立的一次性数据库（`pgtest_flyaimovie_*`），自动迁移，测试结束自动删除。测试之间互不干扰，也不会碰到本地的 `flyaimovie` 业务库。
+
+仍有两处测试有意保留 SQLite，因为它们测的就是 SQLite 本身：`cmd/migrate-media` 的备份用例（被测对象是 `backupSQLite`），以及 `mediamigrate` 用空 SQLite 库注入「表不存在」错误的用例。同理，`jobs.retryJobWrite` 里针对 `database is locked` 的重试仍然保留——`docker-compose.sqlite.yml` 这一部署模式下它依然会命中，不是死代码。
+
+前置条件是本机有一个可连接的 PostgreSQL：
+
+```bash
+brew install postgresql@18
+brew services start postgresql@18
+```
+
+默认连接 `127.0.0.1:5432`、当前系统用户、维护库 `postgres`。需要指向别的服务器时用环境变量覆盖：`PGTESTDB_HOST`、`PGTESTDB_PORT`、`PGTESTDB_USER`、`PGTESTDB_PASSWORD`、`PGTESTDB_SUPERDB`。
+
+排查和清理一次性库可以用全局命令 `pgtestdb`（见下一节）：
+
+```bash
+pgtestdb doctor   # 检查本机 PostgreSQL 是否就绪
+pgtestdb list     # 列出遗留的一次性库（正常情况下应为空）
+pgtestdb clean    # 清理进程异常退出时残留的库
+```
+
+### 手工功能验证
+
+需要用真实二进制验证一整套功能（而不是跑单元测试）时，用一次性库启动一个独立实例，避免影响正在运行的服务和业务数据：
+
+```bash
+cd backend && go build -o /tmp/flyaimovie-verify ./cmd/server
+
+DSN="$(pgtestdb dsn verify)"
+sed -e "s|^  dsn:.*|  dsn: \"$DSN\"|" -e 's|^  port: .*|  port: 8099|' \
+  configs/config.yaml > /tmp/verify-config.yaml
+
+CONFIG_PATH=/tmp/verify-config.yaml PORT=8099 \
+  pm2 start /tmp/flyaimovie-verify --name flyaimovie-verify --interpreter none --time
+```
+
+验证完成后清理：
+
+```bash
+pm2 delete flyaimovie-verify
+pgtestdb clean
+```
+
+验证实例必须使用独立端口和独立数据库。直接连业务库做写入验证会污染真实数据，`pgtestdb` 的删除命令也拒绝删除非 `pgtest_` 前缀的库，避免误删。
+
+## pgtestdb：跨项目的一次性数据库工具
+
+`pgtestdb` 安装在 `~/.local/bin/pgtestdb`，与仓库无关，任何需要「测试库和生产库保持同一引擎」的本地项目都可以直接用。
+
+| 命令 | 用途 |
+|---|---|
+| `pgtestdb doctor` | 检查本机 PostgreSQL 连通性与版本 |
+| `pgtestdb create [标签]` | 建库并打印库名 |
+| `pgtestdb dsn [标签]` | 建库并打印 `key=value` DSN（Go/GORM 常用） |
+| `pgtestdb url [标签]` | 建库并打印 `postgres://` 连接串 |
+| `pgtestdb list` | 列出本工具创建的库 |
+| `pgtestdb drop <库名>` | 删除单个库 |
+| `pgtestdb clean [--older-than N]` | 清理全部或 N 分钟前创建的库 |
+
+所有库统一以 `pgtest_` 前缀命名，删除命令只接受该前缀，因此不会误删业务库。

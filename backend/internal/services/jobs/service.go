@@ -495,7 +495,7 @@ func (s *Service) Cancel(id uint) error {
 		return s.DB.Transaction(func(tx *gorm.DB) error {
 			service := New(tx)
 			var job models.GenerationJob
-			if err := tx.First(&job, id).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&job, id).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return ErrJobNotFound
 				}

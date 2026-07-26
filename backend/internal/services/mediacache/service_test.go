@@ -8,21 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func testService(t *testing.T) *Service {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/cache.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	return New(database, storage.NewLocal(t.TempDir()))
 }
 

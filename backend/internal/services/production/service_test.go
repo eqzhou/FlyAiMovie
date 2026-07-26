@@ -18,6 +18,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 type productionFixture struct {
@@ -29,13 +30,7 @@ type productionFixture struct {
 
 func newProductionFixture(t *testing.T) productionFixture {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/production.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	if err := db.SeedOrganizationDefaults(database, 41); err != nil {
 		t.Fatal(err)
 	}

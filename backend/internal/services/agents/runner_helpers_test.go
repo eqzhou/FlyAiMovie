@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 func TestRunnerPureHelpers(t *testing.T) {
@@ -124,13 +124,7 @@ func TestRunnerLoadsSkillAndDefaultActions(t *testing.T) {
 }
 
 func TestRunnerExecToolContracts(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/tools.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	drama := models.Drama{OrganizationID: 9, Title: "Tool Drama", CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&drama).Error; err != nil {

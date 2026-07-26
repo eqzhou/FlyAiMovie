@@ -11,6 +11,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 )
 
 type runnerFixture struct {
@@ -21,13 +22,7 @@ type runnerFixture struct {
 
 func newRunnerFixture(t *testing.T, modelURL string, agentConfig *models.AgentConfig) runnerFixture {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/runner.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	now := response.Now()
 	drama := models.Drama{OrganizationID: 21, Title: "Runner Drama", CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&drama).Error; err != nil {

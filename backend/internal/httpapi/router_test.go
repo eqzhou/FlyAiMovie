@@ -22,6 +22,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 	"github.com/gin-gonic/gin"
 )
 
@@ -101,13 +102,7 @@ func TestValidateReferenceMediaOwnershipRejectsMoreThanEightImages(t *testing.T)
 
 func testServerRouter(t *testing.T) (*Server, http.Handler) {
 	t.Helper()
-	gdb, err := db.Open(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := db.AutoMigrate(gdb); err != nil {
-		t.Fatalf("migrate database: %v", err)
-	}
+	testsupport.OpenDatabase(t)
 
 	cfg := &config.Config{
 		App: config.AppConfig{Debug: true},

@@ -17,12 +17,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/testsupport"
 	"gorm.io/gorm"
 )
 
@@ -170,13 +170,7 @@ func TestImageBase64ReportsStorageFailure(t *testing.T) {
 
 func generationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	database, err := db.Open(t.TempDir() + "/generation.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(database); err != nil {
-		t.Fatal(err)
-	}
+	database := testsupport.OpenDatabase(t)
 	return database
 }
 
