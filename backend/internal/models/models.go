@@ -170,7 +170,7 @@ type AIServiceConfig struct {
 	QueryEndpoint  string `json:"query_endpoint"`
 	Priority       int    `gorm:"default:0" json:"priority"`
 	IsDefault      bool   `gorm:"default:false" json:"is_default"`
-	IsActive       bool   `gorm:"default:true" json:"is_active"`
+	IsActive       bool   `json:"is_active"`
 	Settings       string `json:"settings"`
 	CreatedAt      string `gorm:"not null" json:"created_at"`
 	UpdatedAt      string `gorm:"not null" json:"updated_at"`
@@ -185,7 +185,7 @@ type AIServiceProvider struct {
 	DefaultURL   string `json:"default_url"`
 	PresetModels string `json:"preset_models"`
 	Description  string `json:"description"`
-	IsActive     bool   `gorm:"default:true" json:"is_active"`
+	IsActive     bool   `json:"is_active"`
 	CreatedAt    string `gorm:"not null" json:"created_at"`
 	UpdatedAt    string `gorm:"not null" json:"updated_at"`
 }
@@ -199,7 +199,7 @@ type AIVoice struct {
 	Language       string `json:"language"`
 	Provider       string `gorm:"not null" json:"provider"`
 	Capabilities   string `json:"capabilities"`
-	IsActive       bool   `gorm:"not null;default:true" json:"is_active"`
+	IsActive       bool   `gorm:"not null" json:"is_active"`
 	CreatedAt      string `gorm:"not null" json:"created_at"`
 	UpdatedAt      string `gorm:"not null" json:"updated_at"`
 }
@@ -215,7 +215,7 @@ type AgentConfig struct {
 	Temperature    *float64 `json:"temperature"`
 	MaxTokens      *int     `json:"max_tokens"`
 	MaxIterations  *int     `json:"max_iterations"`
-	IsActive       bool     `gorm:"default:true" json:"is_active"`
+	IsActive       bool     `json:"is_active"`
 	CreatedAt      string   `gorm:"not null" json:"created_at"`
 	UpdatedAt      string   `gorm:"not null" json:"updated_at"`
 	DeletedAt      *string  `json:"deleted_at,omitempty"`
@@ -231,7 +231,7 @@ type PromptTemplate struct {
 	Content        string  `gorm:"not null" json:"content"`
 	VariablesJSON  string  `gorm:"not null;default:'[]'" json:"variables_json"`
 	Version        int     `gorm:"not null;default:1" json:"version"`
-	IsActive       bool    `gorm:"not null;default:true" json:"is_active"`
+	IsActive       bool    `gorm:"not null" json:"is_active"`
 	CreatedAt      string  `gorm:"not null" json:"created_at"`
 	UpdatedAt      string  `gorm:"not null" json:"updated_at"`
 	DeletedAt      *string `json:"deleted_at,omitempty"`
