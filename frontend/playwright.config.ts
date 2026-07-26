@@ -15,6 +15,13 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:4173',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    // Modals animate in and sit behind a blurred backdrop. On a CI runner
+    // WebKit composites in software, so that work never settles and Playwright
+    // waits forever for a "stable" element. Asking for reduced motion triggers
+    // the app's existing prefers-reduced-motion rules, which collapse the
+    // animations. This exercises a configuration real users have rather than
+    // weakening the assertions.
+    reducedMotion: 'reduce',
   },
   projects: [
     {
