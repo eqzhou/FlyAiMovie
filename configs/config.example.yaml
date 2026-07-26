@@ -24,6 +24,10 @@ database:
 
 storage:
   type: "local"
+  # The storage root must not contain symlinks: media reads and writes are
+  # anchored inside this directory, and any symlinked path segment is rejected.
+  # To use a larger disk, point local_path at a directory on that disk instead
+  # of symlinking a subdirectory such as ./data/storage/videos.
   local_path: "./data/storage"
   base_url: "http://localhost:5679/static"
 

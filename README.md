@@ -33,6 +33,8 @@ docker compose -f docker-compose.sqlite.yml up --build
 
 本地配置文件为 `configs/config.yaml`（已被 git 忽略），本机 HTTP 使用非 Secure Cookie 以支持 `127.0.0.1`。在设置页添加真实 AI 厂商配置即可使用真实生成；没有密钥时可选择内置 Mock 厂商完成离线流程。需要重置本地账号时，应先备份数据库再执行数据库级操作，不要直接删除素材目录。
 
+素材存储根目录内部不支持符号链接。为防止路径穿越，所有素材读写都锚定在存储根内，路径中任何一段是软链都会被拒绝。因此不要把 `data/storage/videos` 这类子目录软链到外置盘；如需使用大容量磁盘，请直接把整个 `storage.local_path` 指向该磁盘上的目录。
+
 全新检出首次运行时，启动脚本会从 `configs/config.example.yaml` 创建本地配置并停止。请填写 `database.dsn`，本机 HTTP 使用时将 `auth.secure_cookies` 改为 `false`，再运行启动脚本。
 
 启动脚本会将运行文件发布到 `~/.local/share/flyaimovie` 后交给 PM2 托管，避免 macOS 后台进程无法读取 `Documents`。运行日志和新生成的本地素材也保存在该目录。
