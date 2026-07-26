@@ -60,6 +60,20 @@ func TestAsyncRunnerStartAndStopAreIdempotent(t *testing.T) {
 	runnerWithRecovery.Stop()
 }
 
+func TestAsyncRunnerStopCancelsInFlightJobContext(t *testing.T) {
+	runner := &AsyncRunner{}
+	runner.Start()
+	ctx, finish := runner.claimedJobContext(models.GenerationJob{})
+	defer finish()
+
+	runner.Stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runner stop did not cancel in-flight job context")
+	}
+}
+
 func TestRunComposeJobFailsUnavailableWorkerAndInvalidPayload(t *testing.T) {
 	database := generationDatabase(t)
 	jobService := jobs.New(database)

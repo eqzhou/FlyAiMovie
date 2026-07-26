@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,6 +29,8 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/storage"
 	"github.com/gin-gonic/gin"
 )
+
+const authRequestBodyLimit int64 = 64 << 10
 
 type Server struct {
 	Cfg          *config.Config
@@ -90,7 +96,7 @@ func (s *Server) Router() *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), routeTemplateLogger(), s.securityHeaders())
+	r.Use(gin.Recovery(), routeTemplateLogger(), s.securityHeaders(), s.authSecurity())
 	r.Use(s.rateLimit(newIPRateLimiter(s.Cfg.Server.RateLimitPerMinute, time.Minute, time.Now)), s.cors())
 
 	r.GET("/api/v1/health", func(c *gin.Context) {
@@ -138,7 +144,7 @@ func (s *Server) Router() *gin.Engine {
 	if s.Cfg.Auth.Enabled {
 		r.GET("/static/*filepath", s.requireSession(), s.servePrivateStatic)
 	} else {
-		r.Static("/static", s.Store.Root)
+		r.GET("/static/*filepath", s.servePublicStatic)
 	}
 
 	// frontend SPA
@@ -155,6 +161,32 @@ func (s *Server) Router() *gin.Engine {
 		})
 	}
 	return r
+}
+
+func (s *Server) servePublicStatic(c *gin.Context) {
+	relativePath := strings.TrimPrefix(c.Param("filepath"), "/")
+	s.serveStaticFile(c, relativePath)
+}
+
+func (s *Server) serveStaticFile(c *gin.Context, relativePath string) {
+	root, err := os.OpenRoot(s.Store.Root)
+	if err != nil {
+		response.NotFound(c, "media not found")
+		return
+	}
+	defer root.Close()
+	file, err := root.Open(relativePath)
+	if err != nil {
+		response.NotFound(c, "media not found")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		response.NotFound(c, "media not found")
+		return
+	}
+	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
 }
 
 func routeTemplateLogger() gin.HandlerFunc {
@@ -184,13 +216,8 @@ func (s *Server) servePrivateStatic(c *gin.Context) {
 		response.NotFound(c, "media not found")
 		return
 	}
-	path, err := s.Store.Resolve(publicURL)
-	if err != nil {
-		response.NotFound(c, "media not found")
-		return
-	}
 	c.Header("Cache-Control", "private, no-store")
-	c.File(path)
+	s.serveStaticFile(c, relativePath)
 }
 
 func mediaOwnedByOrganization(c *gin.Context, publicURL, relativePath string) bool {
@@ -283,32 +310,97 @@ func parseReferenceMediaValues(value string) ([]string, error) {
 func (s *Server) securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("Cross-Origin-Opener-Policy", "same-origin")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if s.Cfg.Auth.SecureCookies {
+			c.Header("Strict-Transport-Security", "max-age=31536000")
+		}
 		c.Next()
 	}
+}
+
+func (s *Server) authSecurity() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isAuthPath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
+		if !isUnsafeMethod(c.Request.Method) || c.Request.Body == nil {
+			c.Next()
+			return
+		}
+		if c.Request.ContentLength > authRequestBodyLimit {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "request body too large"})
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, authRequestBodyLimit+1))
+		_ = c.Request.Body.Close()
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "invalid body"})
+			return
+		}
+		if int64(len(body)) > authRequestBodyLimit {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "request body too large"})
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		c.Request.ContentLength = int64(len(body))
+		c.Next()
+	}
+}
+
+func isAuthPath(path string) bool {
+	return path == "/api/v1/auth" || strings.HasPrefix(path, "/api/v1/auth/")
 }
 
 func (s *Server) cors() gin.HandlerFunc {
 	origins := map[string]bool{}
 	for _, o := range s.Cfg.Server.CORSOrigins {
-		origins[o] = true
+		if o = strings.TrimSpace(o); o != "" {
+			origins[o] = true
+		}
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		if origin != "" {
 			c.Header("Vary", "Origin")
 		}
-		if origin != "" && origins[origin] {
+		allowed := origin != "" && (origins[origin] || sameRequestOrigin(c.Request, origin))
+		wildcardAllowed := origin != "" && origins["*"] && !s.Cfg.Auth.Enabled
+		if allowed {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
-		} else if origin != "" && origins["*"] {
+		} else if wildcardAllowed {
 			c.Header("Access-Control-Allow-Origin", "*")
 		}
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+		if origin != "" && !allowed && !wildcardAllowed && (isUnsafeMethod(c.Request.Method) || c.Request.Method == http.MethodOptions) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "origin not allowed"})
+			return
+		}
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 		c.Next()
 	}
+}
+
+func sameRequestOrigin(request *http.Request, origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
+	} else if forwarded := strings.TrimSpace(strings.Split(request.Header.Get("X-Forwarded-Proto"), ",")[0]); forwarded == "http" || forwarded == "https" {
+		scheme = forwarded
+	}
+	return strings.EqualFold(parsed.Scheme, scheme) && strings.EqualFold(parsed.Host, request.Host)
 }

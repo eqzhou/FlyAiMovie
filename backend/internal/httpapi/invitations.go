@@ -21,6 +21,13 @@ type InvitationSender interface {
 
 type NoopInvitationSender struct{}
 
+var (
+	errInvitationPasswordInvalid = errors.New("new_password must contain 12-72 bytes")
+	errInvitationCurrentPassword = errors.New("current_password is invalid")
+	errInvitationAlreadyMember   = errors.New("user is already a member")
+	errInvitationAlreadyAccepted = errors.New("invitation already accepted")
+)
+
 func (NoopInvitationSender) SendInvitation(string, string, string, string, time.Time) error {
 	return errors.New("invitation email sender is not configured")
 }
@@ -256,7 +263,7 @@ func (s *Server) acceptInvitation(c *gin.Context) {
 		userErr := tx.Where("email = ?", email).First(&user).Error
 		if errors.Is(userErr, gorm.ErrRecordNotFound) {
 			if !validPassword(body.NewPassword) {
-				return errors.New("new_password must contain 12-128 characters")
+				return errInvitationPasswordInvalid
 			}
 			hash, hashErr := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
 			if hashErr != nil {
@@ -273,26 +280,30 @@ func (s *Server) acceptInvitation(c *gin.Context) {
 		} else if userErr != nil {
 			return userErr
 		} else if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)) != nil {
-			return errors.New("current_password is invalid")
+			return errInvitationCurrentPassword
 		}
 		var count int64
 		if err := tx.Model(&models.Membership{}).Where("organization_id = ? AND user_id = ?", organization.ID, user.ID).Count(&count).Error; err != nil {
 			return err
 		}
 		if count > 0 {
-			return errors.New("user is already a member")
+			return errInvitationAlreadyMember
 		}
 		result := tx.Model(&models.OrganizationInvitation{}).Where("id = ? AND accepted_at IS NULL", invitation.ID).Updates(map[string]any{"accepted_at": now})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return errors.New("invitation already accepted")
+			return errInvitationAlreadyAccepted
 		}
 		return tx.Create(&models.Membership{OrganizationID: organization.ID, UserID: user.ID, Role: invitation.Role, CreatedAt: now, UpdatedAt: now}).Error
 	})
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		if errors.Is(err, errInvitationPasswordInvalid) || errors.Is(err, errInvitationCurrentPassword) || errors.Is(err, errInvitationAlreadyMember) || errors.Is(err, errInvitationAlreadyAccepted) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ServerError(c, "failed to accept invitation")
 		return
 	}
 	token, csrf, err := s.createSession(user.ID, organization.ID)

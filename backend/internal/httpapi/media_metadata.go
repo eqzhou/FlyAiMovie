@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -21,12 +22,29 @@ import (
 	"gorm.io/gorm"
 )
 
-const maxMediaUploadBytes int64 = 500 << 20
+const (
+	maxMediaUploadBytes        int64 = 500 << 20
+	maxMediaUploadRequestBytes       = maxMediaUploadBytes + (1 << 20)
+)
 
 func (s *Server) uploadMedia(c *gin.Context) {
+	if c.Request.ContentLength > maxMediaUploadRequestBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "media upload is too large"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxMediaUploadRequestBytes)
 	fileHeader, err := c.FormFile("file")
-	if err != nil || fileHeader.Size < 1 || fileHeader.Size > maxMediaUploadBytes {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "media upload is too large"})
+		return
+	}
+	if err != nil || fileHeader.Size < 1 {
 		response.BadRequest(c, "media file is required and must not exceed 500 MB")
+		return
+	}
+	if fileHeader.Size > maxMediaUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "media file must not exceed 500 MB"})
 		return
 	}
 	file, err := fileHeader.Open()

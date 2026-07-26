@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -149,8 +150,14 @@ func Load(path string) (*Config, error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.Database.Path), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cfg.Storage.LocalPath, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Storage.LocalPath, 0o700); err != nil {
 		return nil, err
+	}
+	// Tightening permissions is best-effort: storage may live on an external
+	// volume, network mount, or a directory owned by another user, where chmod
+	// returns EPERM. Losing the hardening is preferable to refusing to start.
+	if err := os.Chmod(cfg.Storage.LocalPath, 0o700); err != nil {
+		log.Printf("storage directory %s could not be restricted to 0700: %v", cfg.Storage.LocalPath, err)
 	}
 	return &cfg, nil
 }
@@ -173,8 +180,12 @@ func (c *Config) ValidateProduction() error {
 	if strings.TrimSpace(c.Server.WebhookSecret) == "" {
 		return fmt.Errorf("WEBHOOK_SECRET is required in production")
 	}
-	if strings.TrimSpace(os.Getenv("AI_CONFIG_ENCRYPTION_KEY")) == "" {
+	encryptionKey := strings.TrimSpace(os.Getenv("AI_CONFIG_ENCRYPTION_KEY"))
+	if encryptionKey == "" {
 		return fmt.Errorf("AI_CONFIG_ENCRYPTION_KEY is required in production")
+	}
+	if len([]byte(encryptionKey)) < 32 {
+		return fmt.Errorf("AI_CONFIG_ENCRYPTION_KEY must be at least 32 bytes in production")
 	}
 	if len(c.AI.AllowedPrivateBaseURLHosts) > 0 {
 		return fmt.Errorf("ai.allowed_private_base_url_hosts must be empty in production")

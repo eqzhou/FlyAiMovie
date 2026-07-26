@@ -23,6 +23,11 @@ import (
 
 const authContextKey = "flyaimovie.auth"
 
+const (
+	minPasswordBytes = 12
+	maxPasswordBytes = 72 // bcrypt rejects passwords longer than 72 bytes.
+)
+
 var (
 	slugPattern      = regexp.MustCompile(`[^a-z0-9]+`)
 	errSetupComplete = errors.New("setup already completed")
@@ -72,7 +77,7 @@ func (s *Server) authSetup(c *gin.Context) {
 	}
 	email, err := normalizeEmail(body.Email)
 	if err != nil || strings.TrimSpace(body.OrganizationName) == "" || !validPassword(body.Password) {
-		response.BadRequest(c, "valid organization, email and password of 12-128 characters are required")
+		response.BadRequest(c, "valid organization, email and password of 12-72 bytes are required")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
@@ -205,12 +210,20 @@ func (s *Server) authMe(c *gin.Context) {
 func (s *Server) authLogout(c *gin.Context) {
 	actor, _ := currentAuth(c)
 	now := response.Now()
-	_ = db.DB.Model(&models.Session{}).Where("token_hash = ?", actor.Session.TokenHash).Update("revoked_at", now).Error
+	result := db.DB.Model(&models.Session{}).Where("token_hash = ? AND revoked_at IS NULL", actor.Session.TokenHash).Update("revoked_at", now)
+	if result.Error != nil || result.RowsAffected != 1 {
+		response.ServerError(c, "failed to revoke session")
+		return
+	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: s.Cfg.Auth.CookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.Cfg.Auth.SecureCookies, SameSite: http.SameSiteLaxMode})
 	response.Success(c, nil)
 }
 
 func (s *Server) createSession(userID, organizationID uint) (string, string, error) {
+	return createSessionRecord(db.DB, userID, organizationID, s.Cfg.Auth.SessionTTLHours)
+}
+
+func createSessionRecord(database *gorm.DB, userID, organizationID uint, ttlHours int) (string, string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", "", err
@@ -222,10 +235,10 @@ func (s *Server) createSession(userID, organizationID uint) (string, string, err
 	now := time.Now().UTC()
 	session := models.Session{
 		TokenHash: tokenHash(token), CSRFToken: csrf, UserID: userID, OrganizationID: organizationID,
-		ExpiresAt:  now.Add(time.Duration(s.Cfg.Auth.SessionTTLHours) * time.Hour).Format(time.RFC3339),
+		ExpiresAt:  now.Add(time.Duration(ttlHours) * time.Hour).Format(time.RFC3339),
 		LastSeenAt: now.Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
 	}
-	if err := db.DB.Create(&session).Error; err != nil {
+	if err := database.Create(&session).Error; err != nil {
 		return "", "", err
 	}
 	return token, csrf, nil
@@ -320,6 +333,9 @@ func (s *Server) validCSRF(c *gin.Context) bool {
 		return false
 	}
 	provided := strings.TrimSpace(c.GetHeader("X-CSRF-Token"))
+	if provided == "" || actor.Session.CSRFToken == "" {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(actor.Session.CSRFToken)) == 1
 }
 
@@ -366,7 +382,9 @@ func normalizeEmail(raw string) (string, error) {
 	return email, nil
 }
 
-func validPassword(password string) bool { return len(password) >= 12 && len(password) <= 128 }
+func validPassword(password string) bool {
+	return len(password) >= minPasswordBytes && len(password) <= maxPasswordBytes
+}
 
 func validRole(role string) bool {
 	switch role {

@@ -772,16 +772,28 @@ func (s *Service) deferRun(run *models.ProductionRun, message string) error {
 
 func (s *Service) complete(run *models.ProductionRun) error {
 	now := response.Now()
-	result := s.DB.Model(&models.ProductionRun{}).Where("id = ? AND status = ? AND lease_owner = ?", run.ID, StatusQueued, run.LeaseOwner).Updates(map[string]any{"status": StatusSucceeded, "stage": StageCompleted, "progress": 100, "status_message": "制作完成", "completed_at": now, "lease_owner": "", "lease_expires_at": nil, "updated_at": now})
-	if result.Error != nil {
-		return result.Error
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.ProductionRun{}).Where("id = ? AND status = ? AND lease_owner = ?", run.ID, StatusQueued, run.LeaseOwner).Updates(map[string]any{"status": StatusSucceeded, "stage": StageCompleted, "progress": 100, "status_message": "制作完成", "completed_at": now, "lease_owner": "", "lease_expires_at": nil, "updated_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrTerminalRun
+		}
+		// Keep episode lifecycle aligned with production success, including remakes that
+		// already had a video_url and skipped a fresh merge job.
+		episode := tx.Model(&models.Episode{}).Where("organization_id = ? AND id = ?", run.OrganizationID, run.EpisodeID).Updates(map[string]any{"status": "completed", "updated_at": now})
+		if episode.Error != nil {
+			return episode.Error
+		}
+		if episode.RowsAffected != 1 {
+			return fmt.Errorf("production episode not found")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected != 1 {
-		return ErrTerminalRun
-	}
-	// Keep episode lifecycle aligned with production success, including remakes that
-	// already had a video_url and skipped a fresh merge job.
-	_ = s.DB.Model(&models.Episode{}).Where("organization_id = ? AND id = ?", run.OrganizationID, run.EpisodeID).Updates(map[string]any{"status": "completed", "updated_at": now}).Error
 	run.Status = StatusSucceeded
 	run.Stage = StageCompleted
 	run.Progress = 100
@@ -845,8 +857,6 @@ func (s *Service) cancelActiveChildren(organizationID, runID uint) error {
 		return nil
 	})
 }
-
-
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {

@@ -736,7 +736,6 @@ func TestProductionLeaseHeartbeatPreventsDuplicateClaim(t *testing.T) {
 	}
 }
 
-
 func TestProductionCompleteAndFailEpisodeStatus(t *testing.T) {
 	fixture := newProductionFixture(t)
 	now := response.Now()
@@ -840,5 +839,37 @@ func TestProductionDoesNotAdvanceWithoutFrameArtifacts(t *testing.T) {
 	current, _ := fixture.service.Get(41, run.ID)
 	if current.Stage != StageFrames {
 		t.Fatalf("stage advanced unexpectedly: %+v", current)
+	}
+}
+
+func TestCompleteRollsBackWhenEpisodeUpdateFails(t *testing.T) {
+	fixture := newProductionFixture(t)
+	run, err := fixture.service.Create(41, fixture.drama.ID, fixture.episode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := response.Now()
+	if err := fixture.service.DB.Model(run).Updates(map[string]any{
+		"stage":            StageMerge,
+		"lease_owner":      "complete-owner",
+		"lease_expires_at": now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	run.LeaseOwner = "complete-owner"
+
+	if err := fixture.service.DB.Migrator().DropTable(&models.Episode{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.complete(run); err == nil {
+		t.Fatal("expected episode update failure")
+	}
+
+	var status string
+	if err := fixture.service.DB.Table("production_runs").Select("status").Where("id = ?", run.ID).Scan(&status).Error; err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusQueued {
+		t.Fatalf("run status=%s, want transaction rollback to %s", status, StatusQueued)
 	}
 }

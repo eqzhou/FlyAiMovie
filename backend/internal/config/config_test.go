@@ -10,7 +10,11 @@ import (
 func TestLoadDefaultsRateLimitPerMinute(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	contents := fmt.Sprintf("app:\n  name: test\ndatabase:\n  path: %q\nstorage:\n  local_path: %q\n", filepath.Join(dir, "test.db"), filepath.Join(dir, "storage"))
+	storagePath := filepath.Join(dir, "storage")
+	if err := os.MkdirAll(storagePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf("app:\n  name: test\ndatabase:\n  path: %q\nstorage:\n  local_path: %q\n", filepath.Join(dir, "test.db"), storagePath)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -22,10 +26,17 @@ func TestLoadDefaultsRateLimitPerMinute(t *testing.T) {
 	if cfg.Server.RateLimitPerMinute != 600 {
 		t.Fatalf("rate_limit_per_minute=%d want 600", cfg.Server.RateLimitPerMinute)
 	}
+	info, err := os.Stat(cfg.Storage.LocalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("storage directory permissions=%#o want 0700", got)
+	}
 }
 
 func TestValidateProduction(t *testing.T) {
-	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "test-encryption-key")
+	t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "test-encryption-key-with-32-bytes")
 	cfg := &Config{
 		App:    AppConfig{Debug: false},
 		Server: ServerConfig{WebhookSecret: "webhook-secret"},
@@ -58,6 +69,12 @@ func TestValidateProduction(t *testing.T) {
 	}
 	t.Run("missing encryption key", func(t *testing.T) {
 		t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "")
+		if err := cfg.ValidateProduction(); err == nil {
+			t.Fatal("expected validation error")
+		}
+	})
+	t.Run("weak encryption key", func(t *testing.T) {
+		t.Setenv("AI_CONFIG_ENCRYPTION_KEY", "short-key")
 		if err := cfg.ValidateProduction(); err == nil {
 			t.Fatal("expected validation error")
 		}

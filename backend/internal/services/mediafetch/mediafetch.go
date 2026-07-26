@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,14 @@ func ValidateRemoteURL(ctx context.Context, rawURL string) error {
 	if u.User != nil {
 		return fmt.Errorf("media URL credentials are not allowed")
 	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return fmt.Errorf("invalid media URL port")
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("invalid media URL port")
+	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return fmt.Errorf("local media host is not allowed")
@@ -60,6 +69,9 @@ func ValidateRemoteURL(ctx context.Context, rawURL string) error {
 	}
 	if len(addresses) == 0 {
 		return fmt.Errorf("media host has no address")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("resolve media host: %w", err)
 	}
 	for _, address := range addresses {
 		if isUnsafeIP(address.IP) {
@@ -93,18 +105,25 @@ func DownloadAuthorized(ctx context.Context, store *storage.LocalStorage, rawURL
 }
 
 func downloadAuthorizedWithClient(ctx context.Context, client *http.Client, store *storage.LocalStorage, rawURL, subdir, kind, bearerToken string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("media HTTP client is required")
+	}
 	limit := MaxVideoDownloadBytes
 	if kind == "image" {
 		limit = MaxImageDownloadBytes
 	}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+	requestClient := *client
+	requestClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many redirects")
 		}
-		if bearerToken != "" && len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
-			return fmt.Errorf("authorized media redirect changed host")
+		if bearerToken != "" && len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
+			return fmt.Errorf("authorized media redirect changed host or scheme")
 		}
-		return ValidateRemoteURL(req.Context(), req.URL.String())
+		if err := ValidateRemoteURL(req.Context(), req.URL.String()); err != nil {
+			return err
+		}
+		return nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -113,7 +132,7 @@ func downloadAuthorizedWithClient(ctx context.Context, client *http.Client, stor
 	if bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(bearerToken, "Bearer "))
 	}
-	resp, err := client.Do(req)
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("download media: %w", err)
 	}
@@ -138,17 +157,24 @@ func downloadAuthorizedWithClient(ctx context.Context, client *http.Client, stor
 	return rel, nil
 }
 
-// mediaHTTPClient deliberately does not inherit process proxy settings. A
-// proxy can otherwise receive requests for private destinations after the
-// URL/DNS checks and bypass the connection-level SSRF boundary.
+// defaultMediaTransport deliberately does not inherit process proxy settings.
+// A proxy can otherwise receive requests for private destinations after the
+// URL/DNS checks and bypass the connection-level SSRF boundary. It is shared so
+// successful downloads reuse a bounded pool instead of stranding idle sockets.
+var defaultMediaTransport = &http.Transport{
+	Proxy:                 nil,
+	ResponseHeaderTimeout: 30 * time.Second,
+	TLSHandshakeTimeout:   15 * time.Second,
+	IdleConnTimeout:       90 * time.Second,
+	MaxIdleConns:          32,
+	MaxIdleConnsPerHost:   4,
+	DialContext:           safeDialContext,
+}
+
 func mediaHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
-			Proxy:                 nil,
-			ResponseHeaderTimeout: 30 * time.Second,
-			DialContext:           safeDialContext,
-		},
+		Timeout:   5 * time.Minute,
+		Transport: defaultMediaTransport,
 	}
 }
 
@@ -207,25 +233,64 @@ func ImportLocalMockFile(store *storage.LocalStorage, rawURL, subdir, extension 
 }
 
 func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	dialer := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	return safeDialContextWith(ctx, network, address, net.DefaultResolver.LookupIPAddr, dialer.DialContext)
+}
+
+func safeDialContextWith(
+	ctx context.Context,
+	network, address string,
+	lookup func(context.Context, string) ([]net.IPAddr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	addresses, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-	dialer := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var lastErr error
 	for _, candidate := range addresses {
 		if isUnsafeIP(candidate.IP) {
 			continue
 		}
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+		conn, err := dial(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
 		if err == nil {
 			return conn, nil
 		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("dial permitted media address: %w", lastErr)
 	}
 	return nil, fmt.Errorf("media host has no permitted address")
+}
+
+func sameOrigin(first, second *url.URL) bool {
+	return strings.EqualFold(first.Scheme, second.Scheme) &&
+		strings.EqualFold(normalizedAuthority(first), normalizedAuthority(second))
+}
+
+func normalizedAuthority(value *url.URL) string {
+	host := strings.TrimSuffix(value.Hostname(), ".")
+	port := value.Port()
+	if port == "" {
+		switch strings.ToLower(value.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func isUnsafeIP(ip net.IP) bool {

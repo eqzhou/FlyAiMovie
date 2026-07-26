@@ -19,6 +19,8 @@ type PasswordResetSender interface {
 
 type NoopPasswordResetSender struct{}
 
+var errInvalidResetToken = errors.New("reset token is invalid or expired")
+
 func (NoopPasswordResetSender) SendPasswordReset(string, string, time.Time) error {
 	return errors.New("password reset email sender is not configured")
 }
@@ -80,14 +82,14 @@ func (s *Server) consumePasswordReset(c *gin.Context) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Token) == "" || !validPassword(body.NewPassword) {
-		response.BadRequest(c, "token and new_password of 12-128 characters are required")
+		response.BadRequest(c, "token and new_password of 12-72 bytes are required")
 		return
 	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339)
 	var row models.PasswordResetToken
 	if err := db.DB.Where("token_hash = ? AND consumed_at IS NULL AND expires_at > ?", tokenHash(body.Token), nowText).First(&row).Error; err != nil {
-		response.BadRequest(c, "reset token is invalid or expired")
+		response.BadRequest(c, errInvalidResetToken.Error())
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
@@ -101,7 +103,7 @@ func (s *Server) consumePasswordReset(c *gin.Context) {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return errors.New("reset token is invalid or expired")
+			return errInvalidResetToken
 		}
 		if err := tx.Model(&models.User{}).Where("id = ? AND status = ?", row.UserID, "active").Updates(map[string]any{"password_hash": string(hash), "updated_at": nowText}).Error; err != nil {
 			return err
@@ -109,7 +111,11 @@ func (s *Server) consumePasswordReset(c *gin.Context) {
 		return tx.Model(&models.Session{}).Where("user_id = ? AND revoked_at IS NULL", row.UserID).Update("revoked_at", nowText).Error
 	})
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		if errors.Is(err, errInvalidResetToken) {
+			response.BadRequest(c, errInvalidResetToken.Error())
+			return
+		}
+		response.ServerError(c, "failed to reset password")
 		return
 	}
 	response.Success(c, gin.H{"message": "password updated; please log in again"})

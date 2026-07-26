@@ -125,3 +125,53 @@ func TestProcessRecordsFailureAndRetriesMissingFiles(t *testing.T) {
 		t.Fatalf("failed task=%+v", failed)
 	}
 }
+
+func TestProcessRejectsSymlinkSwapOutsideStorageRoot(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/symlink.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store := storage.NewLocal(root)
+	uploads := filepath.Join(root, "uploads")
+	if err := os.MkdirAll(uploads, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	queuedPath := filepath.Join(uploads, "target.txt")
+	if err := os.WriteFile(queuedPath, []byte("queued"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := New(database, store)
+	if err := service.Queue(4, []string{"uploads/target.txt"}); err != nil {
+		t.Fatal(err)
+	}
+
+	outside := t.TempDir()
+	outsidePath := filepath.Join(outside, "target.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(queuedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(uploads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, uploads); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	result, err := service.ProcessOrganization(4, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	if _, err := os.Stat(outsidePath); err != nil {
+		t.Fatalf("outside file was removed: %v", err)
+	}
+}

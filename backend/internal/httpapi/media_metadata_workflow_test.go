@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
@@ -107,6 +108,19 @@ func TestHTTPConversionHelpers(t *testing.T) {
 	}
 	if err := validateAIConfigReference(9999, "image"); err == nil {
 		t.Fatal("missing AI config accepted")
+	}
+}
+
+func TestMediaUploadRejectsOversizedContentBeforeParsingMultipart(t *testing.T) {
+	_, router := testServerRouter(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/upload/media", strings.NewReader("not multipart"))
+	request.ContentLength = maxMediaUploadRequestBytes + 1
+	request.Header.Set("Content-Type", "multipart/form-data; boundary=test")
+	result := httptest.NewRecorder()
+
+	router.ServeHTTP(result, request)
+	if result.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
 	}
 }
 

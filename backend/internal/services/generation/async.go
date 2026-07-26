@@ -36,6 +36,9 @@ type AsyncRunner struct {
 	once     sync.Once
 	stopOnce sync.Once
 	stop     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 // Stop asks the background worker loop to exit. It is primarily useful for
@@ -44,12 +47,19 @@ func (r *AsyncRunner) Stop() {
 	if r.stop == nil {
 		return
 	}
-	r.stopOnce.Do(func() { close(r.stop) })
+	r.stopOnce.Do(func() {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		close(r.stop)
+	})
+	r.wg.Wait()
 }
 
 func (r *AsyncRunner) Start() {
 	r.once.Do(func() {
 		r.stop = make(chan struct{})
+		r.ctx, r.cancel = context.WithCancel(context.Background())
 		if r.Jobs != nil {
 			if recovered, err := r.Jobs.RecoverExpired(); err != nil {
 				log.Printf("recover jobs: %v", err)
@@ -57,9 +67,17 @@ func (r *AsyncRunner) Start() {
 				log.Printf("recovered %d expired generation jobs", recovered)
 			}
 		}
-		go r.loop()
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.loop()
+		}()
 		if r.Cache != nil {
-			go r.cacheLoop()
+			r.wg.Add(1)
+			go func() {
+				defer r.wg.Done()
+				r.cacheLoop()
+			}()
 		}
 	})
 }
@@ -599,7 +617,11 @@ func (r *AsyncRunner) requeueJob(job models.GenerationJob, err error) {
 }
 
 func (r *AsyncRunner) claimedJobContext(job models.GenerationJob) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(context.Background())
+	base := r.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
 	if r.Jobs == nil || job.ID == 0 || job.LeaseOwner == "" {
 		return ctx, cancel
 	}

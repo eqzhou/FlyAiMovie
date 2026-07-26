@@ -3,15 +3,20 @@ package mediafetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eqzhou/flyaimovie/internal/storage"
 )
@@ -60,6 +65,46 @@ func TestDownloadAuthorizedRejectsCrossAuthorityRedirect(t *testing.T) {
 	}
 }
 
+func TestDownloadAuthorizedRejectsHTTPSDowngradeOnSameAuthority(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return response(req, http.StatusFound, map[string]string{"Location": "http://8.8.8.8/content"}, nil), nil
+		}
+		body := append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p'}, bytes.Repeat([]byte{1}, 600)...)
+		return response(req, http.StatusOK, map[string]string{"Content-Type": "video/mp4"}, body), nil
+	})}
+
+	store := storage.NewLocal(t.TempDir())
+	_, err := downloadAuthorizedWithClient(context.Background(), client, store, "https://8.8.8.8/content", "videos", "video", "secret")
+	if err == nil || !strings.Contains(err.Error(), "redirect changed") {
+		t.Fatalf("HTTPS downgrade redirect was not rejected: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("round trips=%d, want 1", calls)
+	}
+}
+
+func TestDownloadDoesNotMutateCallerHTTPClient(t *testing.T) {
+	originalRedirect := func(_ *http.Request, _ []*http.Request) error { return nil }
+	client := &http.Client{
+		CheckRedirect: originalRedirect,
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p'}, bytes.Repeat([]byte{1}, 600)...)
+			return response(req, http.StatusOK, map[string]string{"Content-Type": "video/mp4"}, body), nil
+		}),
+	}
+
+	store := storage.NewLocal(t.TempDir())
+	if _, err := downloadAuthorizedWithClient(context.Background(), client, store, "https://8.8.8.8/content", "videos", "video", ""); err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(client.CheckRedirect).Pointer() != reflect.ValueOf(originalRedirect).Pointer() {
+		t.Fatal("download mutated the caller's redirect policy")
+	}
+}
+
 func TestDownloadRejectsStatusTypeAndDeclaredSize(t *testing.T) {
 	store := storage.NewLocal(t.TempDir())
 	for name, handler := range map[string]http.HandlerFunc{
@@ -93,6 +138,12 @@ func TestMediaHTTPClientDoesNotUseEnvironmentProxy(t *testing.T) {
 	if transport.Proxy != nil {
 		t.Fatal("media client inherited a process proxy")
 	}
+	if transport.IdleConnTimeout <= 0 || transport.TLSHandshakeTimeout <= 0 {
+		t.Fatal("media transport does not bound idle connections and TLS handshakes")
+	}
+	if other := mediaHTTPClient(); other.Transport != client.Transport {
+		t.Fatal("media clients do not share a bounded connection pool")
+	}
 }
 
 func TestValidateRemoteURLRejectsUnsafeDestinations(t *testing.T) {
@@ -105,11 +156,41 @@ func TestValidateRemoteURLRejectsUnsafeDestinations(t *testing.T) {
 		"http://[::1]/private",
 		"ftp://example.com/file",
 		"https://user:pass@example.com/file",
+		"http://8.8.8.8:0/file",
+		"http://[::127.0.0.1]/private",
+		"http://[64:ff9b::7f00:1]/private",
 	}
 	for _, rawURL := range unsafe {
 		if err := ValidateRemoteURL(context.Background(), rawURL); err == nil {
 			t.Errorf("ValidateRemoteURL(%q) succeeded, want rejection", rawURL)
 		}
+	}
+}
+
+func TestDownloadClosesResponseBodyAndPropagatesContext(t *testing.T) {
+	type contextKey string
+	const key contextKey = "request-id"
+	body := &trackingBody{Reader: strings.NewReader("failure")}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Context().Value(key); got != "ctx-123" {
+			t.Fatalf("request context value=%v", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Header:     make(http.Header),
+			Body:       body,
+			Request:    req,
+		}, nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), key, "ctx-123"), time.Second)
+	defer cancel()
+	store := storage.NewLocal(t.TempDir())
+	if _, err := downloadAuthorizedWithClient(ctx, client, store, "https://8.8.8.8/content", "videos", "video", ""); err == nil {
+		t.Fatal("error response was accepted")
+	}
+	if !body.closed {
+		t.Fatal("response body was not closed")
 	}
 }
 
@@ -225,5 +306,94 @@ func TestSafeDialAndInvalidLocalMockInputs(t *testing.T) {
 		if _, err := ImportLocalMockFile(store, raw, "images", ".png", 10); err == nil {
 			t.Fatalf("invalid local mock URL %q accepted", raw)
 		}
+	}
+}
+
+func TestSafeDialRevalidatesAndPinsDNSAnswers(t *testing.T) {
+	t.Run("private rebinding answer", func(t *testing.T) {
+		dialed := false
+		lookup := func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+		}
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			dialed = true
+			return nil, errors.New("unexpected dial")
+		}
+		if _, err := safeDialContextWith(context.Background(), "tcp", "media.example:443", lookup, dial); err == nil {
+			t.Fatal("private rebound address was accepted")
+		}
+		if dialed {
+			t.Fatal("dialer was called for a private rebound address")
+		}
+	})
+
+	t.Run("public answer", func(t *testing.T) {
+		type contextKey string
+		const key contextKey = "trace"
+		ctx := context.WithValue(context.Background(), key, "trace-1")
+		lookup := func(got context.Context, host string) ([]net.IPAddr, error) {
+			if got.Value(key) != "trace-1" || host != "media.example" {
+				t.Fatalf("lookup context/host = %v/%q", got.Value(key), host)
+			}
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		}
+		wantErr := errors.New("dial stopped")
+		dial := func(got context.Context, network, address string) (net.Conn, error) {
+			if got.Value(key) != "trace-1" || network != "tcp" || address != "8.8.8.8:443" {
+				t.Fatalf("dial context/network/address = %v/%q/%q", got.Value(key), network, address)
+			}
+			return nil, wantErr
+		}
+		if _, err := safeDialContextWith(ctx, "tcp", "media.example:443", lookup, dial); !errors.Is(err, wantErr) {
+			t.Fatalf("dial error was not preserved: %v", err)
+		}
+	})
+
+	t.Run("canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		lookup := func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		}
+		dialed := false
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			dialed = true
+			return nil, nil
+		}
+		if _, err := safeDialContextWith(ctx, "tcp", "media.example:443", lookup, dial); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation was not preserved: %v", err)
+		}
+		if dialed {
+			t.Fatal("dialer was called after context cancellation")
+		}
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type trackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *trackingBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func response(req *http.Request, status int, headers map[string]string, body []byte) *http.Response {
+	header := make(http.Header, len(headers))
+	for key, value := range headers {
+		header.Set(key, value)
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     header,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    req,
 	}
 }

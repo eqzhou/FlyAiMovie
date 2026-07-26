@@ -101,8 +101,13 @@ func (s *Service) ProcessOrganization(organizationID uint, limit int) (Result, e
 }
 
 func (s *Service) process(task *models.MediaDeletionTask) error {
-	absolute := filepath.Join(s.Store.Root, filepath.FromSlash(task.LocalPath))
-	err := os.Remove(absolute)
+	root, err := os.OpenRoot(s.Store.Root)
+	if err == nil {
+		err = root.Remove(filepath.FromSlash(task.LocalPath))
+		if closeErr := root.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}
 	now := response.Now()
 	if err == nil || os.IsNotExist(err) {
 		return s.DB.Model(task).Updates(map[string]any{"status": "completed", "attempts": task.Attempts + 1, "last_error": "", "completed_at": now, "updated_at": now}).Error

@@ -14,7 +14,11 @@ import (
 	"gorm.io/gorm"
 )
 
-var errExistingAccountRequiresInvitation = errors.New("existing accounts require a verified invitation")
+var (
+	errExistingAccountRequiresInvitation = errors.New("existing accounts require a verified invitation")
+	errNewUserPasswordInvalid            = errors.New("new users require a password of 12-72 bytes")
+	errUserAlreadyMember                 = errors.New("user is already a member")
+)
 
 func (s *Server) registerOrganizationMembers(api *gin.RouterGroup) {
 	group := api.Group("/organization/members")
@@ -89,7 +93,7 @@ func (s *Server) createOrganizationMember(c *gin.Context) {
 		err := tx.Where("email = ?", email).First(&user).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if !validPassword(body.Password) {
-				return errors.New("new users require a password of 12-128 characters")
+				return errNewUserPasswordInvalid
 			}
 			hash, hashErr := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
 			if hashErr != nil {
@@ -113,7 +117,7 @@ func (s *Server) createOrganizationMember(c *gin.Context) {
 			return err
 		}
 		if count > 0 {
-			return errors.New("user is already a member")
+			return errUserAlreadyMember
 		}
 		return tx.Create(&models.Membership{OrganizationID: actor.Organization.ID, UserID: user.ID, Role: body.Role, CreatedAt: now, UpdatedAt: now}).Error
 	})
@@ -122,7 +126,11 @@ func (s *Server) createOrganizationMember(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": err.Error()})
 			return
 		}
-		response.BadRequest(c, err.Error())
+		if errors.Is(err, errNewUserPasswordInvalid) || errors.Is(err, errUserAlreadyMember) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ServerError(c, "failed to create member")
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"code": http.StatusCreated, "message": "created", "data": gin.H{"user_id": user.ID, "email": user.Email, "display_name": user.DisplayName, "role": body.Role}})
@@ -236,7 +244,7 @@ func (s *Server) authSwitchOrganization(c *gin.Context) {
 		return
 	}
 	var membership models.Membership
-	if err := db.DB.Where("organization_id = ? AND user_id = ?", body.OrganizationID, actor.User.ID).First(&membership).Error; err != nil {
+	if err := db.DB.Where("organization_id = ? AND user_id = ?", body.OrganizationID, actor.User.ID).First(&membership).Error; err != nil || !validRole(membership.Role) {
 		response.NotFound(c, "organization not found")
 		return
 	}
@@ -245,12 +253,26 @@ func (s *Server) authSwitchOrganization(c *gin.Context) {
 		response.NotFound(c, "organization not found")
 		return
 	}
-	token, csrf, err := s.createSession(actor.User.ID, organization.ID)
+	var token, csrf string
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		var createErr error
+		token, csrf, createErr = createSessionRecord(tx, actor.User.ID, organization.ID, s.Cfg.Auth.SessionTTLHours)
+		if createErr != nil {
+			return createErr
+		}
+		result := tx.Model(&models.Session{}).Where("token_hash = ? AND revoked_at IS NULL", actor.Session.TokenHash).Update("revoked_at", response.Now())
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("active session not found")
+		}
+		return nil
+	})
 	if err != nil {
 		response.ServerError(c, "failed to switch organization")
 		return
 	}
-	_ = db.DB.Model(&models.Session{}).Where("token_hash = ?", actor.Session.TokenHash).Update("revoked_at", response.Now()).Error
 	s.setSessionCookie(c, token)
 	response.Success(c, authResponse(actor.User, organization, membership.Role, csrf))
 }
@@ -262,7 +284,7 @@ func (s *Server) authChangePassword(c *gin.Context) {
 		NewPassword     string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || !validPassword(body.NewPassword) {
-		response.BadRequest(c, "new password must contain 12-128 characters")
+		response.BadRequest(c, "new password must contain 12-72 bytes")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(actor.User.PasswordHash), []byte(body.CurrentPassword)) != nil {

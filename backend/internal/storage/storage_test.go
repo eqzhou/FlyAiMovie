@@ -31,6 +31,89 @@ func TestLocalStorageSaveAndURLs(t *testing.T) {
 	}
 }
 
+func TestLocalStorageSaveRejectsSubdirectoryTraversal(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "storage")
+	store := NewLocal(root)
+
+	if _, _, err := store.SaveBytes("../escaped", "cover.png", []byte("secret")); err == nil {
+		t.Fatal("subdirectory traversal was accepted")
+	}
+	if entries, err := os.ReadDir(filepath.Join(parent, "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("write escaped storage root: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestLocalStorageSaveRejectsSymlinkedSubdirectoryEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "uploads")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	store := NewLocal(root)
+
+	if _, _, err := store.SaveBytes("uploads", "cover.png", []byte("secret")); err == nil {
+		t.Fatal("symlinked subdirectory outside storage root was accepted")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("write escaped through symlink: %v", entries)
+	}
+}
+
+func TestLocalStorageCreatesPrivateDirectoriesAndFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "storage")
+	store := NewLocal(root)
+	_, absolute, err := store.SaveBytes("images", "cover.png", []byte("private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{root, filepath.Join(root, "images"), absolute} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got&0o077 != 0 {
+			t.Errorf("%s permissions = %#o, want no group/other access", path, got)
+		}
+	}
+}
+
+func TestLocalStorageAbsRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	store := NewLocal(root)
+	for _, relative := range []string{"../secret", "images/../../secret", "/static/../../secret", `..\secret`} {
+		if absolute := store.Abs(relative); absolute != "" {
+			t.Errorf("Abs(%q) = %q, want rejection", relative, absolute)
+		}
+	}
+	if got, want := store.Abs("new/nested/file.bin"), filepath.Join(root, "new", "nested", "file.bin"); got != want {
+		t.Errorf("safe non-existing path = %q, want %q", got, want)
+	}
+}
+
+func TestLocalStorageAbsRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	targets := map[string]string{
+		"existing": outside,
+		"dangling": filepath.Join(outside, "not-created"),
+	}
+	for name, target := range targets {
+		link := filepath.Join(root, name)
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if absolute := NewLocal(root).Abs(name + "/secret"); absolute != "" {
+			t.Errorf("Abs followed %s symlink outside storage root: %q", name, absolute)
+		}
+	}
+}
+
 func TestResolveConfinesPathsToStorageRoot(t *testing.T) {
 	root := t.TempDir()
 	store := NewLocal(root)
