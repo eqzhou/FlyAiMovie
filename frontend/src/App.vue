@@ -68,16 +68,30 @@ const themeButtonLabel = computed(() => `切换主题，当前：${THEME_LABEL[c
 
 watch(() => route.fullPath, () => { navigationOpen.value = false })
 
+// 会话失效（401）后 actor 会被清空：主动带回登录页，避免停留在已失效页面。
+watch(() => authStore.state.actor, (actor, previous) => {
+  if (actor || !previous || !authStore.state.enabled) return
+  if (['login', 'setup', 'invite', 'password-reset'].includes(String(route.name))) return
+  router.replace('/login')
+})
+
 async function logout() {
   await authStore.logout()
   await router.replace('/login')
 }
 
 async function switchOrganization(event: Event) {
-  const organizationId = Number((event.target as HTMLSelectElement).value)
-  if (!organizationId || organizationId === authStore.state.actor?.organization.id) return
-  await authStore.switchOrganization(organizationId)
-  await router.replace('/')
+  const select = event.target as HTMLSelectElement
+  const organizationId = Number(select.value)
+  const currentId = authStore.state.actor?.organization.id
+  if (!organizationId || organizationId === currentId) return
+  try {
+    await authStore.switchOrganization(organizationId)
+    await router.replace('/')
+  } catch (cause) {
+    console.warn('switch organization failed', cause)
+    select.value = String(currentId || '')
+  }
 }
 </script>
 

@@ -17,11 +17,26 @@ const agentDetail = ref<{ run: any; events: any[] } | null>(null)
 const detailLoading = ref(false)
 const detailRefreshing = ref(false)
 const retryingAgentRunID = ref<number | null>(null)
+const cancelingAgentRunID = ref<number | null>(null)
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+const pendingJobActionIDs = ref<number[]>([])
+const batchCanceling = ref(false)
 let timer: number | null = null
 let detailTimer: number | null = null
+let noticeTimer: number | null = null
+let listRequestToken = 0
+let disposed = false
+
+function showNotice(text: string) {
+  notice.value = text
+  if (noticeTimer) window.clearTimeout(noticeTimer)
+  noticeTimer = window.setTimeout(() => {
+    if (notice.value === text) notice.value = ''
+    noticeTimer = null
+  }, 3200)
+}
 
 const active = computed(() => activeTab.value === 'jobs'
   ? jobs.value.some(job => !['succeeded', 'failed', 'canceled'].includes(job.status))
@@ -30,6 +45,7 @@ const canCancelAgentRun = computed(() => !authStore.state.enabled || authStore.s
 const canManageTasks = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const cancellableSelected = computed(() => selected.value.filter(id => {
 	if (!canManageTasks.value) return false
+  if (pendingJobActionIDs.value.includes(id)) return false
   const job = jobs.value.find(row => row.id === id)
   return job && !['succeeded', 'failed', 'canceled'].includes(job.status)
 }))
@@ -99,27 +115,35 @@ function agentEventTitle(event: any) {
 }
 
 async function load() {
+  const token = ++listRequestToken
   loading.value = true
   error.value = ''
   try {
-    jobs.value = await jobsAPI.list({ status: status.value || undefined, kind: kind.value || undefined, limit: 100 })
+    const rows = await jobsAPI.list({ status: status.value || undefined, kind: kind.value || undefined, limit: 100 })
+    if (token !== listRequestToken) return
+    jobs.value = rows
     selected.value = selected.value.filter(id => jobs.value.some(row => row.id === id))
   } catch (reason) {
+    if (token !== listRequestToken) return
     error.value = reason instanceof Error ? reason.message : '加载任务失败'
   } finally {
-    loading.value = false
+    if (token === listRequestToken) loading.value = false
   }
 }
 
 async function loadAgentRuns() {
+  const token = ++listRequestToken
   loading.value = true
   error.value = ''
   try {
-    agentRuns.value = await agentAPI.runs({ status: agentStatus.value || undefined, agent_type: agentType.value || undefined })
+    const rows = await agentAPI.runs({ status: agentStatus.value || undefined, agent_type: agentType.value || undefined })
+    if (token !== listRequestToken) return
+    agentRuns.value = rows
   } catch (reason) {
+    if (token !== listRequestToken) return
     error.value = reason instanceof Error ? reason.message : '加载 Agent 运行记录失败'
   } finally {
-    loading.value = false
+    if (token === listRequestToken) loading.value = false
   }
 }
 
@@ -149,31 +173,45 @@ async function toggleEvents(job: any) {
 }
 
 async function cancel(job: any) {
+  if (pendingJobActionIDs.value.includes(job.id)) return
+  pendingJobActionIDs.value = [...pendingJobActionIDs.value, job.id]
   try {
     await jobsAPI.cancel(job.id)
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '取消任务失败'
+  } finally {
+    pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
 }
 
 async function retry(job: any) {
+  if (pendingJobActionIDs.value.includes(job.id)) return
+  pendingJobActionIDs.value = [...pendingJobActionIDs.value, job.id]
   try {
     await jobsAPI.retry(job.id)
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '重试任务失败'
+  } finally {
+    pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
 }
 
 async function batchCancel() {
-  if (!cancellableSelected.value.length) return
+  if (batchCanceling.value || !cancellableSelected.value.length) return
+  const targetIDs = [...cancellableSelected.value]
+  batchCanceling.value = true
+  pendingJobActionIDs.value = [...new Set([...pendingJobActionIDs.value, ...targetIDs])]
   try {
-    await jobsAPI.batchCancel(cancellableSelected.value)
+    await jobsAPI.batchCancel(targetIDs)
     selected.value = []
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '批量取消失败'
+  } finally {
+    pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => !targetIDs.includes(id))
+    batchCanceling.value = false
   }
 }
 
@@ -227,12 +265,16 @@ function closeAgentDetail() {
 }
 
 async function cancelAgentRun(run: any) {
+  if (cancelingAgentRunID.value !== null) return
+  cancelingAgentRunID.value = run.id
   error.value = ''
   try {
     await agentAPI.cancelRun(run.id)
     await loadAgentRuns()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '取消 Agent 运行失败'
+  } finally {
+    cancelingAgentRunID.value = null
   }
 }
 
@@ -242,7 +284,7 @@ async function retryAgentRun(run: any) {
   notice.value = ''
   try {
     const retry = await agentAPI.retryRun(run.id) as any
-    notice.value = `Agent 重试 #${retry.id} 已启动`
+    showNotice(`Agent 重试 #${retry.id} 已启动`)
     await loadAgentRuns()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '重试 Agent 运行失败'
@@ -272,11 +314,16 @@ function formatTime(value: string) {
 }
 
 onMounted(async () => {
+  disposed = false
   await load()
+  if (disposed) return
   timer = window.setInterval(() => { if (active.value && document.visibilityState === 'visible') refresh() }, 4000)
 })
 onUnmounted(() => {
+  disposed = true
+  listRequestToken += 1
   if (timer) window.clearInterval(timer)
+  if (noticeTimer) window.clearTimeout(noticeTimer)
   stopAgentDetailRefresh()
 })
 </script>
@@ -307,7 +354,7 @@ onUnmounted(() => {
         <option value="waiting_provider">等待厂商</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="canceled">已取消</option>
       </select>
       <input v-model.trim="kind" aria-label="任务类型" placeholder="按任务类型过滤" @keyup.enter="load" />
-      <button v-if="canManageTasks" class="btn btn-danger" :disabled="!cancellableSelected.length" @click="batchCancel">批量取消</button>
+      <button v-if="canManageTasks" class="btn btn-danger" :disabled="batchCanceling || !cancellableSelected.length" @click="batchCancel">{{ batchCanceling ? '取消中…' : '批量取消' }}</button>
     </div>
     <div v-else class="audit-toolbar">
       <select v-model="agentStatus" aria-label="Agent 状态" @change="loadAgentRuns">
@@ -317,7 +364,10 @@ onUnmounted(() => {
         <option value="">全部 Agent</option><option v-for="(label, value) in agentTypeLabels" :key="value" :value="value">{{ label }}</option>
       </select>
     </div>
-    <div v-if="error" class="auth-error" role="alert">{{ error }}</div>
+    <div v-if="error" class="inline-alert" role="alert">
+      <div><strong>{{ activeTab === 'jobs' ? '任务操作失败' : 'Agent 操作失败' }}</strong><span>{{ error }}</span></div>
+      <button class="btn" type="button" :disabled="loading" @click="refresh">重试</button>
+    </div>
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
     <div v-if="activeTab === 'jobs'" class="panel audit-table-wrap">
       <table v-if="jobs.length" class="table jobs-table">
@@ -328,14 +378,14 @@ onUnmounted(() => {
               <td v-if="canManageTasks"><input v-model="selected" type="checkbox" :value="job.id" :aria-label="`选择任务 ${job.id}`" /></td>
               <td>#{{ job.id }}<br><span class="muted">{{ kindLabel(job.kind) }}</span></td>
               <td><span class="job-status" :class="job.status">{{ statusLabel(job.status) }}</span><div v-if="job.last_error" class="job-error">{{ job.last_error }}</div></td>
-              <td><div class="progress-bar"><i :style="`width: ${job.progress || 0}%`"></i></div><span class="muted">{{ job.progress || 0 }}%</span></td>
+              <td><div class="progress-bar" :class="{ active: ['queued', 'running', 'waiting_provider'].includes(job.status) }"><i :style="`width: ${job.progress || 0}%`"></i></div><span class="muted">{{ job.progress || 0 }}%</span></td>
               <td>{{ job.provider || '-' }}<br><span class="muted">{{ job.provider_task_id || '' }}</span></td>
               <td>{{ job.attempt }} / {{ job.max_attempts }}</td>
               <td>{{ formatTime(job.updated_at) }}</td>
               <td><div class="mini-actions">
                 <button class="btn" @click="toggleEvents(job)">{{ expanded === job.id ? '收起日志' : '查看日志' }}</button>
-                <button v-if="canManageTasks && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger" @click="cancel(job)">取消</button>
-                <button v-if="canManageTasks && ['failed','canceled'].includes(job.status)" class="btn" :disabled="job.attempt >= job.max_attempts" @click="retry(job)">重试</button>
+                <button v-if="canManageTasks && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger" :disabled="pendingJobActionIDs.includes(job.id)" @click="cancel(job)">{{ pendingJobActionIDs.includes(job.id) ? '取消中…' : '取消' }}</button>
+                <button v-if="canManageTasks && ['failed','canceled'].includes(job.status)" class="btn" :disabled="job.attempt >= job.max_attempts || pendingJobActionIDs.includes(job.id)" @click="retry(job)">{{ pendingJobActionIDs.includes(job.id) ? '重试中…' : '重试' }}</button>
               </div></td>
             </tr>
             <tr v-if="expanded === job.id"><td :colspan="canManageTasks ? 8 : 7"><div class="job-events">
@@ -347,7 +397,7 @@ onUnmounted(() => {
       </table>
       <div v-if="loading && !jobs.length" class="page-loading" role="status" aria-live="polite">
         <div class="page-loading-mark" aria-hidden="true"></div>
-        <div><strong>加载任务中</strong><p class="muted" style="margin:6px 0 0">同步生成任务与阶段日志…</p></div>
+        <div><strong>加载任务中</strong><p class="muted">同步生成任务与阶段日志…</p></div>
       </div>
       <div v-else-if="!loading && !jobs.length" class="surface-empty empty jobs-empty">
         <strong>暂无任务</strong>
@@ -366,14 +416,14 @@ onUnmounted(() => {
           <td>{{ run.completed_at ? formatTime(run.completed_at) : '-' }}</td>
           <td><div class="mini-actions">
             <button class="btn" :disabled="detailLoading" @click="openAgentDetail(run)">查看详情</button>
-            <button v-if="run.status === 'running' && canCancelAgentRun" class="btn btn-danger" @click="cancelAgentRun(run)">取消</button>
+            <button v-if="run.status === 'running' && canCancelAgentRun" class="btn btn-danger" :disabled="cancelingAgentRunID !== null" @click="cancelAgentRun(run)">{{ cancelingAgentRunID === run.id ? '取消中…' : '取消' }}</button>
             <button v-if="['failed', 'canceled'].includes(run.status) && canCancelAgentRun" class="btn" :disabled="retryingAgentRunID !== null" @click="retryAgentRun(run)">{{ retryingAgentRunID === run.id ? '重试中…' : '重试' }}</button>
           </div></td>
         </tr></tbody>
       </table>
       <div v-if="loading && !agentRuns.length" class="page-loading" role="status" aria-live="polite">
         <div class="page-loading-mark" aria-hidden="true"></div>
-        <div><strong>加载 Agent 运行记录</strong><p class="muted" style="margin:6px 0 0">同步工具调用与执行结果…</p></div>
+        <div><strong>加载 Agent 运行记录</strong><p class="muted">同步工具调用与执行结果…</p></div>
       </div>
       <div v-else-if="!loading && !agentRuns.length" class="surface-empty empty jobs-empty">
         <strong>暂无 Agent 运行记录</strong>

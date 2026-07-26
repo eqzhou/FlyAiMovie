@@ -1,17 +1,28 @@
-import { authStore, handleUnauthorized } from '../auth'
+import { authSessionFingerprint, authStore, handleUnauthorized } from '../auth'
 
 const BASE = '/api/v1'
 
+async function parseResponseJSON(resp: Response): Promise<Record<string, any>> {
+  const text = await resp.text()
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { message: text.slice(0, 200) }
+  }
+}
+
 async function req<T = any>(method: string, path: string, body?: any): Promise<T> {
+  const requestSession = authSessionFingerprint()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (method !== 'GET' && authStore.state.csrfToken) headers['X-CSRF-Token'] = authStore.state.csrfToken
   const opts: RequestInit = { method, credentials: 'include', headers }
   if (body !== undefined) opts.body = JSON.stringify(body)
   const resp = await fetch(`${BASE}${path}`, opts)
-  const json = await resp.json()
-  if (resp.status === 401) handleUnauthorized()
+  const json = await parseResponseJSON(resp)
+  if (resp.status === 401) handleUnauthorized(requestSession)
   if (!resp.ok || (json.code && json.code >= 400)) {
-    throw new Error(json.message || `${resp.status}`)
+    throw new Error(json.message || `请求失败（${resp.status}）`)
   }
   return (json.data ?? json) as T
 }
@@ -23,31 +34,23 @@ export const api = {
   del: <T = any>(p: string, b?: any) => req<T>('DELETE', p, b),
 }
 
+async function uploadRequest(endpoint: string, file: File, fields: Record<string, string | number>) {
+  const requestSession = authSessionFingerprint()
+  const form = new FormData()
+  form.append('file', file)
+  for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
+  const headers: Record<string, string> = {}
+  if (authStore.state.csrfToken) headers['X-CSRF-Token'] = authStore.state.csrfToken
+  const resp = await fetch(`${BASE}${endpoint}`, { method: 'POST', credentials: 'include', headers, body: form })
+  const json = await parseResponseJSON(resp)
+  if (resp.status === 401) handleUnauthorized(requestSession)
+  if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `请求失败（${resp.status}）`)
+  return json.data ?? json
+}
+
 export const uploadAPI = {
-  image: async (file: File, fields: Record<string, string | number>) => {
-    const form = new FormData()
-    form.append('file', file)
-    for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
-    const headers: Record<string, string> = {}
-    if (authStore.state.csrfToken) headers['X-CSRF-Token'] = authStore.state.csrfToken
-    const resp = await fetch(`${BASE}/upload/image`, { method: 'POST', credentials: 'include', headers, body: form })
-    const json = await resp.json()
-    if (resp.status === 401) handleUnauthorized()
-    if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `${resp.status}`)
-    return json.data ?? json
-  },
-  media: async (file: File, fields: Record<string, string | number>) => {
-    const form = new FormData()
-    form.append('file', file)
-    for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
-    const headers: Record<string, string> = {}
-    if (authStore.state.csrfToken) headers['X-CSRF-Token'] = authStore.state.csrfToken
-    const resp = await fetch(`${BASE}/upload/media`, { method: 'POST', credentials: 'include', headers, body: form })
-    const json = await resp.json()
-    if (resp.status === 401) handleUnauthorized()
-    if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `${resp.status}`)
-    return json.data ?? json
-  },
+  image: (file: File, fields: Record<string, string | number>) => uploadRequest('/upload/image', file, fields),
+  media: (file: File, fields: Record<string, string | number>) => uploadRequest('/upload/media', file, fields),
 }
 
 export const dramaAPI = {

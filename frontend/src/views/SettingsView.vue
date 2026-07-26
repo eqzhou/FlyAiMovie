@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { FlaskConical, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
+import { passwordValidationMessage } from '../utils/password'
 
 const configs = ref<any[]>([])
 const router = useRouter()
@@ -22,6 +23,7 @@ const form = ref({
   is_active: true,
 })
 const toast = ref('')
+let toastTimer: number | null = null
 const loading = ref(true)
 const loadError = ref('')
 const serviceError = ref('')
@@ -49,6 +51,8 @@ const promptDraftPreview = ref('')
 const previewingPromptDraft = ref(false)
 const savingPrompt = ref(false)
 const previewTemplate = ref<any | null>(null)
+const previewingTemplate = ref(false)
+let previewRequestID = 0
 const revisionTemplate = ref<any | null>(null)
 const promptRevisions = ref<any[]>([])
 const restoringRevision = ref<number | null>(null)
@@ -128,6 +132,8 @@ const inviteLink = ref('')
 const inviteEmailSent = ref<boolean | null>(null)
 const inviting = ref(false)
 const copyingInvite = ref(false)
+const savingMember = ref(false)
+const changingPassword = ref(false)
 const invitations = ref<any[]>([])
 const passwordForm = ref({ current: '', next: '', confirm: '' })
 const deleteForm = ref({ password: '', confirmation: '' })
@@ -162,8 +168,10 @@ function agentTypeLabel(value: string) { return agentTypeLabels[value] || value 
 
 function show(m: string, duration = 2800) {
   toast.value = m
-  window.setTimeout(() => {
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
     if (toast.value === m) toast.value = ''
+    toastTimer = null
   }, duration)
 }
 
@@ -209,15 +217,29 @@ async function load() {
 }
 
 async function addMember() {
+  if (savingMember.value) return
+  const email = memberForm.value.email.trim()
+  if (!email) { show('请填写成员邮箱'); return }
+  const passwordError = passwordValidationMessage(memberForm.value.password, '初始密码')
+  if (passwordError) { show(passwordError); return }
+  savingMember.value = true
   try {
-    await memberAPI.create(memberForm.value)
+    await memberAPI.create({ ...memberForm.value, email })
     memberForm.value = { email: '', display_name: '', password: '', role: 'editor' }
     showMemberModal.value = false
     show('成员已添加')
-    members.value = await memberAPI.list()
-    await authStore.refreshOrganizations()
   } catch (error) {
     show(error instanceof Error ? error.message : '添加成员失败')
+    savingMember.value = false
+    return
+  }
+  try {
+    members.value = await memberAPI.list()
+    await authStore.refreshOrganizations()
+  } catch {
+    show('成员已添加，但成员列表暂未刷新，请稍后重试')
+  } finally {
+    savingMember.value = false
   }
 }
 
@@ -232,9 +254,15 @@ async function inviteMember() {
     show(result.email_sent
       ? '邀请已创建，邮件已尝试发送；也可复制链接备用'
       : '邀请已创建。邮件未配置或发送失败，请复制链接发送给成员', 4200)
-    invitations.value = await memberAPI.invitations()
   } catch (error) {
     show(error instanceof Error ? error.message : '创建邀请失败')
+    inviting.value = false
+    return
+  }
+  try {
+    invitations.value = await memberAPI.invitations()
+  } catch {
+    show('邀请已创建，但邀请列表暂未刷新', 4200)
   } finally {
     inviting.value = false
   }
@@ -244,11 +272,12 @@ async function revokeInvitation(invitation: any) {
   if (!confirm(`撤销发往 ${invitation.email} 的邀请？`)) return
   try {
     await memberAPI.revokeInvitation(invitation.id)
-    invitations.value = await memberAPI.invitations()
     show('邀请已撤销')
   } catch (error) {
     show(error instanceof Error ? error.message : '撤销邀请失败')
+    return
   }
+  try { invitations.value = await memberAPI.invitations() } catch { show('邀请已撤销，但邀请列表暂未刷新') }
 }
 
 async function resendInvitation(invitation: any) {
@@ -259,12 +288,18 @@ async function resendInvitation(invitation: any) {
     inviteLink.value = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
     inviteEmailSent.value = !!result.email_sent
     showInviteModal.value = true
-    invitations.value = await memberAPI.invitations()
     show(result.email_sent
       ? '邀请已重发，邮件已尝试发送；也可复制新链接'
       : '邀请已重发。邮件未配置或发送失败，请复制新链接', 4200)
   } catch (error) {
     show(error instanceof Error ? error.message : '重发邀请失败')
+    inviting.value = false
+    return
+  }
+  try {
+    invitations.value = await memberAPI.invitations()
+  } catch {
+    show('邀请已重发，但邀请列表暂未刷新', 4200)
   } finally {
     inviting.value = false
   }
@@ -329,15 +364,21 @@ async function removeMember(member: any) {
   if (!confirm(`移除 ${member.email}？`)) return
   try {
     await memberAPI.remove(member.user_id)
-    members.value = await memberAPI.list()
     show('成员已移除')
   } catch (error) {
     show(error instanceof Error ? error.message : '移除成员失败')
+    return
   }
+  try { members.value = await memberAPI.list() } catch { show('成员已移除，但成员列表暂未刷新') }
 }
 
 async function changePassword() {
+  if (changingPassword.value) return
+  if (!passwordForm.value.current) { show('请填写当前密码'); return }
   if (passwordForm.value.next !== passwordForm.value.confirm) { show('两次新密码不一致'); return }
+  const passwordError = passwordValidationMessage(passwordForm.value.next, '新密码')
+  if (passwordError) { show(passwordError); return }
+  changingPassword.value = true
   try {
     await authStore.changePassword(passwordForm.value.current, passwordForm.value.next)
     passwordForm.value = { current: '', next: '', confirm: '' }
@@ -345,6 +386,8 @@ async function changePassword() {
     show('密码已更新')
   } catch (error) {
     show(error instanceof Error ? error.message : '修改密码失败')
+  } finally {
+    changingPassword.value = false
   }
 }
 
@@ -379,9 +422,14 @@ async function saveQuota() {
   try {
     await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs, daily_budget_cny: quota.value.daily_budget_cny, budget_warning_percent: quota.value.budget_warning_percent })
     show('生成配额已保存')
-    quota.value = await quotaAPI.get()
   } catch (error) {
     show(error instanceof Error ? error.message : '保存配额失败')
+    return
+  }
+  try {
+    quota.value = await quotaAPI.get()
+  } catch {
+    show('生成配额已保存，但最新用量暂未刷新')
   }
 }
 
@@ -697,32 +745,54 @@ async function savePrompt() {
   try {
     if (promptForm.value.id) await settingsAPI.updatePromptTemplate(promptForm.value.id, data)
     else await settingsAPI.createPromptTemplate(data)
-    show(promptForm.value.id ? '提示词已更新' : '提示词已创建')
-    promptForm.value = null
-    promptTemplates.value = await settingsAPI.promptTemplates()
   } catch (error) {
     promptFormError.value = error instanceof Error ? error.message : '保存失败'
+    savingPrompt.value = false
+    return
+  }
+  const successMessage = promptForm.value.id ? '提示词已更新' : '提示词已创建'
+  promptForm.value = null
+  show(successMessage)
+  try {
+    promptTemplates.value = await settingsAPI.promptTemplates()
+  } catch {
+    show(`${successMessage}，但模板列表暂未刷新`)
   } finally {
     savingPrompt.value = false
   }
 }
 
 function openPreview(template: any) {
+  previewRequestID += 1
   previewTemplate.value = template
   previewVariables.value = Object.fromEntries(promptVariables(template).map((name) => [name, promptExampleValues[name] || '示例内容']))
   previewResult.value = ''
   previewError.value = ''
 }
 
+function closePreview() {
+  previewRequestID += 1
+  previewingTemplate.value = false
+  previewTemplate.value = null
+}
+
 async function renderPreview() {
-  if (!previewTemplate.value) return
+  if (!previewTemplate.value || previewingTemplate.value) return
+  const requestID = ++previewRequestID
+  const templateID = Number(previewTemplate.value.id)
+  const variables = { ...previewVariables.value }
+  previewingTemplate.value = true
   previewError.value = ''
   try {
-    const result = await settingsAPI.previewPromptTemplate(previewTemplate.value.id, previewVariables.value)
+    const result = await settingsAPI.previewPromptTemplate(templateID, variables)
+    if (requestID !== previewRequestID || Number(previewTemplate.value?.id) !== templateID) return
     previewResult.value = result.rendered
   } catch (error) {
+    if (requestID !== previewRequestID || Number(previewTemplate.value?.id) !== templateID) return
     previewResult.value = ''
     previewError.value = error instanceof Error ? error.message : '预览失败'
+  } finally {
+    if (requestID === previewRequestID) previewingTemplate.value = false
   }
 }
 
@@ -815,6 +885,12 @@ async function saveAgent() {
 }
 
 onMounted(load)
+onUnmounted(() => {
+  if (toastTimer) window.clearTimeout(toastTimer)
+  promptHistoryRequestID += 1
+  promptDraftRequestID += 1
+  previewRequestID += 1
+})
 </script>
 
 <template>
@@ -839,11 +915,11 @@ onMounted(load)
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>正在同步设置</strong>
-        <p class="muted" style="margin:6px 0 0">加载 AI 服务、音色、提示词与组织信息…</p>
+        <p class="muted">加载 AI 服务、音色、提示词与组织信息…</p>
       </div>
     </div>
 
-    <section v-if="activeSection === 'services'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'services'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>AI 服务</h2><p class="muted">{{ configs.length }} 个已配置服务 · {{ providers.length }} 个内置厂商模板</p></div>
         <div v-if="canManageSettings" class="toolbar"><button class="btn btn-primary" @click="openCreateService"><Plus :size="16" aria-hidden="true" />添加 AI 服务</button></div>
@@ -866,7 +942,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section v-if="activeSection === 'voices'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'voices'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>音色库</h2><p class="muted">{{ voiceCatalog.length }} 个音色 · {{ voiceCatalog.filter((voice) => voice.is_active).length }} 个可用</p></div>
         <button v-if="canManageSettings" class="btn btn-primary" :disabled="syncingVoices" @click="syncVoices"><RefreshCw :size="15" aria-hidden="true" />{{ syncingVoices ? '同步中…' : '同步音色' }}</button>
@@ -884,7 +960,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section v-if="activeSection === 'prompts'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'prompts'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
         <div><h2>提示词模板</h2><p class="muted">{{ promptTemplates.length }} 个模板 · 组织内生效</p></div>
         <button v-if="canManageSettings" class="btn btn-primary" @click="openCreatePrompt">新建提示词</button>
@@ -912,7 +988,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section v-if="activeSection === 'agents'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'agents'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>Agent 预设</h2><p class="muted">为制作流程配置模型和执行边界</p></div></div>
       <div class="panel">
         <table class="table">
@@ -922,7 +998,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section v-if="activeSection === 'organization'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'organization'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>组织与权限</h2><p class="muted">成员访问、生成额度与本地存储</p></div><div v-if="canManageQuota && authStore.state.enabled" class="toolbar"><button class="btn" @click="showMemberModal = true">添加成员</button><button class="btn btn-primary" @click="openInviteModal">创建邀请</button></div></div>
       <div class="panel">
         <h3>生成配额</h3>
@@ -958,7 +1034,7 @@ onMounted(load)
       </table></div>
     </section>
 
-    <section v-if="activeSection === 'security'" class="settings-section" role="tabpanel">
+    <section v-if="!loading && activeSection === 'security'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>安全与数据</h2><p class="muted">账户凭据、组织数据导出与删除</p></div></div>
       <div class="settings-command-list">
         <div v-if="authStore.state.enabled" class="settings-command"><div><strong>登录密码</strong><p class="muted">更新当前账户的登录密码</p></div><button class="btn" @click="showPasswordModal = true">修改密码</button></div>
@@ -973,7 +1049,7 @@ onMounted(load)
 
     <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" ref="promptContentInput" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-picker settings-span"><span>插入变量</span><div><button v-for="(label, variable) in promptVariableLabels" :key="variable" type="button" :aria-label="`插入变量 ${label}`" :title="promptToken(variable)" @click="insertPromptVariable(variable)"><strong>{{ label }}</strong><code>{{ promptToken(variable) }}</code></button></div></div></div><p v-if="promptFormError" class="form-error" role="alert">{{ promptFormError }}</p><div v-if="promptDraftPreview" class="prompt-draft-preview" role="status"><strong>草稿预览</strong><div class="prompt-preview-result">{{ promptDraftPreview }}</div></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft" @click="promptForm = null">取消</button><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft || !promptForm.content.trim()" @click="previewPromptForm">{{ previewingPromptDraft ? '检查中…' : '检查并预览' }}</button><button type="submit" class="btn btn-primary" :disabled="savingPrompt || previewingPromptDraft">{{ savingPrompt ? '保存中…' : promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
 
-    <div v-if="previewTemplate" class="modal-mask" @click.self="previewTemplate = null"><div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="preview-prompt-title" @keydown.esc="previewTemplate = null"><h3 id="preview-prompt-title">预览提示词</h3><p class="prompt-preview-name">{{ previewTemplate.name }} · v{{ previewTemplate.version }}</p><div v-if="promptVariables(previewTemplate).length" class="field-grid"><div v-for="variable in promptVariables(previewTemplate)" :key="variable" class="field"><label :for="`preview-${variable}`">{{ promptVariableLabels[variable] || variable }}</label><input :id="`preview-${variable}`" v-model="previewVariables[variable]" /></div></div><p v-if="previewError" class="form-error" role="alert">{{ previewError }}</p><div v-if="previewResult" class="prompt-preview-result" aria-live="polite">{{ previewResult }}</div><div class="modal-actions"><button type="button" class="btn" @click="previewTemplate = null">关闭</button><button type="button" class="btn btn-primary" @click="renderPreview">生成预览</button></div></div></div>
+    <div v-if="previewTemplate" class="modal-mask" @click.self="closePreview"><div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="preview-prompt-title" @keydown.esc="closePreview"><h3 id="preview-prompt-title">预览提示词</h3><p class="prompt-preview-name">{{ previewTemplate.name }} · v{{ previewTemplate.version }}</p><div v-if="promptVariables(previewTemplate).length" class="field-grid"><div v-for="variable in promptVariables(previewTemplate)" :key="variable" class="field"><label :for="`preview-${variable}`">{{ promptVariableLabels[variable] || variable }}</label><input :id="`preview-${variable}`" v-model="previewVariables[variable]" :disabled="previewingTemplate" /></div></div><p v-if="previewError" class="form-error" role="alert">{{ previewError }}</p><div v-if="previewResult" class="prompt-preview-result" aria-live="polite">{{ previewResult }}</div><div class="modal-actions"><button type="button" class="btn" :disabled="previewingTemplate" @click="closePreview">关闭</button><button type="button" class="btn btn-primary" :disabled="previewingTemplate" @click="renderPreview">{{ previewingTemplate ? '生成中…' : '生成预览' }}</button></div></div></div>
 
     <div v-if="revisionTemplate" class="modal-mask" @click.self="closePromptHistory">
       <div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="prompt-history-title" @keydown.esc="closePromptHistory">
@@ -995,7 +1071,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-if="showMemberModal" class="modal-mask" @click.self="showMemberModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="member-modal-title" @submit.prevent="addMember"><h3 id="member-modal-title">添加成员</h3><div class="field"><label for="member-email">邮箱</label><input id="member-email" v-model="memberForm.email" type="email" /></div><div class="field"><label for="member-name">显示名称</label><input id="member-name" v-model="memberForm.display_name" /></div><div class="field"><label for="member-password">初始密码</label><input id="member-password" v-model="memberForm.password" type="password" placeholder="12-128 个字符" /></div><div class="field"><label for="member-role">角色</label><select id="member-role" v-model="memberForm.role"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="modal-actions"><button type="button" class="btn" @click="showMemberModal = false">取消</button><button type="submit" class="btn btn-primary">添加成员</button></div></form></div>
+    <div v-if="showMemberModal" class="modal-mask" @click.self="showMemberModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="member-modal-title" @keydown.esc="showMemberModal = false" @submit.prevent="addMember"><h3 id="member-modal-title">添加成员</h3><div class="field"><label for="member-email">邮箱</label><input id="member-email" v-model.trim="memberForm.email" type="email" maxlength="254" autocomplete="email" required :disabled="savingMember" /></div><div class="field"><label for="member-name">显示名称</label><input id="member-name" v-model.trim="memberForm.display_name" maxlength="100" autocomplete="name" :disabled="savingMember" /></div><div class="field"><label for="member-password">初始密码</label><input id="member-password" v-model="memberForm.password" type="password" minlength="12" maxlength="72" placeholder="12–72 字节" autocomplete="new-password" required :disabled="savingMember" /><p class="field-help muted">中文通常占 3 个字节。</p></div><div class="field"><label for="member-role">角色</label><select id="member-role" v-model="memberForm.role" :disabled="savingMember"><option v-if="authStore.state.actor?.role === 'owner'" value="admin">管理员</option><option value="editor">编辑</option><option value="viewer">只读</option></select></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingMember" @click="showMemberModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingMember">{{ savingMember ? '添加中…' : '添加成员' }}</button></div></form></div>
 
     <div v-if="showInviteModal" class="modal-mask" @click.self="closeInviteModal">
       <form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title" aria-describedby="invite-modal-help" @keydown.esc="closeInviteModal" @submit.prevent="inviteMember">
@@ -1021,7 +1097,7 @@ onMounted(load)
       </form>
     </div>
 
-    <div v-if="showPasswordModal" class="modal-mask" @click.self="showPasswordModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title" @submit.prevent="changePassword"><h3 id="password-modal-title">修改密码</h3><div class="field"><label for="current-password">当前密码</label><input id="current-password" v-model="passwordForm.current" type="password" /></div><div class="field"><label for="new-password">新密码</label><input id="new-password" v-model="passwordForm.next" type="password" /></div><div class="field"><label for="confirm-password">确认新密码</label><input id="confirm-password" v-model="passwordForm.confirm" type="password" /></div><div class="modal-actions"><button type="button" class="btn" @click="showPasswordModal = false">取消</button><button type="submit" class="btn btn-primary">更新密码</button></div></form></div>
+    <div v-if="showPasswordModal" class="modal-mask" @click.self="showPasswordModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title" @keydown.esc="showPasswordModal = false" @submit.prevent="changePassword"><h3 id="password-modal-title">修改密码</h3><div class="field"><label for="current-password">当前密码</label><input id="current-password" v-model="passwordForm.current" type="password" maxlength="72" autocomplete="current-password" required :disabled="changingPassword" /></div><div class="field"><label for="new-password">新密码</label><input id="new-password" v-model="passwordForm.next" type="password" minlength="12" maxlength="72" autocomplete="new-password" required :disabled="changingPassword" /><p class="field-help muted">需为 12–72 字节，中文通常占 3 个字节。</p></div><div class="field"><label for="confirm-password">确认新密码</label><input id="confirm-password" v-model="passwordForm.confirm" type="password" minlength="12" maxlength="72" autocomplete="new-password" required :disabled="changingPassword" /></div><div class="modal-actions"><button type="button" class="btn" :disabled="changingPassword" @click="showPasswordModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="changingPassword">{{ changingPassword ? '更新中…' : '更新密码' }}</button></div></form></div>
 
     <div v-if="showDeleteModal" class="modal-mask" @click.self="showDeleteModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" @submit.prevent="deleteOrganization"><h3 id="delete-modal-title">永久删除组织</h3><p class="muted">此操作会删除组织及其全部数据，无法撤销。</p><div class="field"><label for="delete-password">当前密码</label><input id="delete-password" v-model="deleteForm.password" type="password" /></div><div class="field"><label for="delete-confirmation">输入组织标识 {{ authStore.state.actor?.organization.slug }}</label><input id="delete-confirmation" v-model="deleteForm.confirmation" /></div><div class="modal-actions"><button type="button" class="btn" @click="showDeleteModal = false">取消</button><button type="submit" class="btn btn-danger">确认永久删除</button></div></form></div>
 

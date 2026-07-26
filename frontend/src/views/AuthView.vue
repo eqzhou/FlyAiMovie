@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authStore } from '../auth'
 import { passwordResetAPI } from '../api'
+import { passwordValidationMessage } from '../utils/password'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,14 +15,20 @@ const confirmPassword = ref('')
 const busy = ref(false)
 const error = ref('')
 const isSetup = computed(() => route.name === 'setup')
+const authUnavailable = computed(() => route.query.reason === 'auth-unavailable')
 const resetRequested = ref(false)
 const resetMode = ref(false)
 
 async function submit() {
   error.value = ''
+  if (resetRequested.value) return
   if (isSetup.value && password.value !== confirmPassword.value) {
     error.value = '两次输入的密码不一致'
     return
+  }
+  if (isSetup.value) {
+    const validationMessage = passwordValidationMessage(password.value)
+    if (validationMessage) { error.value = validationMessage; return }
   }
   busy.value = true
   try {
@@ -53,6 +60,7 @@ async function submit() {
       <div class="brand auth-brand"><span class="brand-mark" aria-hidden="true"></span><span>FlyAiMovie</span></div>
       <h1>{{ isSetup ? '初始化制作空间' : (resetMode ? '找回密码' : '登录制作空间') }}</h1>
       <p class="auth-subtitle">{{ isSetup ? '创建 owner 账号后即可配置 AI 服务并开始制作。' : (resetMode ? '输入注册邮箱，我们会发送一次性恢复链接。' : '从大纲到成片的本地 AI 短剧工作台。') }}</p>
+      <div v-if="authUnavailable" class="inline-alert auth-service-alert" role="alert"><div><strong>暂时无法验证登录状态</strong><span>本地服务可能尚未启动，请确认后端运行后重试登录。</span></div></div>
       <p v-if="resetRequested" class="muted" role="status">如果该邮箱存在账号，恢复说明会发送到邮箱。</p>
       <div v-if="isSetup" class="field">
         <label for="organization-name">空间名称</label>
@@ -68,18 +76,18 @@ async function submit() {
       </div>
       <div v-if="!resetMode" class="field">
         <label for="auth-password">密码</label>
-        <input id="auth-password" v-model="password" required type="password" minlength="12" maxlength="128" :autocomplete="isSetup ? 'new-password' : 'current-password'" />
+        <input id="auth-password" v-model="password" required type="password" minlength="12" maxlength="72" :autocomplete="isSetup ? 'new-password' : 'current-password'" />
       </div>
       <div v-if="isSetup" class="field">
         <label for="confirm-password">确认密码</label>
-        <input id="confirm-password" v-model="confirmPassword" required type="password" minlength="12" maxlength="128" autocomplete="new-password" />
+        <input id="confirm-password" v-model="confirmPassword" required type="password" minlength="12" maxlength="72" autocomplete="new-password" />
       </div>
       <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
-      <button class="btn btn-primary auth-submit" :disabled="busy || resetRequested" type="submit">
+      <button v-if="!resetRequested" class="btn btn-primary auth-submit" :disabled="busy" type="submit">
         {{ busy ? '处理中' : (resetMode ? '发送恢复说明' : (isSetup ? '创建空间' : '登录')) }}
       </button>
-      <button v-if="!isSetup && !resetMode && !resetRequested" class="btn auth-submit" type="button" @click="resetMode=true; error=''">忘记密码</button>
-      <button v-if="resetMode && !resetRequested" class="btn auth-submit" type="button" @click="resetMode=false">返回登录</button>
+      <button v-if="!isSetup && !resetMode" class="btn auth-submit" type="button" @click="resetMode=true; error=''">忘记密码</button>
+      <button v-if="resetMode" class="btn auth-submit" type="button" @click="resetMode=false; resetRequested=false; error=''">返回登录</button>
     </form>
   </main>
 </template>

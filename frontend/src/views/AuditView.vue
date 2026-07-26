@@ -10,19 +10,23 @@ const resourceType = ref('')
 const loading = ref(false)
 const error = ref('')
 const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+let requestToken = 0
 
 async function load(nextPage = page.value) {
+  const token = ++requestToken
   loading.value = true
   error.value = ''
   try {
     const result = await auditAPI.list({ page: nextPage, page_size: pageSize, resource_type: resourceType.value || undefined })
+    if (token !== requestToken) return
     rows.value = result.items
     total.value = result.pagination.total
     page.value = result.pagination.page
   } catch (reason) {
+    if (token !== requestToken) return
     error.value = reason instanceof Error ? reason.message : '加载失败'
   } finally {
-    loading.value = false
+    if (token === requestToken) loading.value = false
   }
 }
 
@@ -81,7 +85,7 @@ onMounted(() => load(1))
         <div class="page-loading-mark" aria-hidden="true"></div>
         <div>
           <strong>加载审计记录</strong>
-          <p class="muted" style="margin:6px 0 0">同步组织内写操作与结果状态…</p>
+          <p class="muted">同步组织内写操作与结果状态…</p>
         </div>
       </div>
       <div v-else-if="!loading && !error && !rows.length" class="empty surface-empty">

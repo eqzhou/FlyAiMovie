@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { FolderInput, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { characterLibraryAPI, dramaAPI } from '../api'
 import { authStore } from '../auth'
@@ -20,6 +20,16 @@ const showCreateModal = ref(false)
 const editingTemplateID = ref<number | null>(null)
 const importCandidate = ref<any | null>(null)
 const nameInput = ref<HTMLInputElement | null>(null)
+let messageTimer: number | null = null
+
+function notify(text: string) {
+  message.value = text
+  if (messageTimer) window.clearTimeout(messageTimer)
+  messageTimer = window.setTimeout(() => {
+    if (message.value === text) message.value = ''
+    messageTimer = null
+  }, 2600)
+}
 
 const episodes = computed(() => dramas.value.find((item) => item.id === selectedDrama.value)?.episodes || [])
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
@@ -60,7 +70,7 @@ async function create() {
     form.value = { name: '', role: '', appearance: '', personality: '', voice_style: '', image_url: '' }
     editingTemplateID.value = null
     showCreateModal.value = false
-    message.value = isEditing ? '角色模板已更新' : '角色模板已创建'
+    notify(isEditing ? '角色模板已更新' : '角色模板已创建')
     await load()
   } catch (reason) {
     formError.value = reason instanceof Error ? reason.message : '模板保存失败'
@@ -111,7 +121,7 @@ async function importTemplate() {
   busy.value = true
   try {
     await characterLibraryAPI.import(candidate.id, selectedDrama.value, selectedEpisode.value || undefined)
-    message.value = `已将 ${candidate.name} 导入项目`
+    notify(`已将 ${candidate.name} 导入项目`)
     importCandidate.value = null
   } catch (reason) {
     importError.value = reason instanceof Error ? reason.message : '角色导入失败'
@@ -129,6 +139,7 @@ async function remove(template: any) {
 }
 
 onMounted(load)
+onUnmounted(() => { if (messageTimer) window.clearTimeout(messageTimer) })
 </script>
 
 <template>
@@ -150,7 +161,7 @@ onMounted(load)
         <div class="page-loading-mark" aria-hidden="true"></div>
         <div>
           <strong>正在加载角色模板</strong>
-          <p class="muted" style="margin:6px 0 0">同步跨项目角色设定、形象与音色…</p>
+          <p class="muted">同步跨项目角色设定、形象与音色…</p>
         </div>
       </div>
     </div>

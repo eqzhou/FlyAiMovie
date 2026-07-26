@@ -33,11 +33,16 @@ const busy = ref('')
 const log = ref('')
 const toast = ref('')
 const loading = ref(true)
+const workbenchReady = ref(false)
 const loadError = ref('')
 const assetRefreshWarning = ref('')
 const settingsLoadWarning = ref('')
-const refreshWarning = computed(() => [assetRefreshWarning.value, settingsLoadWarning.value].filter(Boolean).join('；'))
+const refreshWarning = computed(() => [loadError.value, assetRefreshWarning.value, settingsLoadWarning.value].filter(Boolean).join('；'))
 const pollTimer = ref<number | null>(null)
+let toastTimer: number | null = null
+let loadRequest = 0
+let refreshRequest = 0
+let disposed = false
 
 // grid state
 const gridRows = ref(2)
@@ -59,6 +64,7 @@ const selectedShotIds = ref<number[]>([])
 const shotSelectionInitialized = ref(false)
 const assets = ref<any[]>([])
 const jobs = ref<any[]>([])
+const pendingJobActionIDs = ref<number[]>([])
 const productions = ref<any[]>([])
 const assetTargetShot = ref<Record<number, number>>({})
 const assetTargetFrame = ref<Record<number, string>>({})
@@ -140,6 +146,44 @@ const previousStage = computed(() => stages.value[currentStageIndex.value - 1] |
 const nextStage = computed(() => stages.value[currentStageIndex.value + 1] || null)
 const completedStageCount = computed(() => stages.value.filter((stage) => stage.complete).length)
 const stageProgressLabel = computed(() => `${completedStageCount.value}/${stages.value.length} 阶段完成 · 总进度 ${progressPct.value}%`)
+const busyLabel = computed(() => {
+  const value = busy.value
+  if (!value) return ''
+  const exact: Record<string, string> = {
+    'save-content': '正在保存原文',
+    'episode-config': '正在保存生成配置',
+    'production-start': '正在启动自动制作',
+    'production-cancel': '正在取消自动制作',
+    'production-retry': '正在重试自动制作',
+    'character-save': '正在保存角色',
+    'scene-save': '正在保存场景',
+    'storyboard-save': '正在保存分镜',
+    'grid-prompt': '正在生成宫格提示词',
+    'grid-gen': '正在生成宫格图',
+    'grid-split': '正在切分宫格图',
+    'batch-frames': '正在批量生成画面',
+    'batch-videos': '正在批量生成视频',
+    'batch-tts': '正在批量生成配音',
+    'compose-all': '正在批量合成镜头',
+    merge: '正在拼接导出成片',
+  }
+  if (exact[value]) return exact[value]
+  if (value.startsWith('char-img-')) return '正在生成角色形象'
+  if (value.startsWith('char-library-')) return '正在保存到角色库'
+  if (value.startsWith('char-import-')) return '正在导入角色模板'
+  if (value.startsWith('scene-img-')) return '正在生成场景画面'
+  if (value.startsWith('upload-')) return '正在上传素材'
+  if (value.startsWith('voice-')) return '正在生成角色试听'
+  if (value.startsWith('frame-')) return '正在生成镜头画面'
+  if (value.startsWith('video-')) return '正在生成镜头视频'
+  if (value.startsWith('tts-')) return '正在生成镜头配音'
+  if (value.startsWith('compose-')) return '正在合成镜头'
+  if (value.startsWith('storyboard-delete-')) return '正在删除分镜'
+  if (value.startsWith('storyboard-copy-')) return '正在复制分镜'
+  if (value.startsWith('storyboard-move-')) return '正在调整镜头顺序'
+  if (value.startsWith('save-shot-')) return '正在保存镜头内容'
+  return '正在处理，请稍候'
+})
 
 const progressPct = computed(() => {
   if (!status.value) return 0
@@ -157,7 +201,11 @@ const progressPct = computed(() => {
 
 function show(msg: string) {
   toast.value = msg
-  setTimeout(() => (toast.value = ''), 2600)
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    if (toast.value === msg) toast.value = ''
+    toastTimer = null
+  }, 2600)
 }
 
 function listOf(value: unknown): any[] {
@@ -277,22 +325,25 @@ function gridAssignmentLabel(index: number) {
   return `镜头 #${storyboard.storyboard_number} · ${gridFrameLabel(assignment.frame_type)}`
 }
 
-async function load() {
+async function load(request = loadRequest): Promise<boolean> {
   const loadedDrama = await dramaAPI.get(dramaId.value)
+  if (disposed || request !== loadRequest) return false
   const loadedEpisode = (loadedDrama.episodes || []).find((e: any) => e.episode_number === episodeNumber.value)
   drama.value = loadedDrama
   if (!loadedEpisode) {
     episode.value = null
-    return
+    return true
   }
   episode.value = loadedEpisode
   rawContent.value = loadedEpisode.content || ''
   await refreshAssets()
+  if (disposed || request !== loadRequest) return false
   const settingsResults = await Promise.allSettled([
     settingsAPI.voices(),
     settingsAPI.aiConfigs(),
     settingsAPI.promptTemplates(),
   ])
+  if (disposed || request !== loadRequest) return false
   if (settingsResults[0].status === 'fulfilled') voices.value = listOf(settingsResults[0].value)
   if (settingsResults[1].status === 'fulfilled') configs.value = listOf(settingsResults[1].value)
   if (settingsResults[2].status === 'fulfilled') promptTemplates.value = listOf(settingsResults[2].value)
@@ -302,27 +353,38 @@ async function load() {
 		const detail = result.reason instanceof Error ? result.reason.message : '服务暂时不可用'
 		return [`${settingsLabels[index]}加载失败：${detail}`]
 	}).join('；')
+  return true
 }
 
 async function loadWorkbench() {
+  const request = ++loadRequest
+  let loadedSuccessfully = false
   stopPoll()
   loading.value = true
   loadError.value = ''
   try {
-    await load()
+    if (!await load(request)) return
     if (!episode.value) loadError.value = '未找到对应剧集'
+    else {
+      workbenchReady.value = true
+      loadedSuccessfully = true
+    }
   } catch (error) {
+    if (disposed || request !== loadRequest) return
     loadError.value = error instanceof Error ? error.message : '加载失败'
   } finally {
-    loading.value = false
+    if (!disposed && request === loadRequest) loading.value = false
   }
-  if (episode.value) startPoll()
+  if (!disposed && request === loadRequest && loadedSuccessfully) startPoll()
 }
 
 async function refreshAssets() {
+  const request = ++refreshRequest
   const currentEpisode = episode.value
   if (!currentEpisode) return
   const episodeId = currentEpisode.id
+  const requestDramaId = dramaId.value
+  const requestEpisodeNumber = episodeNumber.value
   const results = await Promise.allSettled([
     episodeAPI.characters(episodeId),
     episodeAPI.scenes(episodeId),
@@ -334,6 +396,7 @@ async function refreshAssets() {
     productionAPI.list(episodeId, 10),
     dramaAPI.get(dramaId.value),
   ])
+  if (disposed || request !== refreshRequest || dramaId.value !== requestDramaId || episodeNumber.value !== requestEpisodeNumber || episode.value?.id !== episodeId) return
   const labels = ['角色', '场景', '分镜', '制作进度', '宫格历史', '素材', '任务', '自动制作', '剧集']
   const failures: string[] = []
   results.forEach((result, index) => {
@@ -371,6 +434,7 @@ async function refreshAssets() {
 }
 
 function startPoll() {
+  if (disposed) return
   stopPoll()
   pollTimer.value = window.setInterval(() => {
     if (document.visibilityState === 'visible' && (hasActiveJobs.value || hasActiveProduction.value)) refreshAssets().catch(() => {})
@@ -878,22 +942,30 @@ async function mergeAll() {
 }
 
 async function cancelJob(job: any) {
+  if (pendingJobActionIDs.value.includes(job.id)) return
+  pendingJobActionIDs.value = [...pendingJobActionIDs.value, job.id]
   try {
     await jobsAPI.cancel(job.id)
     show('任务已取消')
     await refreshAssets()
   } catch (e: any) {
     show(e.message)
+  } finally {
+    pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
 }
 
 async function retryJob(job: any) {
+  if (pendingJobActionIDs.value.includes(job.id)) return
+  pendingJobActionIDs.value = [...pendingJobActionIDs.value, job.id]
   try {
     await jobsAPI.retry(job.id)
     show('任务已重新排队')
     await refreshAssets()
   } catch (e: any) {
     show(e.message)
+  } finally {
+    pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
 }
 
@@ -915,7 +987,7 @@ async function applyAsset(asset: any) {
   }
 }
 
-async function buildGridPrompt() {
+async function buildGridPrompt(): Promise<boolean> {
   busy.value = 'grid-prompt'
   try {
     const res = await gridAPI.prompt({
@@ -927,8 +999,10 @@ async function buildGridPrompt() {
     })
     gridPrompt.value = res.grid_prompt || ''
     show('宫格提示词已生成')
+    return Boolean(gridPrompt.value.trim())
   } catch (e: any) {
     show(e.message)
+    return false
   } finally {
     busy.value = ''
   }
@@ -940,7 +1014,7 @@ async function generateGrid() {
     return
   }
   if (!gridPrompt.value.trim()) {
-    await buildGridPrompt()
+    if (!await buildGridPrompt() || !gridPrompt.value.trim()) return
   }
   busy.value = 'grid-gen'
   try {
@@ -978,7 +1052,9 @@ async function generateGrid() {
         }
         if (st.status === 'failed') throw new Error(st.error_msg || 'grid failed')
       }
+      if (!gridImage.value) throw new Error('宫格图生成超时，请稍后在历史记录中查看任务结果')
     }
+    if (!gridImage.value) throw new Error('生成服务未返回可用的宫格图')
     show('宫格图生成完成')
     await refreshAssets()
   } catch (e: any) {
@@ -1251,7 +1327,21 @@ function selectStage(stage: string) {
   if (!workbenchStages.includes(stage as WorkbenchStage)) return
   tab.value = stage as WorkbenchStage
   router.replace({ query: { ...route.query, stage } })
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' })
+  nextTick(() => document.getElementById(`workbench-stage-${stage}`)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: reduceMotion ? 'auto' : 'smooth' }))
+}
+
+function handleStageKeydown(event: KeyboardEvent, index: number) {
+  let targetIndex = index
+  if (event.key === 'ArrowRight') targetIndex = (index + 1) % workbenchStages.length
+  else if (event.key === 'ArrowLeft') targetIndex = (index - 1 + workbenchStages.length) % workbenchStages.length
+  else if (event.key === 'Home') targetIndex = 0
+  else if (event.key === 'End') targetIndex = workbenchStages.length - 1
+  else return
+  event.preventDefault()
+  selectStage(workbenchStages[targetIndex])
+  nextTick(() => document.getElementById(`workbench-stage-${workbenchStages[targetIndex]}`)?.focus())
 }
 
 watch(() => route.query.stage, (stage) => {
@@ -1259,12 +1349,34 @@ watch(() => route.query.stage, (stage) => {
   if (workbenchStages.includes(value) && value !== tab.value) tab.value = value
 })
 
-onMounted(loadWorkbench)
-onUnmounted(stopPoll)
+watch([dramaId, episodeNumber], ([nextDramaId, nextEpisodeNumber], [previousDramaId, previousEpisodeNumber]) => {
+  if (nextDramaId === previousDramaId && nextEpisodeNumber === previousEpisodeNumber) return
+  stopPoll()
+  workbenchReady.value = false
+  episode.value = null
+  shotSelectionInitialized.value = false
+  selectedShotIds.value = []
+  selectedStoryboardId.value = null
+  resetGridOutput()
+  loadWorkbench()
+})
+
+onMounted(() => {
+  disposed = false
+  loadWorkbench()
+})
+onUnmounted(() => {
+  disposed = true
+  loadRequest += 1
+  refreshRequest += 1
+  stopPoll()
+  gridContextVersion += 1
+  if (toastTimer) window.clearTimeout(toastTimer)
+})
 </script>
 
 <template>
-  <div class="page workbench" v-if="episode">
+  <div v-if="episode && workbenchReady" class="page workbench" :aria-busy="loading || !!busy">
     <div class="page-head">
       <div>
         <h1 class="page-title">{{ drama?.title }} · {{ episode.title }}</h1>
@@ -1272,8 +1384,8 @@ onUnmounted(stopPoll)
       </div>
       <div class="row">
         <button v-if="canEdit" class="btn btn-primary" :disabled="hasActiveProduction || !!busy" @click="openProduction"><WandSparkles :size="16" aria-hidden="true" />自动制作</button>
-        <button v-if="canEdit" class="btn" @click="openEpisodeConfig"><Settings2 :size="16" aria-hidden="true" />生成配置</button>
-        <button class="btn" @click="loadWorkbench"><RefreshCw :size="16" aria-hidden="true" />刷新</button>
+        <button v-if="canEdit" class="btn" :disabled="loading || !!busy" @click="openEpisodeConfig"><Settings2 :size="16" aria-hidden="true" />生成配置</button>
+        <button class="btn" :disabled="loading || !!busy" @click="loadWorkbench"><RefreshCw :size="16" :class="{ spinning: loading }" aria-hidden="true" />{{ loading ? '刷新中' : '刷新' }}</button>
         <button class="btn" @click="router.push(`/drama/${dramaId}`)"><ArrowLeft :size="16" aria-hidden="true" />返回项目</button>
       </div>
     </div>
@@ -1289,7 +1401,7 @@ onUnmounted(stopPoll)
           <span class="automation-mark" :class="currentProduction.status"></span>
           <div><strong>{{ productionStageLabel(currentProduction.stage) }}</strong><span>{{ productionStatusLabel(currentProduction.status) }} · 第 {{ currentProduction.attempt }} 次</span></div>
         </div>
-        <div class="automation-progress"><div class="progress-bar"><i :style="`width: ${currentProduction.progress || 0}%`"></i></div><strong>{{ currentProduction.progress || 0 }}%</strong></div>
+        <div class="automation-progress"><div class="progress-bar" role="progressbar" :aria-valuenow="currentProduction.progress || 0" aria-valuemin="0" aria-valuemax="100" aria-label="自动制作进度"><i :style="`width: ${currentProduction.progress || 0}%`"></i></div><strong>{{ currentProduction.progress || 0 }}%</strong></div>
       </div>
       <div class="automation-footer">
         <span :class="{ 'job-error': currentProduction.last_error }">{{ currentProduction.last_error || currentProduction.status_message || '等待任务调度' }}</span>
@@ -1347,6 +1459,7 @@ onUnmounted(stopPoll)
           :tabindex="tab === stage.id ? 0 : -1"
           :title="`${stage.label} · ${stage.detail}${stage.complete ? ' · 已完成' : ''}`"
           @click="selectStage(stage.id)"
+          @keydown="handleStageKeydown($event, index)"
         >
           <span class="stage-index" aria-hidden="true">{{ stage.complete ? '✓' : index + 1 }}</span>
           <span class="stage-copy">
@@ -1390,7 +1503,7 @@ onUnmounted(stopPoll)
         <div
           v-if="tab==='script'"
           id="workbench-stage-panel-script"
-          class="panel"
+          class="panel wb-stage-panel"
           role="tabpanel"
           aria-labelledby="workbench-stage-script"
         >
@@ -1436,16 +1549,18 @@ onUnmounted(stopPoll)
                     <p class="muted sm mt-6">音色：{{ c.voice_style || '未分配' }}</p>
                     <audio v-if="c.voice_sample_url" class="audio-block" :src="c.voice_sample_url" controls />
                     <div v-if="assignCharId===c.id" class="voice-list mt-8">
-                      <div
+                      <button
                         v-for="v in voices"
                         :key="v.voice_id"
                         class="voice-item"
+                        type="button"
                         :class="{ active: c.voice_style===v.voice_id }"
+                        :disabled="!!busy"
                         @click="assignVoice(c, v.voice_id, v.provider)"
                       >
                         <div>{{ v.voice_name || v.voice_id }}</div>
                         <div class="muted">{{ v.language || v.provider }}</div>
-                      </div>
+                      </button>
                       <div v-if="!voices.length" class="muted">无音色，请在设置中同步</div>
                     </div>
                   </div>
@@ -1463,7 +1578,7 @@ onUnmounted(stopPoll)
                   </div>
                 </div>
               </div>
-              <div v-if="!characters.length" class="empty">尚未提取角色</div>
+              <div v-if="!characters.length" class="empty surface-empty wb-empty"><strong>尚未提取角色</strong><span class="muted">可使用 AI 提取剧本角色，或从角色库导入已有设定。</span></div>
             </div>
           </div>
           <div class="panel">
@@ -1489,7 +1604,7 @@ onUnmounted(stopPoll)
                   </div>
                 </div>
               </div>
-              <div v-if="!scenes.length" class="empty">尚未提取场景</div>
+              <div v-if="!scenes.length" class="empty surface-empty wb-empty"><strong>尚未提取场景</strong><span class="muted">完成剧本后使用 AI 提取，或手动添加第一个场景。</span></div>
             </div>
             <div v-if="sceneTransfer" class="modal-mask" @click.self="sceneTransfer=null">
               <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scene-transfer-title">
@@ -1508,15 +1623,15 @@ onUnmounted(stopPoll)
         <div
           v-else-if="tab==='grid'"
           id="workbench-stage-panel-grid"
-          class="panel"
+          class="panel wb-stage-panel"
           role="tabpanel"
           aria-labelledby="workbench-stage-grid"
         >
           <div v-if="canEdit" class="toolbar">
-            <div class="seg">
-              <button :disabled="!!busy" :class="{ active: gridMode==='first_frame' }" @click="selectGridMode('first_frame')">首帧宫格</button>
-              <button :disabled="!!busy" :class="{ active: gridMode==='first_last' }" @click="selectGridMode('first_last')">首尾参考</button>
-              <button :disabled="!!busy" :class="{ active: gridMode==='multi_ref' }" @click="selectGridMode('multi_ref')">多参一致</button>
+            <div class="seg" role="group" aria-label="宫格生成模式">
+              <button :disabled="!!busy" :class="{ active: gridMode==='first_frame' }" :aria-pressed="gridMode==='first_frame'" @click="selectGridMode('first_frame')">首帧宫格</button>
+              <button :disabled="!!busy" :class="{ active: gridMode==='first_last' }" :aria-pressed="gridMode==='first_last'" @click="selectGridMode('first_last')">首尾参考</button>
+              <button :disabled="!!busy" :class="{ active: gridMode==='multi_ref' }" :aria-pressed="gridMode==='multi_ref'" @click="selectGridMode('multi_ref')">多参一致</button>
             </div>
             <label class="dim-field">行
               <input type="number" min="1" max="4" :value="gridRows" :disabled="!!busy" @change="updateGridDimension('rows', Number(($event.target as HTMLInputElement).value))" />
@@ -1539,7 +1654,7 @@ onUnmounted(stopPoll)
             <div>
               <div class="muted sm section-kicker">预览</div>
               <img v-if="gridImage" class="grid-preview" :src="gridImage" alt="宫格图预览" />
-              <div v-else class="empty">尚未生成宫格图</div>
+              <div v-else class="empty surface-empty wb-empty"><strong>尚未生成宫格图</strong><span class="muted">选择宫格模式与镜头，确认提示词后即可生成预览。</span></div>
               <div v-if="gridCells.length" class="cell-grid mt-12">
                 <div v-if="!gridCellsVerified" class="inline-alert grid-cell-legacy" role="status"><div><strong>历史切片仅供查看</strong><span>这份历史生成于安全归属记录之前。请生成新宫格并重新切分后再分配。</span></div></div>
                 <div v-for="(u,i) in gridCells" :key="`${gridHistoryId || 'draft'}-${i}`" class="grid-cell-card" role="group" :aria-label="`宫格切片 ${i + 1}`">
@@ -1562,7 +1677,7 @@ onUnmounted(stopPoll)
                   <span class="grow">#{{ sb.storyboard_number }} {{ sb.title || '镜头' }}</span>
                   <img v-if="sb.first_frame_image" class="thumb sm" :src="sb.first_frame_image" :alt="`镜头 ${sb.storyboard_number} 首帧`" />
                 </label>
-                <div v-if="!storyboards.length" class="empty">请先拆解分镜</div>
+                <div v-if="!storyboards.length" class="empty surface-empty wb-empty"><strong>还没有可选镜头</strong><span class="muted">请先到「分镜与视频」阶段拆解剧本。</span></div>
               </div>
               <div class="mt-12">
                 <div class="muted sm section-kicker tight">历史</div>
@@ -1582,7 +1697,7 @@ onUnmounted(stopPoll)
         <div
           v-else-if="tab==='boards'"
           id="workbench-stage-panel-boards"
-          class="panel"
+          class="panel wb-stage-panel"
           role="tabpanel"
           aria-labelledby="workbench-stage-boards"
         >
@@ -1655,14 +1770,14 @@ onUnmounted(stopPoll)
               </div>
             </section>
           </div>
-          <div v-if="!storyboards.length" class="empty mt-12">尚未拆解分镜</div>
+          <div v-if="!storyboards.length" class="empty surface-empty wb-empty mt-12"><strong>尚未拆解分镜</strong><span class="muted">使用 AI 从剧本生成镜头列表，或手动添加第一个分镜。</span></div>
         </div>
 
         <!-- EXPORT -->
         <div
           v-else
           id="workbench-stage-panel-export"
-          class="panel"
+          class="panel wb-stage-panel"
           role="tabpanel"
           aria-labelledby="workbench-stage-export"
         >
@@ -1672,7 +1787,7 @@ onUnmounted(stopPoll)
           </div>
           <p class="muted">将已生成视频与配音排队合成为镜头，再拼接为整集成片。任务状态可在右侧查看。</p>
           <video v-if="episode.video_url" class="media export" :src="episode.video_url" controls />
-          <div v-else class="empty mt-12">尚未导出成片</div>
+          <div v-else class="empty surface-empty wb-empty mt-12"><strong>尚未导出成片</strong><span class="muted">先完成镜头视频与配音，再批量合成并拼接整集。</span></div>
           <div class="export-status">
             <h3>镜头合成状态</h3>
             <div class="list">
@@ -1712,7 +1827,7 @@ onUnmounted(stopPoll)
                     <button class="btn" @click="applyAsset(asset)">复用到分镜</button>
                   </div>
                 </div>
-                <div v-if="!assets.length" class="empty">本集暂无统一素材记录</div>
+                <div v-if="!assets.length" class="empty wb-compact-empty">本集暂无统一素材记录</div>
               </div>
             </div>
             <div>
@@ -1724,10 +1839,10 @@ onUnmounted(stopPoll)
                     <span class="muted">{{ job.status }}</span>
                   </div>
                   <div class="muted sm mt-6">进度 {{ job.progress || 0 }}% · {{ job.last_error || '无错误' }}</div>
-                  <button v-if="canEdit && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger mt-8" @click="cancelJob(job)">取消任务</button>
-                  <button v-if="canEdit && ['failed','canceled'].includes(job.status)" class="btn mt-8" @click="retryJob(job)">重试任务</button>
+                  <button v-if="canEdit && !['succeeded','failed','canceled'].includes(job.status)" class="btn btn-danger mt-8" :disabled="pendingJobActionIDs.includes(job.id)" @click="cancelJob(job)">{{ pendingJobActionIDs.includes(job.id) ? '取消中…' : '取消任务' }}</button>
+                  <button v-if="canEdit && ['failed','canceled'].includes(job.status)" class="btn mt-8" :disabled="pendingJobActionIDs.includes(job.id)" @click="retryJob(job)">{{ pendingJobActionIDs.includes(job.id) ? '重试中…' : '重试任务' }}</button>
                 </div>
-                <div v-if="!jobs.length" class="empty">暂无任务记录</div>
+                <div v-if="!jobs.length" class="empty wb-compact-empty">暂无任务记录</div>
               </div>
             </div>
           </div>
@@ -1891,14 +2006,14 @@ onUnmounted(stopPoll)
     </div>
 
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
-    <div v-if="busy" class="toast busy" role="status" aria-live="polite">处理中：{{ busy }}</div>
+    <div v-if="busy" class="toast busy" role="status" aria-live="polite"><span class="busy-indicator" aria-hidden="true"></span>{{ busyLabel }}</div>
   </div>
   <div v-else-if="loading" class="page">
     <div class="page-loading" role="status" aria-live="polite">
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>正在加载本集</strong>
-        <p class="muted" style="margin:6px 0 0">同步剧本、角色、分镜与任务状态…</p>
+        <p class="muted">同步剧本、角色、分镜与任务状态…</p>
       </div>
     </div>
   </div>

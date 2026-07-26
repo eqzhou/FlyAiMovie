@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { characterAPI, dramaAPI, episodeAPI, propAPI, sceneAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
@@ -26,6 +26,8 @@ const propError = ref('')
 const characterError = ref('')
 const sceneError = ref('')
 const transferError = ref('')
+let messageTimer: number | null = null
+let loadRequest = 0
 const episodeTitleInput = ref<HTMLInputElement | null>(null)
 const propNameInput = ref<HTMLInputElement | null>(null)
 const characterNameInput = ref<HTMLInputElement | null>(null)
@@ -69,7 +71,11 @@ const otherEpisodes = computed(() => sortedEpisodes.value)
 
 function notify(text: string) {
   message.value = text
-  window.setTimeout(() => { if (message.value === text) message.value = '' }, 2400)
+  if (messageTimer) window.clearTimeout(messageTimer)
+  messageTimer = window.setTimeout(() => {
+    if (message.value === text) message.value = ''
+    messageTimer = null
+  }, 2400)
 }
 
 function requirePrimaryEpisode(action: string) {
@@ -81,6 +87,8 @@ function requirePrimaryEpisode(action: string) {
 }
 
 async function load() {
+  const request = ++loadRequest
+  const dramaID = id.value
   loading.value = true
   error.value = ''
   try {
@@ -89,19 +97,24 @@ async function load() {
       settingsAPI.aiConfigs(),
       settingsAPI.voices().catch(() => []),
     ])
+    if (request !== loadRequest || id.value !== dramaID) return
     drama.value = project
     configs.value = aiConfigs
     voices.value = Array.isArray(voiceCatalog) ? voiceCatalog : []
-    try { propsList.value = await propAPI.list(id.value) } catch { propsList.value = project.props || [] }
+    let loadedProps: any[]
+    try { loadedProps = await propAPI.list(dramaID) } catch { loadedProps = project.props || [] }
+    if (request !== loadRequest || id.value !== dramaID) return
+    propsList.value = loadedProps
     if (!episodeForm.value.id) {
       episodeForm.value.image_config_id = imageConfigs.value[0]?.id || 0
       episodeForm.value.video_config_id = videoConfigs.value[0]?.id || 0
       episodeForm.value.audio_config_id = audioConfigs.value[0]?.id || 0
     }
   } catch (reason) {
+    if (request !== loadRequest) return
     error.value = reason instanceof Error ? reason.message : '项目加载失败'
   } finally {
-    loading.value = false
+    if (request === loadRequest) loading.value = false
   }
 }
 
@@ -560,6 +573,11 @@ function openEditEpisode(episode: any, event?: Event) {
 }
 
 onMounted(load)
+watch(id, load)
+onUnmounted(() => {
+  loadRequest += 1
+  if (messageTimer) window.clearTimeout(messageTimer)
+})
 </script>
 
 <template>
@@ -568,7 +586,7 @@ onMounted(load)
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>正在打开项目</strong>
-        <p class="muted" style="margin:6px 0 0">加载剧集、资产与生成配置…</p>
+        <p class="muted">加载剧集、资产与生成配置…</p>
       </div>
     </div>
   </div>

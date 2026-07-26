@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { assetAPI, dramaAPI, episodeAPI, uploadAPI } from '../api'
 import { safeMediaHref } from '../utils/mediaUrl'
@@ -31,6 +31,7 @@ let projectRequest = 0
 let assetRequest = 0
 let storyboardRequest = 0
 let uploadStoryboardRequest = 0
+let messageTimer: number | null = null
 
 const dramaId = computed(() => Number(route.params.id))
 const episodes = computed<any[]>(() => drama.value?.episodes || [])
@@ -49,8 +50,10 @@ const categories = computed(() => {
 
 function notify(text: string) {
   message.value = text
-  window.setTimeout(() => {
+  if (messageTimer) window.clearTimeout(messageTimer)
+  messageTimer = window.setTimeout(() => {
     if (message.value === text) message.value = ''
+    messageTimer = null
   }, 2600)
 }
 
@@ -275,6 +278,7 @@ async function loadProject() {
 }
 watch(dramaId, loadProject)
 onMounted(loadProject)
+onUnmounted(() => { if (messageTimer) window.clearTimeout(messageTimer) })
 </script>
 
 <template>
@@ -283,7 +287,7 @@ onMounted(loadProject)
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>正在打开素材库</strong>
-        <p class="muted" style="margin:6px 0 0">同步项目素材、分类与分镜绑定…</p>
+        <p class="muted">同步项目素材、分类与分镜绑定…</p>
       </div>
     </div>
   </div>
@@ -375,7 +379,7 @@ onMounted(loadProject)
       <div class="page-loading-mark" aria-hidden="true"></div>
       <div>
         <strong>加载素材中</strong>
-        <p class="muted" style="margin:6px 0 0">按类型、剧集与分类同步素材列表…</p>
+        <p class="muted">按类型、剧集与分类同步素材列表…</p>
       </div>
     </div>
     <div v-else class="empty surface-empty">

@@ -13,6 +13,12 @@ import { authStore } from '../auth'
 
 const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition
+    // 仅 query 变化（如工作台阶段切换）时保持当前滚动位置
+    if (to.path === from.path) return undefined
+    return { top: 0 }
+  },
   routes: [
     { path: '/', name: 'home', component: HomeView },
     { path: '/drama/:id', name: 'drama', component: DramaView },
@@ -30,7 +36,12 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  await authStore.initialize()
+  try {
+    await authStore.initialize()
+  } catch {
+    // 认证状态未知时保持 fail-closed，仅允许进入登录页等待服务恢复。
+    return to.name === 'login' ? true : { name: 'login', query: { reason: 'auth-unavailable' } }
+  }
   if (to.name === 'invite' || to.name === 'password-reset') return true
   if (!authStore.state.enabled) return true
   if (authStore.state.setupRequired) return to.name === 'setup' ? true : { name: 'setup' }

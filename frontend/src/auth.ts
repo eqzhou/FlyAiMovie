@@ -17,6 +17,17 @@ const state = reactive({
   csrfToken: sessionStorage.getItem('flyaimovie.csrf') || '',
   organizations: [] as Array<{ id: number; name: string; slug: string; role: string; current: boolean }>,
 })
+let initializePromise: Promise<void> | null = null
+
+async function parseResponseJSON(response: Response): Promise<Record<string, any>> {
+  const text = await response.text()
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { message: text.slice(0, 200) }
+  }
+}
 
 async function authRequest(path: string, method = 'GET', body?: unknown) {
   const headers: Record<string, string> = {}
@@ -28,8 +39,8 @@ async function authRequest(path: string, method = 'GET', body?: unknown) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  const payload = await response.json()
-  if (!response.ok) throw new Error(payload.message || String(response.status))
+  const payload = await parseResponseJSON(response)
+  if (!response.ok) throw new Error(payload.message || `请求失败（${response.status}）`)
   return payload.data ?? payload
 }
 
@@ -44,62 +55,96 @@ async function refreshOrganizations() {
   state.organizations = state.actor ? await authRequest('/auth/organizations') : []
 }
 
-async function initialize() {
-  if (state.initialized) return
+async function refreshOrganizationsBestEffort() {
   try {
+    await refreshOrganizations()
+  } catch (cause) {
+    // 主操作（登录、切组织等）已经提交成功，列表刷新失败不能伪装成提交失败。
+    state.organizations = state.actor ? [{
+      id: state.actor.organization.id,
+      name: state.actor.organization.name,
+      slug: state.actor.organization.slug,
+      role: state.actor.role,
+      current: true,
+    }] : []
+    console.warn('organization list refresh failed', cause)
+  }
+}
+
+async function performInitialize() {
     const status = await authRequest('/auth/status')
     state.enabled = Boolean(status.enabled)
     state.setupRequired = Boolean(status.setup_required)
     if (state.enabled && !state.setupRequired) {
       try {
         setActor(await authRequest('/auth/me'))
-        await refreshOrganizations()
+        await refreshOrganizationsBestEffort()
       } catch {
         setActor(null)
       }
     }
-  } finally {
-    state.initialized = true
+  state.initialized = true
+}
+
+async function initialize() {
+  if (state.initialized) return
+  if (!initializePromise) {
+    initializePromise = performInitialize().finally(() => { initializePromise = null })
   }
+  await initializePromise
 }
 
 async function login(email: string, password: string) {
   const actor = await authRequest('/auth/login', 'POST', { email, password })
   state.setupRequired = false
   setActor(actor)
-  await refreshOrganizations()
+  await refreshOrganizationsBestEffort()
 }
 
 async function setup(data: { organization_name: string; display_name: string; email: string; password: string }) {
   const actor = await authRequest('/auth/setup', 'POST', data)
   state.setupRequired = false
   setActor(actor)
-  await refreshOrganizations()
+  await refreshOrganizationsBestEffort()
 }
 
 async function logout() {
   try {
     await authRequest('/auth/logout', 'POST')
+  } catch (cause) {
+    // 网络异常时也要完成本地退出，避免用户卡在已失效的会话上。
+    console.warn('logout request failed', cause)
   } finally {
     setActor(null)
-	state.organizations = []
+    state.organizations = []
   }
+}
+
+async function adoptActor(actor: AuthActor) {
+  state.setupRequired = false
+  setActor(actor)
+  await refreshOrganizationsBestEffort()
 }
 
 async function switchOrganization(organizationId: number) {
   const actor = await authRequest('/auth/switch-organization', 'POST', { organization_id: organizationId })
   setActor(actor)
-  await refreshOrganizations()
+  await refreshOrganizationsBestEffort()
 }
 
 async function changePassword(currentPassword: string, newPassword: string) {
   const actor = await authRequest('/auth/change-password', 'POST', { current_password: currentPassword, new_password: newPassword })
   setActor(actor)
-  await refreshOrganizations()
+  await refreshOrganizationsBestEffort()
 }
 
-export function handleUnauthorized() {
-  if (state.enabled) setActor(null)
+export function authSessionFingerprint() {
+  return `${state.actor?.user.id || 0}:${state.actor?.organization.id || 0}:${state.csrfToken}`
 }
 
-export const authStore = { state, initialize, login, setup, logout, switchOrganization, refreshOrganizations, changePassword }
+export function handleUnauthorized(requestSession = authSessionFingerprint()) {
+  // 忽略旧登录态或旧组织中迟到的 401，避免清掉刚建立的新会话。
+  if (state.enabled && requestSession === authSessionFingerprint()) setActor(null)
+}
+
+export const authStore = { state, initialize, login, setup, logout, adoptActor, switchOrganization, refreshOrganizations, changePassword }
