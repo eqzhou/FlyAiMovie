@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Menu, X, Sun, Moon, Monitor } from 'lucide-vue-next'
 import { authStore } from './auth'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -140,5 +141,6 @@ async function switchOrganization(event: Event) {
     <main class="app-main">
       <router-view />
     </main>
+    <ConfirmDialog />
   </div>
 </template>

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { Clapperboard, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { dramaAPI } from '../api'
 import { authStore } from '../auth'
+import { confirmAction } from '../composables/useConfirm'
 
 const router = useRouter()
 const dramas = ref<any[]>([])
@@ -113,7 +114,13 @@ function closeDialog() {
 }
 
 async function delDrama(d: any) {
-  if (!confirm(`删除项目「${d.title}」？`)) return
+  if (!await confirmAction({
+    title: '删除项目',
+    message: `确定删除项目「${d.title}」？`,
+    detail: '该项目下的剧集、角色、场景与制作记录都将不再可用。',
+    confirmText: '删除项目',
+    tone: 'danger',
+  })) return
   try {
     await dramaAPI.del(d.id)
     await load()

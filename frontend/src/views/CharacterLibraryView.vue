@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { FolderInput, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { characterLibraryAPI, dramaAPI } from '../api'
 import { authStore } from '../auth'
+import { confirmAction } from '../composables/useConfirm'
 
 const templates = ref<any[]>([])
 const dramas = ref<any[]>([])
@@ -129,7 +130,13 @@ async function importTemplate() {
 }
 
 async function remove(template: any) {
-  if (!confirm(`删除角色模板「${template.name}」？`)) return
+  if (!await confirmAction({
+    title: '删除角色模板',
+    message: `确定删除角色模板「${template.name}」？`,
+    detail: '已导入到项目中的角色不受影响。',
+    confirmText: '删除模板',
+    tone: 'danger',
+  })) return
   try {
     await characterLibraryAPI.del(template.id)
     await load()

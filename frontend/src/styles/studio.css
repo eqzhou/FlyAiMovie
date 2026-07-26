@@ -26,6 +26,9 @@
   --info-text: #0f766e;
   --danger-soft-bg: #fef2f2;
   --danger-soft-border: #fecaca;
+  --danger-solid-bg: #dc2626;
+  --danger-solid-bg-hover: #b91c1c;
+  --danger-solid-text: #ffffff;
   --ok-soft-bg: #ecfdf5;
   --ok-soft-border: #a7f3d0;
   --ok-soft-text: #047857;
@@ -87,6 +90,9 @@
   --info-text: #a5eee6;
   --danger-soft-bg: #21151a;
   --danger-soft-border: #6f3941;
+  --danger-solid-bg: #b91c1c;
+  --danger-solid-bg-hover: #dc2626;
+  --danger-solid-text: #fff5f5;
   --ok-soft-bg: #15372a;
   --ok-soft-border: #2f7a5c;
   --ok-soft-text: #75d5a8;
@@ -135,6 +141,9 @@
     --info-text: #a5eee6;
     --danger-soft-bg: #21151a;
     --danger-soft-border: #6f3941;
+    --danger-solid-bg: #b91c1c;
+    --danger-solid-bg-hover: #dc2626;
+    --danger-solid-text: #fff5f5;
     --ok-soft-bg: #15372a;
     --ok-soft-border: #2f7a5c;
     --ok-soft-text: #75d5a8;
@@ -415,6 +424,40 @@ input[aria-invalid="true"]:focus, select[aria-invalid="true"]:focus, textarea[ar
   border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; }
+
+/* Confirm dialog (global confirmAction host) */
+.confirm-mask { align-items: flex-start; }
+.confirm-modal { width: min(420px, calc(100vw - 32px)); padding: var(--space-5) var(--space-6) var(--space-5); margin: auto; }
+.confirm-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+.confirm-icon {
+  flex: 0 0 36px; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--accent-soft-bg); border: 1px solid var(--accent-soft-border); color: var(--accent);
+}
+.confirm-modal-danger .confirm-icon { background: var(--danger-soft-bg); border-color: var(--danger-soft-border); color: var(--danger); }
+.confirm-title { margin: 0; padding-top: 5px; font-size: 17px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.confirm-body { margin: var(--space-3) 0 0; padding-left: calc(36px + var(--space-3)); display: flex; flex-direction: column; gap: 6px; }
+.confirm-message { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
+.confirm-detail { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.confirm-modal .modal-actions { margin-top: var(--space-5); }
+/* Solid danger button: confirm dialogs need a filled primary-weight destructive action. */
+.btn-danger-solid {
+  background: var(--danger-solid-bg); border-color: transparent; color: var(--danger-solid-text);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.15), 0 2px 4px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.btn-danger-solid:hover {
+  background: var(--danger-solid-bg-hover); border-color: transparent; color: var(--danger-solid-text); transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.15), 0 4px 8px color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.btn-danger-solid:focus-visible { outline: 2px solid var(--danger); outline-offset: 2px; }
+@media (max-width: 520px) {
+  .confirm-body { padding-left: 0; }
+  .confirm-modal .modal-actions { flex-direction: column-reverse; }
+  .confirm-modal .modal-actions .btn { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm-mask, .confirm-modal { animation: none; }
+  .btn-danger-solid:hover { transform: none; }
+}
 
 .settings-tabs {
   display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); margin-bottom: 20px;

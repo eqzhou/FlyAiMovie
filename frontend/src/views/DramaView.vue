@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { characterAPI, dramaAPI, episodeAPI, propAPI, sceneAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
+import { confirmAction } from '../composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -283,7 +284,13 @@ async function generatePropImage(prop: any) {
 }
 
 async function removeProp(prop: any) {
-  if (!confirm(`删除道具「${prop.name}」？`)) return
+  if (!await confirmAction({
+    title: '删除道具',
+    message: `确定删除道具「${prop.name}」？`,
+    detail: '该道具已生成的图片将不再关联到本项目。',
+    confirmText: '删除道具',
+    tone: 'danger',
+  })) return
   busy.value = `prop-del-${prop.id}`
   try {
     await propAPI.del(prop.id)
@@ -401,7 +408,13 @@ async function saveCharacterToLibrary(character: any) {
 }
 
 async function removeCharacter(character: any) {
-  if (!confirm(`删除角色「${character.name}」？`)) return
+  if (!await confirmAction({
+    title: '删除角色',
+    message: `确定删除角色「${character.name}」？`,
+    detail: '该角色的形象设定与已生成的图片将不再可用。',
+    confirmText: '删除角色',
+    tone: 'danger',
+  })) return
   busy.value = `char-del-${character.id}`
   try {
     await characterAPI.del(character.id)
@@ -482,7 +495,13 @@ async function generateSceneImage(scene: any) {
 }
 
 async function removeScene(scene: any) {
-  if (!confirm(`删除场景「${scene.location}」？`)) return
+  if (!await confirmAction({
+    title: '删除场景',
+    message: `确定删除场景「${scene.location}」？`,
+    detail: '引用该场景的分镜需要重新指定场景。',
+    confirmText: '删除场景',
+    tone: 'danger',
+  })) return
   busy.value = `scene-del-${scene.id}`
   try {
     await sceneAPI.del(scene.id)
@@ -547,7 +566,13 @@ async function delEpisode(episode: any, event?: Event) {
   event?.stopPropagation()
   event?.preventDefault()
   const title = episode.title || `第 ${episode.episode_number} 集`
-  if (!confirm(`删除剧集「${title}」？相关分镜、专属场景与制作记录将不再可用。`)) return
+  if (!await confirmAction({
+    title: '删除剧集',
+    message: `确定删除剧集「${title}」？`,
+    detail: '相关分镜、专属场景与制作记录将不再可用。',
+    confirmText: '删除剧集',
+    tone: 'danger',
+  })) return
   busy.value = `episode-del-${episode.id}`
   try {
     await episodeAPI.del(episode.id)

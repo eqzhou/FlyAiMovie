@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { assetAPI, dramaAPI, episodeAPI, uploadAPI } from '../api'
 import { safeMediaHref } from '../utils/mediaUrl'
+import { confirmAction } from '../composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -215,7 +216,13 @@ async function saveEdit() {
 }
 
 async function removeAsset(asset: any) {
-  if (!window.confirm(`删除素材“${asset.name}”？`)) return
+  if (!await confirmAction({
+    title: '删除素材',
+    message: `确定删除素材「${asset.name}」？`,
+    detail: '已引用该素材的分镜需要重新指定素材。',
+    confirmText: '删除素材',
+    tone: 'danger',
+  })) return
   busy.value = `delete-${asset.id}`
   try {
     await assetAPI.del(asset.id)

@@ -347,6 +347,9 @@ func (s *ImageService) saveBase64(b64, _ string, subdir string) (string, error) 
 		return "", fmt.Errorf("validate generated image: %w", err)
 	}
 	rel, _, err := s.Store.Save(subdir, "generated"+info.Extension, bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("store generated image: %w", err)
+	}
 	return rel, nil
 }
 

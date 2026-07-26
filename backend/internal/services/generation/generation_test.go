@@ -141,6 +141,33 @@ func TestImageBase64ValidationUsesDetectedContentType(t *testing.T) {
 	}
 }
 
+// A failed disk write must surface. Swallowing it returns a path to a file that
+// does not exist, so the failure only shows up later during hashing or caching.
+func TestImageBase64ReportsStorageFailure(t *testing.T) {
+	root := t.TempDir()
+	service := &ImageService{Store: storage.NewLocal(root)}
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	payload := base64.StdEncoding.EncodeToString(imageData.Bytes())
+
+	// Occupy the target subdirectory name with a regular file so creating the
+	// directory, and therefore the write, cannot succeed.
+	blocked := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := service.saveBase64(payload, "image/png", "blocked")
+	if err == nil {
+		t.Fatalf("expected a storage failure to be reported, got rel=%q", rel)
+	}
+	if rel != "" {
+		t.Fatalf("failed save must not return a path, got %q", rel)
+	}
+}
+
 func generationDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	database, err := db.Open(t.TempDir() + "/generation.db")

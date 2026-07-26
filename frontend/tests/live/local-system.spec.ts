@@ -60,8 +60,9 @@ test('live backend: complete production workflow plus account administration', a
     await addService.getByRole('button', { name: '保存配置' }).click()
     const configRow = page.getByRole('row').filter({ hasText: 'Live Text Config' })
     await expect(configRow).toBeVisible()
-    page.once('dialog', (dialog) => dialog.accept())
+    // 删除确认已从原生 confirm() 换成统一的 ConfirmDialog（role="alertdialog"）。
     await configRow.getByRole('button', { name: '删' }).click()
+    await page.getByRole('alertdialog', { name: '删除 AI 服务' }).getByRole('button', { name: '删除配置' }).click()
     await expect(configRow).toHaveCount(0)
 
     await page.getByRole('tab', { name: 'Agent' }).click()
@@ -128,8 +129,8 @@ test('live backend: complete production workflow plus account administration', a
     await page.getByRole('tab', { name: '组织与权限' }).click()
     const cachePanel = page.locator('.panel').filter({ hasText: '本地缓存' })
     await expect(cachePanel).toContainText(/对象 [1-9]/)
-    page.once('dialog', (dialog) => dialog.accept())
     await cachePanel.getByRole('button', { name: '清理过期缓存' }).click()
+    await page.getByRole('alertdialog', { name: '清理过期缓存' }).getByRole('button', { name: '清理缓存' }).click()
     await expect(page.getByText('过期缓存已清理')).toBeVisible()
     await page.getByRole('button', { name: '创建邀请' }).click()
     const inviteDialog = page.getByRole('dialog', { name: '创建邀请' })

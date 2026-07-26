@@ -62,6 +62,76 @@ func TestSMTPPasswordResetSenderDeliversThroughLocalServer(t *testing.T) {
 	}
 }
 
+// A peer that accepts the connection and then goes silent must not pin the
+// caller: without a session deadline the SMTP client would block forever
+// waiting for the greeting.
+func TestSMTPSenderFailsFastWhenServerStalls(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		// Never send the 220 greeting; hold the connection open.
+		accepted <- connection
+	}()
+
+	sender := &SMTPPasswordResetSender{
+		Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port,
+		Username: "user", Password: "password", From: "noreply@example.com",
+		ResetURLBase:   "https://app.example.com",
+		SessionTimeout: 250 * time.Millisecond,
+	}
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- sender.SendPasswordReset("person@example.com", "token", time.Unix(1_700_000_000, 0)) }()
+
+	select {
+	case sendErr := <-done:
+		if sendErr == nil {
+			t.Fatal("expected a stalled SMTP server to fail the send")
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("send took %s, expected it to abort near the session timeout", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("send blocked on a stalled SMTP server")
+	}
+	select {
+	case connection := <-accepted:
+		_ = connection.Close()
+	default:
+	}
+}
+
+// An unroutable address must be bounded by the dial timeout rather than the
+// operating system's much longer default.
+func TestSMTPSenderAppliesDialTimeout(t *testing.T) {
+	sender := &SMTPPasswordResetSender{
+		// TEST-NET-1 is reserved and discards traffic, so the dial hangs.
+		Host: "192.0.2.1", Port: 587,
+		Username: "user", Password: "password", From: "noreply@example.com",
+		ResetURLBase: "https://app.example.com",
+		DialTimeout:  250 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() { done <- sender.SendPasswordReset("person@example.com", "token", time.Unix(1_700_000_000, 0)) }()
+	select {
+	case sendErr := <-done:
+		if sendErr == nil {
+			t.Fatal("expected an unreachable SMTP host to fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("send blocked past the configured dial timeout")
+	}
+}
+
 func serveTestSMTP(listener net.Listener, messages chan<- string, errors chan<- error) {
 	connection, err := listener.Accept()
 	if err != nil {

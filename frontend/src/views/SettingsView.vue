@@ -5,6 +5,7 @@ import { FlaskConical, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
 import { passwordValidationMessage } from '../utils/password'
+import { confirmAction } from '../composables/useConfirm'
 
 const configs = ref<any[]>([])
 const router = useRouter()
@@ -269,7 +270,13 @@ async function inviteMember() {
 }
 
 async function revokeInvitation(invitation: any) {
-  if (!confirm(`撤销发往 ${invitation.email} 的邀请？`)) return
+  if (!await confirmAction({
+    title: '撤销邀请',
+    message: `确定撤销发往 ${invitation.email} 的邀请？`,
+    detail: '对方将无法再通过该邀请链接加入组织。',
+    confirmText: '撤销邀请',
+    tone: 'danger',
+  })) return
   try {
     await memberAPI.revokeInvitation(invitation.id)
     show('邀请已撤销')
@@ -361,7 +368,13 @@ async function changeMemberRole(member: any) {
 }
 
 async function removeMember(member: any) {
-  if (!confirm(`移除 ${member.email}？`)) return
+  if (!await confirmAction({
+    title: '移除成员',
+    message: `确定将 ${member.email} 移出当前组织？`,
+    detail: '该成员将立即失去组织内全部数据的访问权限。',
+    confirmText: '移除成员',
+    tone: 'danger',
+  })) return
   try {
     await memberAPI.remove(member.user_id)
     show('成员已移除')
@@ -408,7 +421,13 @@ async function exportOrganization() {
 }
 
 async function deleteOrganization() {
-  if (!confirm('永久删除组织及其全部数据？此操作无法撤销。')) return
+  if (!await confirmAction({
+    title: '永久删除组织',
+    message: '确定永久删除组织及其全部数据？此操作无法撤销。',
+    detail: '组织下的所有项目、剧集、素材与成员关系都会被清除，删除后将自动退出登录。',
+    confirmText: '确认永久删除',
+    tone: 'danger',
+  })) return
   try {
     await organizationDataAPI.remove(deleteForm.value.password, deleteForm.value.confirmation)
     await authStore.logout()
@@ -434,7 +453,12 @@ async function saveQuota() {
 }
 
 async function purgeCache() {
-  if (!confirm('清理当前组织的过期缓存？')) return
+  if (!await confirmAction({
+    title: '清理过期缓存',
+    message: '确定清理当前组织的过期缓存？',
+    detail: '仅清理已过期的缓存条目，不影响项目数据。',
+    confirmText: '清理缓存',
+  })) return
   try {
     await cacheAPI.purge()
     cache.value = await cacheAPI.stats()
@@ -598,7 +622,13 @@ watch(() => promptForm.value?.content, () => {
 })
 
 async function remove(id: number) {
-  if (!confirm('删除该配置？')) return
+  if (!await confirmAction({
+    title: '删除 AI 服务',
+    message: '确定删除该 AI 服务配置？',
+    detail: '正在使用该配置的功能需要重新选择服务。',
+    confirmText: '删除配置',
+    tone: 'danger',
+  })) return
   try {
     await settingsAPI.deleteAIConfig(id)
     await load()
@@ -797,7 +827,12 @@ async function renderPreview() {
 }
 
 async function restorePrompt(template: any) {
-  if (!confirm(`恢复「${template.name}」的内置模板？`)) return
+  if (!await confirmAction({
+    title: '恢复内置模板',
+    message: `确定将「${template.name}」恢复为内置模板内容？`,
+    detail: '当前的自定义修改会被内置版本覆盖。',
+    confirmText: '恢复模板',
+  })) return
   try {
     await settingsAPI.restorePromptTemplate(template.id)
     promptTemplates.value = await settingsAPI.promptTemplates()
@@ -862,7 +897,13 @@ function formatRevisionTime(value: string) {
 }
 
 async function removePrompt(template: any) {
-  if (!confirm(`删除「${template.name}」？`)) return
+  if (!await confirmAction({
+    title: '删除提示词',
+    message: `确定删除提示词模板「${template.name}」？`,
+    detail: '该模板的历史版本将一并删除。',
+    confirmText: '删除模板',
+    tone: 'danger',
+  })) return
   try {
     await settingsAPI.deletePromptTemplate(template.id)
     promptTemplates.value = await settingsAPI.promptTemplates()

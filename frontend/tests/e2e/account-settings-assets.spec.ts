@@ -502,8 +502,12 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   await createCharacterDialog.getByRole('button', { name: '添加角色' }).click()
   expect(createdCharacter?.postDataJSON()).toMatchObject({ drama_id: 2, name: '阿澈', role: '配角' })
 
-  page.once('dialog', (dialog) => dialog.accept())
+  // 删除确认已从原生 confirm() 换成统一的 ConfirmDialog（role="alertdialog"）。
   await characterRow.getByRole('button', { name: '删除' }).click()
+  const deleteCharacterConfirm = page.getByRole('alertdialog', { name: '删除角色' })
+  await expect(deleteCharacterConfirm).toBeVisible()
+  await deleteCharacterConfirm.getByRole('button', { name: '删除角色' }).click()
+  await expect(deleteCharacterConfirm).toHaveCount(0)
   expect(deletedCharacter).toBeTruthy()
 
   await assetNavigation.getByRole('tab', { name: '场景 1' }).click()

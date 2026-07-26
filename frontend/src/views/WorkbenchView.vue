@@ -9,6 +9,7 @@ import {
 } from '../api'
 import { authStore } from '../auth'
 import { safeMediaHref } from '../utils/mediaUrl'
+import { confirmAction } from '../composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -711,7 +712,13 @@ async function saveCharacter() {
 }
 
 async function removeCharacter(character: any) {
-  if (!window.confirm(`删除角色“${character.name}”？`)) return
+  if (!await confirmAction({
+    title: '删除角色',
+    message: `确定删除角色「${character.name}」？`,
+    detail: '该角色的形象设定与已生成的图片将不再可用。',
+    confirmText: '删除角色',
+    tone: 'danger',
+  })) return
   try {
     await characterAPI.del(character.id)
     show('角色已删除')
@@ -797,7 +804,13 @@ async function saveScene() {
 }
 
 async function removeScene(scene: any) {
-  if (!window.confirm(`删除场景“${scene.location}”？`)) return
+  if (!await confirmAction({
+    title: '删除场景',
+    message: `确定删除场景「${scene.location}」？`,
+    detail: '引用该场景的分镜需要重新指定场景。',
+    confirmText: '删除场景',
+    tone: 'danger',
+  })) return
   try {
     await sceneAPI.del(scene.id)
     show('场景已删除')
@@ -1356,7 +1369,13 @@ async function saveStoryboard() {
 }
 
 async function removeStoryboard(storyboard: any) {
-  if (!window.confirm(`删除分镜“${storyboard.title || `#${storyboard.storyboard_number}`}”？`)) return
+  if (!await confirmAction({
+    title: '删除分镜',
+    message: `确定删除分镜「${storyboard.title || `#${storyboard.storyboard_number}`}」？`,
+    detail: '该分镜已生成的图片、视频与配音将一并移除。',
+    confirmText: '删除分镜',
+    tone: 'danger',
+  })) return
   busy.value = `storyboard-delete-${storyboard.id}`
   try {
     await storyboardAPI.del(storyboard.id)
