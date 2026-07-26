@@ -4,7 +4,12 @@ export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
   forbidOnly: true,
-  retries: 0,
+  // CI runners are far slower than a dev machine: the same WebKit specs finish
+  // in ~25s locally but take 4-9s each on a shared runner, which is enough for
+  // async mock responses to land after an assertion window. Retry there so a
+  // scheduling hiccup does not fail the build; traces are retained on failure,
+  // so a genuine regression still fails all attempts and stays diagnosable.
+  retries: process.env.CI ? 2 : 0,
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
