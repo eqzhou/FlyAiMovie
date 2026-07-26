@@ -30,7 +30,9 @@ func OpenDatabase(databaseType, path, dsn string) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 	switch databaseType {
 	case "", "sqlite":
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		// Password hashes, session and CSRF tokens and provider keys all live
+		// in this file, so keep it private on multi-user hosts.
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, err
 		}
 		dialector = sqlite.Open(path)

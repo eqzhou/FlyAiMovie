@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,5 +232,23 @@ func TestAutoMigrateAddsAIVoiceUpdatedAtOnLegacySQLite(t *testing.T) {
 	}
 	if strings.TrimSpace(voice.UpdatedAt) == "" {
 		t.Fatal("updated_at was not backfilled")
+	}
+}
+
+// The SQLite file holds password hashes, session and CSRF tokens and AI
+// provider keys. Its directory was created 0755 while media storage was
+// already tightened to 0700, so on a shared host any local user could read
+// the database.
+func TestSQLiteDirectoryIsPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "flyaimovie.db")
+	if _, err := OpenDatabase("sqlite", path, ""); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("database directory mode = %04o, want 0700", perm)
 	}
 }

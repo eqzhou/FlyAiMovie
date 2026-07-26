@@ -147,7 +147,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Storage.LocalPath == "" {
 		cfg.Storage.LocalPath = "./data/storage"
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Database.Path), 0o755); err != nil {
+	// The SQLite database holds password hashes, session and CSRF tokens and
+	// AI provider keys, so it deserves the same private treatment as storage.
+	if err := os.MkdirAll(filepath.Dir(cfg.Database.Path), 0o700); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cfg.Storage.LocalPath, 0o700); err != nil {
