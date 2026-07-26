@@ -37,6 +37,8 @@ func (s *Server) createCharacter(c *gin.Context) {
 		Appearance  string `json:"appearance"`
 		Personality string `json:"personality"`
 		VoiceStyle  string `json:"voice_style"`
+
+		ReferenceImages string `json:"reference_images"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.DramaID == 0 || strings.TrimSpace(body.Name) == "" {
 		response.BadRequest(c, "drama_id and name are required")
@@ -46,6 +48,16 @@ func (s *Server) createCharacter(c *gin.Context) {
 	if len([]rune(body.Name)) > 200 {
 		response.BadRequest(c, "character name is too long")
 		return
+	}
+	if len([]rune(body.ReferenceImages)) > maxTextRunes {
+		response.BadRequest(c, "character field is too long")
+		return
+	}
+	if strings.TrimSpace(body.ReferenceImages) != "" {
+		if err := validateReferenceMediaOwnership(c, body.ReferenceImages); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
 	}
 
 	var created models.Character
@@ -67,7 +79,7 @@ func (s *Server) createCharacter(c *gin.Context) {
 		created = models.Character{
 			OrganizationID: currentOrganizationID(c), DramaID: body.DramaID, Name: body.Name, Role: strings.TrimSpace(body.Role),
 			Description: body.Description, Appearance: body.Appearance, Personality: body.Personality,
-			VoiceStyle: body.VoiceStyle, CreatedAt: now, UpdatedAt: now,
+			VoiceStyle: body.VoiceStyle, ReferenceImages: body.ReferenceImages, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
@@ -288,6 +300,7 @@ func (s *Server) characterGenerateImage(c *gin.Context) {
 	did := ch.DramaID
 	rec := &models.ImageGeneration{
 		OrganizationID: currentOrganizationID(c), CharacterID: &cid, DramaID: &did, Prompt: prompt, ImageType: "character", Status: "pending",
+		ReferenceImages: ch.ReferenceImages,
 	}
 	if err := s.Images.Generate(c.Request.Context(), rec, ep.ImageConfigID); err != nil {
 		respondGenerationError(c, err)
@@ -332,7 +345,7 @@ func (s *Server) characterBatchImages(c *gin.Context) {
 		}
 		id := ch.ID
 		did := ch.DramaID
-		rec := &models.ImageGeneration{OrganizationID: currentOrganizationID(c), CharacterID: &id, DramaID: &did, Prompt: prompt, ImageType: "character"}
+		rec := &models.ImageGeneration{OrganizationID: currentOrganizationID(c), CharacterID: &id, DramaID: &did, Prompt: prompt, ImageType: "character", ReferenceImages: ch.ReferenceImages}
 		if err := s.Images.Generate(c.Request.Context(), rec, ep.ImageConfigID); err != nil {
 			errs = append(errs, fmt.Sprintf("character %d: %s", cid, err.Error()))
 			continue

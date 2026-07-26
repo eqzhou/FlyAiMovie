@@ -100,7 +100,39 @@ const promptEditorTemplates = computed(() => promptEditor.value
 const hasActiveJobs = computed(() => jobs.value.some((job) => !['succeeded', 'failed', 'canceled'].includes(job.status)))
 const currentProduction = computed(() => productions.value[0] || null)
 const selectedStoryboard = computed(() => storyboards.value.find((item) => item.id === selectedStoryboardId.value) || storyboards.value[0] || null)
+const selectedStoryboardScene = computed(() => {
+  const sceneID = Number(selectedStoryboard.value?.scene_id) || 0
+  if (!sceneID) return null
+  return scenes.value.find((item) => Number(item.id) === sceneID) || null
+})
+const selectedStoryboardFacts = computed(() => {
+  const shot = selectedStoryboard.value
+  if (!shot) return [] as { label: string; value: string }[]
+  const scene = selectedStoryboardScene.value
+  return [
+    { label: '所属场景', value: scene ? `${scene.location}${scene.time ? ` · ${scene.time}` : ''}` : '' },
+    { label: '地点', value: shot.location || '' },
+    { label: '时间', value: shot.time || '' },
+    { label: '氛围', value: shot.atmosphere || '' },
+    { label: '结果', value: shot.result || '' },
+    { label: '背景音乐', value: shot.bgm_prompt || '' },
+    { label: '音效', value: shot.sound_effect || '' },
+  ].filter((item) => Boolean(item.value.trim()))
+})
 const hasActiveProduction = computed(() => currentProduction.value?.status === 'queued')
+// 后端按项目校验场景，而这里只加载了本集场景。若镜头绑定的是同项目其他集的
+// 场景，缺少对应选项会让保存时静默清空绑定，因此补一个只读占位项。
+const storyboardSceneOptions = computed(() => {
+  const options = scenes.value.map((scene) => ({
+    id: Number(scene.id),
+    label: `${scene.location}${scene.time ? ` · ${scene.time}` : ''}`,
+  }))
+  const boundID = Number(storyboardForm.value?.scene_id) || 0
+  if (boundID > 0 && !options.some((option) => option.id === boundID)) {
+    options.unshift({ id: boundID, label: `场景 #${boundID}（其他剧集）` })
+  }
+  return options
+})
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const gridSelectionError = computed(() => {
   if (gridMode.value !== 'first_last') return ''
@@ -1137,20 +1169,83 @@ async function assignGridCell(index: number) {
   }
 }
 
-async function addStoryboard() {
-  storyboardError.value = ''
-  storyboardForm.value = {
+function referenceImagesToText(value: any): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return ''
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item ?? '').trim()).filter(Boolean).join('\n')
+      }
+    } catch {
+      // 非法 JSON 时退回按行解析
+    }
+  }
+  return raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join('\n')
+}
+
+function emptyStoryboardForm() {
+  return {
+    id: 0,
     title: '',
     duration: 12,
+    scene_id: 0,
     shot_type: '',
-    description: '',
+    angle: '',
+    movement: '',
+    location: '',
+    time: '',
+    atmosphere: '',
+    action: '',
+    result: '',
     dialogue: '',
+    description: '',
     image_prompt: '',
     video_prompt: '',
+    bgm_prompt: '',
+    sound_effect: '',
     reference_images: '',
   }
+}
+
+async function openStoryboardForm(storyboard?: any) {
+  storyboardError.value = ''
+  const blank = emptyStoryboardForm()
+  storyboardForm.value = storyboard
+    ? {
+        ...blank,
+        id: Number(storyboard.id) || 0,
+        title: storyboard.title || '',
+        duration: Number(storyboard.duration) > 0 ? Number(storyboard.duration) : 12,
+        scene_id: Number(storyboard.scene_id) || 0,
+        shot_type: storyboard.shot_type || '',
+        angle: storyboard.angle || '',
+        movement: storyboard.movement || '',
+        location: storyboard.location || '',
+        time: storyboard.time || '',
+        atmosphere: storyboard.atmosphere || '',
+        action: storyboard.action || '',
+        result: storyboard.result || '',
+        dialogue: storyboard.dialogue || '',
+        description: storyboard.description || '',
+        image_prompt: storyboard.image_prompt || '',
+        video_prompt: storyboard.video_prompt || '',
+        bgm_prompt: storyboard.bgm_prompt || '',
+        sound_effect: storyboard.sound_effect || '',
+        reference_images: referenceImagesToText(storyboard.reference_images),
+      }
+    : blank
   await nextTick()
   storyboardTitleInput.value?.focus()
+}
+
+async function addStoryboard() {
+  await openStoryboardForm()
+}
+
+async function editStoryboard(storyboard: any) {
+  await openStoryboardForm(storyboard)
 }
 
 async function saveStoryboard() {
@@ -1161,16 +1256,53 @@ async function saveStoryboard() {
     storyboardTitleInput.value?.focus()
     return
   }
+  const duration = Number(form.duration)
+  if (!Number.isInteger(duration) || duration < 1 || duration > 3600) {
+    storyboardError.value = '时长需为 1-3600 之间的整数（秒）'
+    return
+  }
+  const references = String(form.reference_images || '')
+    .split(/\r?\n/)
+    .map((value: string) => value.trim())
+    .filter(Boolean)
+  if (references.length > 8) {
+    storyboardError.value = '参考图最多 8 张'
+    return
+  }
+  const sceneID = Number(form.scene_id) || 0
+  const payload: Record<string, any> = {
+    title: form.title.trim(),
+    duration,
+    shot_type: form.shot_type || '',
+    angle: form.angle || '',
+    movement: form.movement || '',
+    location: form.location || '',
+    time: form.time || '',
+    atmosphere: form.atmosphere || '',
+    action: form.action || '',
+    result: form.result || '',
+    dialogue: form.dialogue || '',
+    description: form.description || '',
+    image_prompt: form.image_prompt || '',
+    video_prompt: form.video_prompt || '',
+    bgm_prompt: form.bgm_prompt || '',
+    sound_effect: form.sound_effect || '',
+    reference_images: JSON.stringify(references),
+  }
   busy.value = 'storyboard-save'
   try {
-    await storyboardAPI.create({
-      ...form,
-      title: form.title.trim(),
-      reference_images: JSON.stringify(form.reference_images.split(/\r?\n/).map((value: string) => value.trim()).filter(Boolean)),
-      episode_id: episode.value.id,
-    })
+    if (form.id) {
+      await storyboardAPI.update(form.id, { ...payload, scene_id: sceneID > 0 ? sceneID : null })
+    } else {
+      await storyboardAPI.create({
+        ...payload,
+        ...(sceneID > 0 ? { scene_id: sceneID } : {}),
+        episode_id: episode.value.id,
+      })
+    }
+    const edited = Boolean(form.id)
     storyboardForm.value = null
-    show('分镜已添加')
+    show(edited ? '分镜已更新' : '分镜已添加')
     await refreshAssets()
   } catch (error: any) {
     storyboardError.value = error.message || '分镜保存失败'
@@ -1744,6 +1876,12 @@ onUnmounted(() => {
                 <div><span>镜头描述</span><p>{{ selectedStoryboard.description || selectedStoryboard.action || '暂无描述' }}</p></div>
                 <div class="storyboard-dialogue"><span>对白</span><p>{{ selectedStoryboard.dialogue || '（无）' }}</p></div>
               </div>
+              <dl v-if="selectedStoryboardFacts.length" class="storyboard-fact-row">
+                <div v-for="fact in selectedStoryboardFacts" :key="fact.label">
+                  <dt>{{ fact.label }}</dt>
+                  <dd>{{ fact.value }}</dd>
+                </div>
+              </dl>
               <div class="storyboard-media-grid">
                 <div class="storyboard-media-cell"><span>首帧</span><img v-if="selectedStoryboard.first_frame_image" :src="selectedStoryboard.first_frame_image" :alt="`镜头 ${selectedStoryboard.storyboard_number} 首帧`" /><div v-else class="media-placeholder">未生成</div></div>
                 <div class="storyboard-media-cell"><span>尾帧</span><img v-if="selectedStoryboard.last_frame_image" :src="selectedStoryboard.last_frame_image" :alt="`镜头 ${selectedStoryboard.storyboard_number} 尾帧`" /><div v-else class="media-placeholder">未生成</div></div>
@@ -1760,6 +1898,7 @@ onUnmounted(() => {
                 <button class="btn" :disabled="!!busy" @click="composeShot(selectedStoryboard)">合成镜头</button>
               </div>
               <div v-if="canEdit" class="storyboard-secondary-actions">
+                <button class="btn btn-ghost" :disabled="!!busy" @click="editStoryboard(selectedStoryboard)">编辑镜头</button>
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'image_prompt','图片提示词')">改图词</button>
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'video_prompt','视频提示词')">改视频词</button>
                 <button class="btn btn-ghost" :disabled="!!busy" @click="openPromptEditor(selectedStoryboard,'dialogue','对白')">改对白</button>
@@ -1914,16 +2053,45 @@ onUnmounted(() => {
 
     <div v-if="storyboardForm" class="modal-mask" @click.self="storyboardForm=null">
       <form class="modal settings-modal settings-modal-wide storyboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-storyboard-title" @keydown.esc="storyboardForm=null" @submit.prevent="saveStoryboard">
-        <h3 id="add-storyboard-title">添加分镜</h3>
+        <h3 id="add-storyboard-title">{{ storyboardForm.id ? '编辑镜头' : '添加分镜' }}</h3>
         <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
+        <p class="storyboard-form-group">基础信息</p>
         <div class="field-grid">
           <div class="field"><label for="storyboard-title">分镜标题 <span class="required-mark">*</span></label><input id="storyboard-title" ref="storyboardTitleInput" v-model="storyboardForm.title" maxlength="200" required /></div>
           <div class="field"><label for="storyboard-duration">时长（秒）</label><input id="storyboard-duration" v-model.number="storyboardForm.duration" type="number" min="1" max="3600" /></div>
-          <div class="field"><label for="storyboard-shot-type">景别</label><input id="storyboard-shot-type" v-model="storyboardForm.shot_type" maxlength="200" /></div>
-          <div class="field"><label for="storyboard-dialogue">对白</label><textarea id="storyboard-dialogue" v-model="storyboardForm.dialogue" rows="2" maxlength="10000" /></div>
+          <div class="field settings-span">
+            <label for="storyboard-scene">所属场景</label>
+            <select id="storyboard-scene" v-model.number="storyboardForm.scene_id">
+              <option :value="0">不绑定场景</option>
+              <option v-for="option in storyboardSceneOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
+            </select>
+          </div>
+        </div>
+        <p class="storyboard-form-group">镜头语言</p>
+        <div class="field-grid">
+          <div class="field"><label for="storyboard-shot-type">景别</label><input id="storyboard-shot-type" v-model="storyboardForm.shot_type" maxlength="200" placeholder="如：中景" /></div>
+          <div class="field"><label for="storyboard-angle">机位角度</label><input id="storyboard-angle" v-model="storyboardForm.angle" maxlength="200" placeholder="如：平视" /></div>
+          <div class="field settings-span"><label for="storyboard-movement">运镜</label><input id="storyboard-movement" v-model="storyboardForm.movement" maxlength="200" placeholder="如：固定、推轨" /></div>
+        </div>
+        <p class="storyboard-form-group">场景信息</p>
+        <div class="field-grid">
+          <div class="field"><label for="storyboard-location">地点</label><input id="storyboard-location" v-model="storyboardForm.location" maxlength="200" placeholder="如：老城车站站台" /></div>
+          <div class="field"><label for="storyboard-time">时间</label><input id="storyboard-time" v-model="storyboardForm.time" maxlength="200" placeholder="如：黄昏" /></div>
+          <div class="field settings-span"><label for="storyboard-atmosphere">氛围</label><input id="storyboard-atmosphere" v-model="storyboardForm.atmosphere" maxlength="200" placeholder="如：克制而伤感" /></div>
+        </div>
+        <p class="storyboard-form-group">镜头内容</p>
+        <div class="field-grid">
+          <div class="field"><label for="storyboard-action">动作</label><textarea id="storyboard-action" v-model="storyboardForm.action" rows="3" maxlength="10000" /></div>
+          <div class="field"><label for="storyboard-result">结果</label><textarea id="storyboard-result" v-model="storyboardForm.result" rows="3" maxlength="10000" /></div>
+          <div class="field settings-span"><label for="storyboard-dialogue">对白</label><textarea id="storyboard-dialogue" v-model="storyboardForm.dialogue" rows="2" maxlength="10000" /></div>
           <div class="field settings-span"><label for="storyboard-description">镜头描述</label><textarea id="storyboard-description" v-model="storyboardForm.description" rows="3" maxlength="10000" /></div>
+        </div>
+        <p class="storyboard-form-group">生成提示词</p>
+        <div class="field-grid">
           <div class="field"><label for="storyboard-image-prompt">图片提示词</label><textarea id="storyboard-image-prompt" v-model="storyboardForm.image_prompt" rows="3" maxlength="10000" /></div>
           <div class="field"><label for="storyboard-video-prompt">视频提示词</label><textarea id="storyboard-video-prompt" v-model="storyboardForm.video_prompt" rows="3" maxlength="10000" /></div>
+          <div class="field"><label for="storyboard-bgm-prompt">背景音乐提示词</label><textarea id="storyboard-bgm-prompt" v-model="storyboardForm.bgm_prompt" rows="3" maxlength="10000" /></div>
+          <div class="field"><label for="storyboard-sound-effect">音效</label><textarea id="storyboard-sound-effect" v-model="storyboardForm.sound_effect" rows="3" maxlength="10000" /></div>
           <div class="field settings-span"><label for="storyboard-reference-images">多参考图 URL（每行一个，最多 8 张）</label><textarea id="storyboard-reference-images" v-model="storyboardForm.reference_images" rows="3" maxlength="10000" /></div>
         </div>
         <p v-if="storyboardError" class="form-error" role="alert">{{ storyboardError }}</p>

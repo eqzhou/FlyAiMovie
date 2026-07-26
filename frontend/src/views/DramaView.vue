@@ -39,7 +39,7 @@ const episodeForm = ref<{
   video_config_id: number
   audio_config_id: number
 }>({ title: '', image_config_id: 0, video_config_id: 0, audio_config_id: 0 })
-const propForm = ref<{ id?: number; name: string; description: string; prompt: string }>({ name: '', description: '', prompt: '' })
+const propForm = ref<{ id?: number; name: string; type: string; description: string; prompt: string; reference_images: string }>({ name: '', type: '', description: '', prompt: '', reference_images: '' })
 const characterForm = ref<{
   id?: number
   name: string
@@ -49,10 +49,33 @@ const characterForm = ref<{
   personality: string
   voice_style: string
   voice_provider: string
-}>({ name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '' })
+  reference_images: string
+}>({ name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '', reference_images: '' })
 const sceneForm = ref<{ id?: number; location: string; time: string; prompt: string }>({ location: '', time: '', prompt: '' })
 const sceneTransfer = ref<{ scene: any; mode: 'copy' | 'move'; target_episode_id: number; move_storyboards: boolean } | null>(null)
 const styleLabels: Record<string, string> = { realistic: '写实', anime: '动漫', cinematic: '电影感' }
+
+// 参考图在后端以 JSON 数组存储，表单里按每行一个 URL 编辑。
+function referenceImagesToText(value: any): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return ''
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item ?? '').trim()).filter(Boolean).join('\n')
+      }
+    } catch {
+      // 非法 JSON 时退回按行解析
+    }
+  }
+  return raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join('\n')
+}
+
+function referenceImagesToPayload(text: string): string {
+  const items = text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+  return items.length ? JSON.stringify(items) : ''
+}
 
 const id = computed(() => Number(route.params.id))
 const canEdit = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
@@ -194,10 +217,12 @@ async function openPropDialog(prop?: any) {
     ? {
         id: prop.id,
         name: prop.name || '',
+        type: prop.type || '',
         description: prop.description || '',
         prompt: prop.prompt || '',
+        reference_images: referenceImagesToText(prop.reference_images),
       }
-    : { name: '', description: '', prompt: '' }
+    : { name: '', type: '', description: '', prompt: '', reference_images: '' }
   showPropDialog.value = true
   await nextTick()
   propNameInput.value?.focus()
@@ -206,7 +231,7 @@ async function openPropDialog(prop?: any) {
 function closePropDialog() {
   showPropDialog.value = false
   propError.value = ''
-  propForm.value = { name: '', description: '', prompt: '' }
+  propForm.value = { name: '', type: '', description: '', prompt: '', reference_images: '' }
 }
 
 async function saveProp() {
@@ -221,8 +246,10 @@ async function saveProp() {
   try {
     const payload = {
       name,
+      type: propForm.value.type.trim(),
       description: propForm.value.description.trim(),
       prompt: propForm.value.prompt.trim(),
+      reference_images: referenceImagesToPayload(propForm.value.reference_images),
     }
     if (propForm.value.id) {
       await propAPI.update(propForm.value.id, payload)
@@ -281,8 +308,9 @@ async function openCharacterDialog(character?: any) {
         personality: character.personality || '',
         voice_style: character.voice_style || '',
         voice_provider: character.voice_provider || '',
+        reference_images: referenceImagesToText(character.reference_images),
       }
-    : { name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '' }
+    : { name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '', reference_images: '' }
   showCharacterDialog.value = true
   await nextTick()
   characterNameInput.value?.focus()
@@ -291,7 +319,7 @@ async function openCharacterDialog(character?: any) {
 function closeCharacterDialog() {
   showCharacterDialog.value = false
   characterError.value = ''
-  characterForm.value = { name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '' }
+  characterForm.value = { name: '', role: '', appearance: '', description: '', personality: '', voice_style: '', voice_provider: '', reference_images: '' }
 }
 
 async function saveCharacter() {
@@ -312,6 +340,7 @@ async function saveCharacter() {
       personality: characterForm.value.personality.trim(),
       voice_style: characterForm.value.voice_style.trim(),
       voice_provider: characterForm.value.voice_provider.trim(),
+      reference_images: referenceImagesToPayload(characterForm.value.reference_images),
     }
     if (characterForm.value.id) {
       await characterAPI.update(characterForm.value.id, payload)
@@ -677,11 +706,12 @@ onUnmounted(() => {
           </tbody>
         </table>
         <table v-else-if="assetView === 'props' && propsList.length" class="table">
-          <thead><tr><th>形象</th><th>名称</th><th>描述</th><th></th></tr></thead>
+          <thead><tr><th>形象</th><th>名称</th><th>类型</th><th>描述</th><th></th></tr></thead>
           <tbody>
             <tr v-for="prop in propsList" :key="prop.id">
               <td><img v-if="prop.image_url" class="thumb" :src="prop.image_url" :alt="prop.name" /><span v-else class="character-library-placeholder">{{ prop.name.slice(0, 1) }}</span></td>
               <td><strong>{{ prop.name }}</strong></td>
+              <td>{{ prop.type || '未分类' }}</td>
               <td>{{ prop.description || prop.prompt || '未填写' }}</td>
               <td>
                 <div v-if="canEdit" class="toolbar settings-table-actions">
@@ -730,6 +760,7 @@ onUnmounted(() => {
             <option v-for="voice in activeVoices" :key="voice.voice_id" :value="voice.voice_id">{{ voice.voice_name || voice.voice_id }} · {{ voice.provider }}</option>
           </select>
         </div>
+        <div class="field"><label for="character-reference-images">参考图 URL（每行一个，最多 8 张）</label><textarea id="character-reference-images" v-model="characterForm.reference_images" rows="3" maxlength="4000" placeholder="可选，生成形象时用于保持角色一致性" /></div>
         <p v-if="characterError" class="auth-error" role="alert">{{ characterError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closeCharacterDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'character'">{{ busy === 'character' ? '保存中…' : (characterForm.id ? '保存角色' : '添加角色') }}</button></div>
       </form>
@@ -770,8 +801,10 @@ onUnmounted(() => {
         <h3 :id="propForm.id ? 'edit-prop-title' : 'add-prop-title'">{{ propForm.id ? '编辑道具' : '添加道具' }}</h3>
         <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
         <div class="field"><label for="prop-name">名称 <span class="required-mark">*</span></label><input id="prop-name" ref="propNameInput" v-model="propForm.name" maxlength="120" required /></div>
+        <div class="field"><label for="prop-type">类型</label><input id="prop-type" v-model="propForm.type" maxlength="120" placeholder="可选，如武器、饰品、家具" /></div>
         <div class="field"><label for="prop-description">描述</label><textarea id="prop-description" v-model="propForm.description" rows="4" maxlength="4000" /></div>
         <div class="field"><label for="prop-prompt">画面提示词</label><textarea id="prop-prompt" v-model="propForm.prompt" rows="3" maxlength="4000" placeholder="可选，用于生成道具形象" /></div>
+        <div class="field"><label for="prop-reference-images">参考图 URL（每行一个，最多 8 张）</label><textarea id="prop-reference-images" v-model="propForm.reference_images" rows="3" maxlength="4000" placeholder="可选，生成道具图时用于保持外观一致" /></div>
         <p v-if="propError" class="auth-error" role="alert">{{ propError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closePropDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'prop'">{{ busy === 'prop' ? '保存中…' : (propForm.id ? '保存道具' : '添加道具') }}</button></div>
       </form>

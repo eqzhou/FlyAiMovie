@@ -32,11 +32,12 @@ func (s *Server) listProps(c *gin.Context) {
 
 func (s *Server) createProp(c *gin.Context) {
 	var body struct {
-		DramaID     uint   `json:"drama_id"`
-		Name        string `json:"name"`
-		Type        string `json:"type"`
-		Description string `json:"description"`
-		Prompt      string `json:"prompt"`
+		DramaID         uint   `json:"drama_id"`
+		Name            string `json:"name"`
+		Type            string `json:"type"`
+		Description     string `json:"description"`
+		Prompt          string `json:"prompt"`
+		ReferenceImages string `json:"reference_images"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.DramaID == 0 || strings.TrimSpace(body.Name) == "" {
 		response.BadRequest(c, "drama_id and name required")
@@ -46,6 +47,16 @@ func (s *Server) createProp(c *gin.Context) {
 	if len([]rune(body.Name)) > maxNameRunes || len([]rune(body.Type)) > maxNameRunes || len([]rune(body.Description)) > maxTextRunes || len([]rune(body.Prompt)) > maxTextRunes {
 		response.BadRequest(c, "prop field is too long")
 		return
+	}
+	if len([]rune(body.ReferenceImages)) > maxTextRunes {
+		response.BadRequest(c, "prop field is too long")
+		return
+	}
+	if strings.TrimSpace(body.ReferenceImages) != "" {
+		if err := validateReferenceMediaOwnership(c, body.ReferenceImages); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
 	}
 	var drama models.Drama
 	if err := findActiveDrama(c, body.DramaID, &drama); err != nil {
@@ -59,7 +70,7 @@ func (s *Server) createProp(c *gin.Context) {
 	}
 	row := models.Prop{
 		OrganizationID: currentOrganizationID(c), DramaID: body.DramaID, Name: strings.TrimSpace(body.Name), Type: body.Type,
-		Description: body.Description, Prompt: prompt, CreatedAt: ts, UpdatedAt: ts,
+		Description: body.Description, Prompt: prompt, ReferenceImages: body.ReferenceImages, CreatedAt: ts, UpdatedAt: ts,
 	}
 	if err := organizationDB(c).Create(&row).Error; err != nil {
 		response.ServerError(c, err.Error())
@@ -79,12 +90,12 @@ func (s *Server) updateProp(c *gin.Context) {
 		response.BadRequest(c, "invalid JSON body")
 		return
 	}
-	if err := rejectUnknownFields(body, "name", "type", "description", "prompt", "image_url", "local_path"); err != nil {
+	if err := rejectUnknownFields(body, "name", "type", "description", "prompt", "image_url", "local_path", "reference_images"); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := map[string]any{"updated_at": response.Now()}
-	for _, k := range []string{"name", "type", "description", "prompt", "image_url", "local_path"} {
+	for _, k := range []string{"name", "type", "description", "prompt", "image_url", "local_path", "reference_images"} {
 		maxRunes := maxTextRunes
 		if k == "name" || k == "type" {
 			maxRunes = maxNameRunes
@@ -104,6 +115,12 @@ func (s *Server) updateProp(c *gin.Context) {
 			}
 			if (k == "image_url" || k == "local_path") && v != "" {
 				if err := validateLocalMediaOwnership(c, v); err != nil {
+					response.BadRequest(c, err.Error())
+					return
+				}
+			}
+			if k == "reference_images" && v != "" {
+				if err := validateReferenceMediaOwnership(c, v); err != nil {
 					response.BadRequest(c, err.Error())
 					return
 				}
@@ -177,6 +194,7 @@ func (s *Server) propGenerateImage(c *gin.Context) {
 	did := prop.DramaID
 	rec := &models.ImageGeneration{
 		OrganizationID: currentOrganizationID(c), PropID: &pid, DramaID: &did, Prompt: prompt, ImageType: "prop",
+		ReferenceImages: prop.ReferenceImages,
 	}
 	if err := s.Images.Generate(c.Request.Context(), rec, configID); err != nil {
 		respondGenerationError(c, err)
