@@ -323,7 +323,6 @@ func TestSoftDeletedResourcesRejectMutations(t *testing.T) {
 	}
 }
 
-
 func TestCopyEpisodeDuplicatesScriptScenesAndStoryboards(t *testing.T) {
 	_, router := testServerRouter(t)
 	imageConfigID := createMockConfig(t, router, "image")

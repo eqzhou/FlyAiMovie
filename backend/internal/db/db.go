@@ -135,7 +135,6 @@ func AutoMigrate(gdb *gorm.DB) error {
 	return backfillPromptTemplateRevisions(gdb)
 }
 
-
 // prepareSQLiteNotNullTextColumns adds missing text timestamps as nullable, then
 // backfills them so subsequent AutoMigrate can enforce NOT NULL safely.
 func prepareSQLiteNotNullTextColumns(gdb *gorm.DB) error {
