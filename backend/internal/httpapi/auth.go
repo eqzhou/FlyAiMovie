@@ -31,6 +31,7 @@ const (
 var (
 	slugPattern      = regexp.MustCompile(`[^a-z0-9]+`)
 	errSetupComplete = errors.New("setup already completed")
+	errEmailTaken    = errors.New("email already registered")
 )
 
 type authContext struct {
@@ -44,6 +45,7 @@ func (s *Server) registerAuth(api *gin.RouterGroup) {
 	auth := api.Group("/auth")
 	auth.GET("/status", s.authStatus)
 	auth.POST("/setup", s.authSetup)
+	auth.POST("/register", s.authRegister)
 	auth.POST("/login", s.authLogin)
 	auth.GET("/me", s.requireSession(), s.authMe)
 	auth.POST("/logout", s.requireSession(), s.authLogout)
@@ -55,7 +57,13 @@ func (s *Server) registerAuth(api *gin.RouterGroup) {
 func (s *Server) authStatus(c *gin.Context) {
 	var count int64
 	_ = db.DB.Model(&models.User{}).Count(&count).Error
-	response.Success(c, gin.H{"enabled": s.Cfg.Auth.Enabled, "setup_required": count == 0})
+	settings := loadPlatformSettings()
+	response.Success(c, gin.H{
+		"enabled":                    s.Cfg.Auth.Enabled,
+		"setup_required":             count == 0,
+		"registration_enabled":       settings.RegistrationEnabled,
+		"require_email_verification": settings.RequireEmailVerification,
+	})
 }
 
 type setupInput struct {
@@ -103,6 +111,69 @@ func (s *Server) authSetup(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"code": http.StatusCreated, "message": "created", "data": authResponse(user, organization, "owner", csrfToken)})
 }
 
+func (s *Server) authRegister(c *gin.Context) {
+	if !s.Cfg.Auth.Enabled {
+		response.BadRequest(c, "authentication is disabled")
+		return
+	}
+	var userCount int64
+	if err := db.DB.Model(&models.User{}).Count(&userCount).Error; err != nil {
+		response.ServerError(c, "failed to check setup status")
+		return
+	}
+	if userCount == 0 {
+		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "setup required"})
+		return
+	}
+	settings := loadPlatformSettings()
+	if !settings.RegistrationEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "registration disabled"})
+		return
+	}
+	var body setupInput
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.BadRequest(c, "invalid body")
+		return
+	}
+	email, err := normalizeEmail(body.Email)
+	if err != nil || strings.TrimSpace(body.OrganizationName) == "" || !validPassword(body.Password) {
+		response.BadRequest(c, "valid organization, email and password of 12-72 bytes are required")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		response.ServerError(c, "failed to secure password")
+		return
+	}
+	user, organization, err := createRegisteredAccount(body, email, string(hash), settings.RequireEmailVerification)
+	if errors.Is(err, errEmailTaken) {
+		response.Conflict(c, errEmailTaken.Error())
+		return
+	}
+	if err != nil {
+		response.ServerError(c, "failed to register account")
+		return
+	}
+	if settings.RequireEmailVerification {
+		c.JSON(http.StatusCreated, gin.H{
+			"code":    http.StatusCreated,
+			"message": "created",
+			"data": gin.H{
+				"verification_required": true,
+				"email":                 email,
+			},
+		})
+		return
+	}
+	sessionToken, csrfToken, err := s.createSession(user.ID, organization.ID)
+	if err != nil {
+		response.ServerError(c, "failed to create session")
+		return
+	}
+	s.setSessionCookie(c, sessionToken)
+	c.JSON(http.StatusCreated, gin.H{"code": http.StatusCreated, "message": "created", "data": authResponse(user, organization, "owner", csrfToken)})
+}
+
 func createInitialAccount(body setupInput, email, passwordHash string) (models.User, models.Organization, error) {
 	now := response.Now()
 	var user models.User
@@ -123,7 +194,12 @@ func createInitialAccount(body setupInput, email, passwordHash string) (models.U
 		if displayName == "" {
 			displayName = email
 		}
-		user = models.User{Email: email, PasswordHash: passwordHash, DisplayName: displayName, Status: "active", CreatedAt: now, UpdatedAt: now}
+		verifiedAt := now
+		user = models.User{
+			Email: email, PasswordHash: passwordHash, DisplayName: displayName, Status: "active",
+			IsPlatformAdmin: true, EmailVerifiedAt: &verifiedAt,
+			CreatedAt: now, UpdatedAt: now,
+		}
 		if err := tx.Create(&user).Error; err != nil {
 			return err
 		}
@@ -137,6 +213,65 @@ func createInitialAccount(body setupInput, email, passwordHash string) (models.U
 		return db.SeedOrganizationDefaults(tx, organization.ID)
 	})
 	return user, organization, err
+}
+
+func createRegisteredAccount(body setupInput, email, passwordHash string, requireEmailVerification bool) (models.User, models.Organization, error) {
+	now := response.Now()
+	var user models.User
+	var organization models.Organization
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		var existing int64
+		if err := tx.Model(&models.User{}).Where("email = ?", email).Count(&existing).Error; err != nil {
+			return err
+		}
+		if existing > 0 {
+			return errEmailTaken
+		}
+		organization = models.Organization{Name: strings.TrimSpace(body.OrganizationName), Slug: uniqueSlug(tx, body.OrganizationName), Status: "active", CreatedAt: now, UpdatedAt: now}
+		if err := tx.Create(&organization).Error; err != nil {
+			return err
+		}
+		displayName := strings.TrimSpace(body.DisplayName)
+		if displayName == "" {
+			displayName = email
+		}
+		user = models.User{
+			Email: email, PasswordHash: passwordHash, DisplayName: displayName, Status: "active",
+			IsPlatformAdmin: false, CreatedAt: now, UpdatedAt: now,
+		}
+		if !requireEmailVerification {
+			verifiedAt := now
+			user.EmailVerifiedAt = &verifiedAt
+		}
+		if err := tx.Create(&user).Error; err != nil {
+			if isUniqueConstraintError(err) {
+				return errEmailTaken
+			}
+			return err
+		}
+		membership := models.Membership{OrganizationID: organization.ID, UserID: user.ID, Role: "owner", CreatedAt: now, UpdatedAt: now}
+		if err := tx.Create(&membership).Error; err != nil {
+			return err
+		}
+		return db.SeedOrganizationDefaults(tx, organization.ID)
+	})
+	return user, organization, err
+}
+
+func loadPlatformSettings() models.PlatformSettings {
+	var settings models.PlatformSettings
+	if err := db.DB.First(&settings, 1).Error; err != nil {
+		return models.PlatformSettings{ID: 1, RegistrationEnabled: true, RequireEmailVerification: false}
+	}
+	return settings
+}
+
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate")
 }
 
 func claimLegacyResources(tx *gorm.DB, organizationID uint) error {
@@ -363,7 +498,7 @@ func currentOrganizationID(c *gin.Context) uint {
 
 func authResponse(user models.User, organization models.Organization, role, csrf string) gin.H {
 	data := gin.H{
-		"user":         gin.H{"id": user.ID, "email": user.Email, "display_name": user.DisplayName},
+		"user":         gin.H{"id": user.ID, "email": user.Email, "display_name": user.DisplayName, "is_platform_admin": user.IsPlatformAdmin},
 		"organization": gin.H{"id": organization.ID, "name": organization.Name, "slug": organization.Slug},
 		"role":         role,
 	}
