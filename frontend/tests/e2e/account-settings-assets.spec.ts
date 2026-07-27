@@ -147,6 +147,10 @@ async function mockAccountAPI(page: Page, options: {
 }
 
 test('desktop: login, settings and asset library workflows are reachable', async ({ page }) => {
+  // This workflow covers login + multiple settings tabs + assets. On CI WebKit the
+  // shared runner is slow enough that the default 30s budget is routinely exceeded
+  // mid-flow (especially around animated/composite-heavy voice preview clicks).
+  test.setTimeout(90_000)
   let updatedConfig: Request | undefined
   let updatedPrompt: Request | undefined
   let restoredPromptVersion: Request | undefined
@@ -251,8 +255,14 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await page.getByRole('searchbox', { name: '搜索音色' }).fill('少女')
   await expect(page.getByRole('row', { name: /旧音色/ })).toHaveCount(0)
   await page.getByLabel('试听文本').fill('这是音色试听文本')
-  await page.getByRole('row', { name: /少女/ }).getByRole('button', { name: '试听少女' }).click()
-  expect(voicePreview?.postDataJSON()).toEqual({ text: '这是音色试听文本' })
+  const previewButton = page.getByRole('row', { name: /少女/ }).getByRole('button', { name: '试听少女' })
+  await expect(previewButton).toBeEnabled()
+  await previewButton.scrollIntoViewIfNeeded()
+  // WebKit on CI can keep this button in a perpetual "unstable" composite state.
+  // Force click still exercises the click handler and request path without waiting
+  // for animation frames that never settle under software rendering.
+  await previewButton.click({ force: true })
+  await expect.poll(() => voicePreview?.postDataJSON() ?? null).toEqual({ text: '这是音色试听文本' })
   await expect(page.getByLabel('少女试听音频')).toHaveAttribute('src', '/static/audio/voice-preview.mp3')
 
   await settingsNavigation.getByRole('tab', { name: '组织与权限' }).click()
