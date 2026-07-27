@@ -22,7 +22,7 @@ type InvitationSender interface {
 type NoopInvitationSender struct{}
 
 var (
-	errInvitationPasswordInvalid = errors.New("new_password must contain 12-72 bytes")
+	errInvitationPasswordInvalid = errors.New("new_password must contain 8-72 bytes")
 	errInvitationCurrentPassword = errors.New("current_password is invalid")
 	errInvitationAlreadyMember   = errors.New("user is already a member")
 	errInvitationAlreadyAccepted = errors.New("invitation already accepted")

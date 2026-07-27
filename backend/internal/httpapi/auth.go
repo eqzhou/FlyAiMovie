@@ -24,7 +24,7 @@ import (
 const authContextKey = "flyaimovie.auth"
 
 const (
-	minPasswordBytes = 12
+	minPasswordBytes = 8
 	maxPasswordBytes = 72 // bcrypt rejects passwords longer than 72 bytes.
 )
 
@@ -87,7 +87,7 @@ func (s *Server) authSetup(c *gin.Context) {
 	}
 	email, err := normalizeEmail(body.Email)
 	if err != nil || strings.TrimSpace(body.OrganizationName) == "" || !validPassword(body.Password) {
-		response.BadRequest(c, "valid organization, email and password of 12-72 bytes are required")
+		response.BadRequest(c, "valid organization, email and password of 8-72 bytes are required")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
@@ -139,7 +139,7 @@ func (s *Server) authRegister(c *gin.Context) {
 	}
 	email, err := normalizeEmail(body.Email)
 	if err != nil || strings.TrimSpace(body.OrganizationName) == "" || !validPassword(body.Password) {
-		response.BadRequest(c, "valid organization, email and password of 12-72 bytes are required")
+		response.BadRequest(c, "valid organization, email and password of 8-72 bytes are required")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)

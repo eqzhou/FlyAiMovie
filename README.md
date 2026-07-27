@@ -105,9 +105,9 @@ curl http://127.0.0.1:8088/api/v1/health
 以下 live 测试会创建并永久删除测试组织，只能用于空的 disposable 数据库：
 
 ```bash
-E2E_DISPOSABLE=1 E2E_PASSWORD='12-72 字节临时密码' ./scripts/e2e-live.sh
+E2E_DISPOSABLE=1 E2E_PASSWORD='8-72 字节临时密码' ./scripts/e2e-live.sh
 ./scripts/dev-up.sh  # 重新播种 Mock 配置
-cd frontend && E2E_DISPOSABLE=1 E2E_PASSWORD='12-72 字节临时密码' npm run test:e2e:live
+cd frontend && E2E_DISPOSABLE=1 E2E_PASSWORD='8-72 字节临时密码' npm run test:e2e:live
 cd .. && ./scripts/dev-up.sh  # 恢复为空安装并重新播种
 ```
 

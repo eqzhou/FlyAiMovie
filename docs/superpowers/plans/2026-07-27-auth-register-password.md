@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 文档与用户可见文案使用中文；API 错误 message 可保持与现有英文风格一致（如 `registration disabled`），前端再做人话提示。
-- 密码规则不变：12–72 字节，bcrypt。
+- 密码规则不变：8–72 字节，bcrypt。
 - 公开注册不得 `claimLegacyResources`；仅 `/auth/setup` 可认领 `organization_id=0`。
 - 仅 `is_platform_admin=true` 可改平台注册设置；组织 owner/admin 不够。
 - 默认：`registration_enabled=true`，`require_email_verification=false`。

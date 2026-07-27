@@ -71,8 +71,8 @@ async function accept() {
         <div class="field"><label for="invite-email">邮箱</label><input id="invite-email" v-model.trim="email" type="email" required readonly /></div>
         <div class="field"><label for="invite-display-name">显示名称</label><input id="invite-display-name" v-model.trim="displayName" autocomplete="name" /></div>
         <div class="field"><label for="invite-current-password">已有账号当前密码（已有账号必填）</label><input id="invite-current-password" v-model="currentPassword" type="password" autocomplete="current-password" /></div>
-        <div class="field"><label for="invite-new-password">新账号初始密码（新账号必填）</label><input id="invite-new-password" v-model="newPassword" type="password" minlength="12" maxlength="72" autocomplete="new-password" /></div>
-        <div v-if="newPassword" class="field"><label for="invite-confirm-password">确认新账号密码</label><input id="invite-confirm-password" v-model="confirmNewPassword" type="password" minlength="12" maxlength="72" autocomplete="new-password" required /></div>
+        <div class="field"><label for="invite-new-password">新账号初始密码（新账号必填）</label><input id="invite-new-password" v-model="newPassword" type="password" minlength="8" maxlength="72" autocomplete="new-password" /></div>
+        <div v-if="newPassword" class="field"><label for="invite-confirm-password">确认新账号密码</label><input id="invite-confirm-password" v-model="confirmNewPassword" type="password" minlength="8" maxlength="72" autocomplete="new-password" required /></div>
         <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
         <button class="btn btn-primary auth-submit" :disabled="busy || !invite" type="submit">{{ busy ? '处理中' : '接受邀请' }}</button>
       </template>

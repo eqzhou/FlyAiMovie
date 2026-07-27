@@ -82,7 +82,7 @@ func (s *Server) consumePasswordReset(c *gin.Context) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Token) == "" || !validPassword(body.NewPassword) {
-		response.BadRequest(c, "token and new_password of 12-72 bytes are required")
+		response.BadRequest(c, "token and new_password of 8-72 bytes are required")
 		return
 	}
 	now := time.Now().UTC()

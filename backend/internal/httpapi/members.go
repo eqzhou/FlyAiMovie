@@ -16,7 +16,7 @@ import (
 
 var (
 	errExistingAccountRequiresInvitation = errors.New("existing accounts require a verified invitation")
-	errNewUserPasswordInvalid            = errors.New("new users require a password of 12-72 bytes")
+	errNewUserPasswordInvalid            = errors.New("new users require a password of 8-72 bytes")
 	errUserAlreadyMember                 = errors.New("user is already a member")
 )
 
@@ -284,7 +284,7 @@ func (s *Server) authChangePassword(c *gin.Context) {
 		NewPassword     string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || !validPassword(body.NewPassword) {
-		response.BadRequest(c, "new password must contain 12-72 bytes")
+		response.BadRequest(c, "new password must contain 8-72 bytes")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(actor.User.PasswordHash), []byte(body.CurrentPassword)) != nil {

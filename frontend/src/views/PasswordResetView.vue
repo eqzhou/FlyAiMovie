@@ -37,9 +37,9 @@ async function submit() {
     <form v-if="!done" class="auth-form" @submit.prevent="submit">
       <div class="brand auth-brand"><span class="brand-mark" aria-hidden="true"></span><span>FlyAiMovie</span></div>
       <h1>设置新密码</h1>
-      <p class="auth-subtitle">密码需为 12–72 字节。更新后请使用新密码登录。</p>
-      <div class="field"><label for="reset-password">新密码</label><input id="reset-password" v-model="password" type="password" minlength="12" maxlength="72" required autocomplete="new-password" /></div>
-      <div class="field"><label for="reset-confirm">确认新密码</label><input id="reset-confirm" v-model="confirm" type="password" minlength="12" maxlength="72" required autocomplete="new-password" /></div>
+      <p class="auth-subtitle">密码需为 8–72 字节。更新后请使用新密码登录。</p>
+      <div class="field"><label for="reset-password">新密码</label><input id="reset-password" v-model="password" type="password" minlength="8" maxlength="72" required autocomplete="new-password" /></div>
+      <div class="field"><label for="reset-confirm">确认新密码</label><input id="reset-confirm" v-model="confirm" type="password" minlength="8" maxlength="72" required autocomplete="new-password" /></div>
       <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
       <button class="btn btn-primary auth-submit" :disabled="busy" type="submit">{{ busy ? '处理中' : '更新密码' }}</button>
     </form>

@@ -136,11 +136,11 @@ function goLogin() {
       </div>
       <div v-if="!resetMode && !verificationPendingEmail" class="field">
         <label for="auth-password">密码</label>
-        <input id="auth-password" v-model="password" required type="password" minlength="12" maxlength="72" :autocomplete="(isSetup || isRegister) ? 'new-password' : 'current-password'" />
+        <input id="auth-password" v-model="password" required type="password" minlength="8" maxlength="72" :autocomplete="(isSetup || isRegister) ? 'new-password' : 'current-password'" />
       </div>
       <div v-if="(isSetup || isRegister) && !verificationPendingEmail" class="field">
         <label for="confirm-password">确认密码</label>
-        <input id="confirm-password" v-model="confirmPassword" required type="password" minlength="12" maxlength="72" autocomplete="new-password" />
+        <input id="confirm-password" v-model="confirmPassword" required type="password" minlength="8" maxlength="72" autocomplete="new-password" />
       </div>
       <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
       <button v-if="!resetRequested && !verificationPendingEmail" class="btn btn-primary auth-submit" :disabled="busy" type="submit">

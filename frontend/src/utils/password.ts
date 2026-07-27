@@ -1,4 +1,4 @@
-const MIN_PASSWORD_BYTES = 12
+const MIN_PASSWORD_BYTES = 8
 const MAX_PASSWORD_BYTES = 72
 
 export function passwordByteLength(value: string): number {
