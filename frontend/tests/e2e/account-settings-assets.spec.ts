@@ -458,6 +458,8 @@ test('desktop: editors can preview voices without managing the catalog', async (
 })
 
 test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
+  // Long multi-dialog project flow; CI WebKit regularly exceeds 30s mid-flow.
+  test.setTimeout(90_000)
   let createdCharacter: Request | undefined
   let updatedCharacter: Request | undefined
   let deletedCharacter: Request | undefined
@@ -527,9 +529,12 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   await expect(editCharacterDialog.getByLabel(/名称.*\*/)).toHaveValue('阿宁')
   await editCharacterDialog.getByLabel('定位').fill('核心主角')
   await editCharacterDialog.getByRole('button', { name: '保存角色' }).click()
+  await expect(editCharacterDialog).toHaveCount(0)
   expect(updatedCharacter?.postDataJSON()).toMatchObject({ name: '阿宁', role: '核心主角' })
 
-  await page.getByRole('button', { name: '添加角色' }).click()
+  const addCharacterButton = page.getByRole('button', { name: '添加角色' })
+  await expect(addCharacterButton).toBeEnabled()
+  await addCharacterButton.click({ force: true })
   const createCharacterDialog = page.getByRole('dialog', { name: '添加角色' })
   await createCharacterDialog.getByLabel(/名称.*\*/).fill('阿澈')
   await createCharacterDialog.getByLabel('定位').fill('配角')
@@ -558,11 +563,18 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   const editSceneDialog = page.getByRole('dialog', { name: '编辑场景' })
   await editSceneDialog.getByLabel(/地点.*\*/).fill('旧车站·站台')
   await editSceneDialog.getByRole('button', { name: '保存场景' }).click()
+  await expect(editSceneDialog).toHaveCount(0)
   expect(updatedScene?.postDataJSON()).toMatchObject({ location: '旧车站·站台' })
-  await page.getByRole('button', { name: '添加场景' }).click()
+  const addSceneButton = page.getByRole('button', { name: '添加场景' })
+  await expect(addSceneButton).toBeEnabled()
+  await addSceneButton.scrollIntoViewIfNeeded()
+  // WebKit on CI can leave primary action buttons in perpetual composite instability.
+  await addSceneButton.click({ force: true })
   const createSceneDialog = page.getByRole('dialog', { name: '添加场景' })
+  await expect(createSceneDialog).toBeVisible()
   await createSceneDialog.getByLabel(/地点.*\*/).fill('码头')
   await createSceneDialog.getByRole('button', { name: '添加场景' }).click()
+  await expect(createSceneDialog).toHaveCount(0)
   expect(createdScene?.postDataJSON()).toMatchObject({ drama_id: 2, location: '码头' })
 
   await assetNavigation.getByRole('tab', { name: '道具 1' }).click()

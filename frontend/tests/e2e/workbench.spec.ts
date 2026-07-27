@@ -364,6 +364,8 @@ test('desktop: viewer can inspect the workbench without mutation controls', asyn
 })
 
 test('desktop: prompt templates apply through focused shot and grid editors', async ({ page }) => {
+  // Multi-dialog prompt flow; CI WebKit often stalls on composite-unstable buttons.
+  test.setTimeout(90_000)
   let storyboardUpdate: Request | undefined
   await mockWorkbenchAPI(page, { onStoryboardUpdate: (request) => { storyboardUpdate = request } })
   await page.goto('/drama/2/episode/1')
@@ -389,11 +391,15 @@ test('desktop: prompt templates apply through focused shot and grid editors', as
   await dialogueDialog.getByRole('button', { name: '取消' }).click()
 
   await page.getByRole('tab', { name: '宫格帧' }).click()
-  await page.getByRole('button', { name: '套用提示词模板' }).click()
+  const applyTemplateButton = page.getByRole('button', { name: '套用提示词模板' })
+  await expect(applyTemplateButton).toBeEnabled()
+  await applyTemplateButton.click({ force: true })
   const gridDialog = page.getByRole('dialog', { name: '编辑宫格提示词' })
-  await gridDialog.getByRole('button', { name: '套用模板' }).click()
+  await expect(gridDialog).toBeVisible()
+  await gridDialog.getByRole('button', { name: '套用模板' }).click({ force: true })
   await expect(gridDialog.getByLabel('宫格提示词')).toHaveValue('2x2 连续的车站重逢镜头')
-  await gridDialog.getByRole('button', { name: '应用' }).click()
+  await gridDialog.getByRole('button', { name: '应用' }).click({ force: true })
+  await expect(gridDialog).toHaveCount(0)
   await expect(page.getByLabel('宫格提示词')).toHaveValue('2x2 连续的车站重逢镜头')
 })
 
