@@ -3,7 +3,7 @@ import { reactive } from 'vue'
 const BASE = '/api/v1'
 
 type AuthActor = {
-  user: { id: number; email: string; display_name: string }
+  user: { id: number; email: string; display_name: string; is_platform_admin?: boolean }
   organization: { id: number; name: string; slug: string }
   role: 'owner' | 'admin' | 'editor' | 'viewer'
   csrf_token?: string
@@ -13,6 +13,8 @@ const state = reactive({
   initialized: false,
   enabled: false,
   setupRequired: false,
+  registrationEnabled: true,
+  requireEmailVerification: false,
   actor: null as AuthActor | null,
   csrfToken: sessionStorage.getItem('flyaimovie.csrf') || '',
   organizations: [] as Array<{ id: number; name: string; slug: string; role: string; current: boolean }>,
@@ -75,6 +77,8 @@ async function performInitialize() {
     const status = await authRequest('/auth/status')
     state.enabled = Boolean(status.enabled)
     state.setupRequired = Boolean(status.setup_required)
+    state.registrationEnabled = status.registration_enabled !== false
+    state.requireEmailVerification = Boolean(status.require_email_verification)
     if (state.enabled && !state.setupRequired) {
       try {
         setActor(await authRequest('/auth/me'))
@@ -105,6 +109,25 @@ async function setup(data: { organization_name: string; display_name: string; em
   const actor = await authRequest('/auth/setup', 'POST', data)
   state.setupRequired = false
   setActor(actor)
+  await refreshOrganizationsBestEffort()
+}
+
+export class RegistrationVerificationRequiredError extends Error {
+  email: string
+
+  constructor(email: string) {
+    super('verification_required')
+    this.name = 'RegistrationVerificationRequiredError'
+    this.email = email
+  }
+}
+
+async function register(data: { organization_name: string; display_name: string; email: string; password: string }) {
+  const result = await authRequest('/auth/register', 'POST', data)
+  if (result?.verification_required) {
+    throw new RegistrationVerificationRequiredError(result.email || data.email)
+  }
+  setActor(result)
   await refreshOrganizationsBestEffort()
 }
 
@@ -147,4 +170,4 @@ export function handleUnauthorized(requestSession = authSessionFingerprint()) {
   if (state.enabled && requestSession === authSessionFingerprint()) setActor(null)
 }
 
-export const authStore = { state, initialize, login, setup, logout, adoptActor, switchOrganization, refreshOrganizations, changePassword }
+export const authStore = { state, initialize, login, setup, register, logout, adoptActor, switchOrganization, refreshOrganizations, changePassword }
