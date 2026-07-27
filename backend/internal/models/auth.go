@@ -10,14 +10,24 @@ type Organization struct {
 }
 
 type User struct {
-	ID           uint    `gorm:"primaryKey" json:"id"`
-	Email        string  `gorm:"uniqueIndex;not null" json:"email"`
-	PasswordHash string  `gorm:"not null" json:"-"`
-	DisplayName  string  `gorm:"not null" json:"display_name"`
-	Status       string  `gorm:"not null;default:active" json:"status"`
-	LastLoginAt  *string `json:"last_login_at,omitempty"`
-	CreatedAt    string  `gorm:"not null" json:"created_at"`
-	UpdatedAt    string  `gorm:"not null" json:"updated_at"`
+	ID              uint    `gorm:"primaryKey" json:"id"`
+	Email           string  `gorm:"uniqueIndex;not null" json:"email"`
+	PasswordHash    string  `gorm:"not null" json:"-"`
+	DisplayName     string  `gorm:"not null" json:"display_name"`
+	Status          string  `gorm:"not null;default:active" json:"status"`
+	IsPlatformAdmin bool    `gorm:"not null;default:false" json:"is_platform_admin"`
+	EmailVerifiedAt *string `json:"email_verified_at,omitempty"`
+	LastLoginAt     *string `json:"last_login_at,omitempty"`
+	CreatedAt       string  `gorm:"not null" json:"created_at"`
+	UpdatedAt       string  `gorm:"not null" json:"updated_at"`
+}
+
+type PlatformSettings struct {
+	ID                       uint   `gorm:"primaryKey" json:"id"`
+	RegistrationEnabled      bool   `gorm:"not null;default:true" json:"registration_enabled"`
+	RequireEmailVerification bool   `gorm:"not null;default:false" json:"require_email_verification"`
+	UpdatedAt                string `gorm:"not null" json:"updated_at"`
+	UpdatedBy                *uint  `json:"updated_by,omitempty"`
 }
 
 type Membership struct {
