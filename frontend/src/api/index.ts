@@ -274,6 +274,12 @@ export const invitationAPI = {
     api.post<any>(`/auth/invitations/${encodeURIComponent(token)}/accept`, data),
 }
 
+export const platformSettingsAPI = {
+  get: () => api.get<{ registration_enabled: boolean; require_email_verification: boolean; updated_at?: string; updated_by?: number }>('/auth/platform-settings'),
+  update: (data: { registration_enabled: boolean; require_email_verification: boolean }) =>
+    api.put<{ registration_enabled: boolean; require_email_verification: boolean; updated_at?: string; updated_by?: number }>('/auth/platform-settings', data),
+}
+
 export const passwordResetAPI = {
   request: (email: string) => api.post('/auth/password-reset/request', { email }),
   consume: (token: string, newPassword: string) => api.post('/auth/password-reset/consume', { token, new_password: newPassword }),
