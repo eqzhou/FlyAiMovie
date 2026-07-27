@@ -8,6 +8,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/config"
 	"github.com/eqzhou/flyaimovie/internal/db"
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/response"
 )
 
 func TestAuthRegisterCreatesOwnerWorkspaceAndSession(t *testing.T) {
@@ -203,5 +204,155 @@ func TestAuthRegisterVerificationRequiredSkipsSession(t *testing.T) {
 	}
 	if registered.IsPlatformAdmin {
 		t.Fatal("registered user must not be platform admin")
+	}
+}
+
+func TestPlatformSettingsOnlyPlatformAdmin(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	router := server.Router()
+
+	setup := performRequest(router, http.MethodPost, "/api/v1/auth/setup", `{
+		"organization_name":"Platform","email":"platform@example.com",
+		"display_name":"Platform","password":"correct horse battery staple"
+	}`, nil)
+	if setup.Code != http.StatusCreated {
+		t.Fatalf("setup=%d %s", setup.Code, setup.Body.String())
+	}
+	adminCookie := responseCookie(t, setup, "fly_session")
+	adminCSRF := authCSRFToken(t, setup)
+
+	getAdmin := performAuthRequest(router, http.MethodGet, "/api/v1/auth/platform-settings", "", adminCookie, "")
+	if getAdmin.Code != http.StatusOK {
+		t.Fatalf("admin get=%d %s", getAdmin.Code, getAdmin.Body.String())
+	}
+	getPayload := decodeResponse(t, getAdmin)["data"].(map[string]any)
+	if getPayload["registration_enabled"] != true || getPayload["require_email_verification"] != false {
+		t.Fatalf("default settings payload=%v", getPayload)
+	}
+
+	putAdmin := performAuthRequest(router, http.MethodPut, "/api/v1/auth/platform-settings", `{
+		"registration_enabled":false,
+		"require_email_verification":true
+	}`, adminCookie, adminCSRF)
+	if putAdmin.Code != http.StatusOK {
+		t.Fatalf("admin put=%d %s", putAdmin.Code, putAdmin.Body.String())
+	}
+	putPayload := decodeResponse(t, putAdmin)["data"].(map[string]any)
+	if putPayload["registration_enabled"] != false || putPayload["require_email_verification"] != true {
+		t.Fatalf("updated settings payload=%v", putPayload)
+	}
+
+	var settings models.PlatformSettings
+	if err := db.DB.First(&settings, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if settings.RegistrationEnabled || !settings.RequireEmailVerification {
+		t.Fatalf("db settings not updated: %+v", settings)
+	}
+	if settings.UpdatedBy == nil || *settings.UpdatedBy == 0 {
+		t.Fatalf("updated_by should be set: %+v", settings)
+	}
+	if settings.UpdatedAt == "" {
+		t.Fatal("updated_at should be set")
+	}
+
+	// Re-enable registration so a normal owner can register.
+	restore := performAuthRequest(router, http.MethodPut, "/api/v1/auth/platform-settings", `{
+		"registration_enabled":true,
+		"require_email_verification":false
+	}`, adminCookie, adminCSRF)
+	if restore.Code != http.StatusOK {
+		t.Fatalf("restore put=%d %s", restore.Code, restore.Body.String())
+	}
+
+	reg := performRequest(router, http.MethodPost, "/api/v1/auth/register", `{
+		"organization_name":"Indie Studio","email":"indie@example.com",
+		"display_name":"Indie","password":"correct horse battery staple"
+	}`, nil)
+	if reg.Code != http.StatusCreated {
+		t.Fatalf("register=%d %s", reg.Code, reg.Body.String())
+	}
+	ownerCookie := responseCookie(t, reg, "fly_session")
+	ownerCSRF := authCSRFToken(t, reg)
+
+	getOwner := performAuthRequest(router, http.MethodGet, "/api/v1/auth/platform-settings", "", ownerCookie, "")
+	if getOwner.Code != http.StatusForbidden || !strings.Contains(getOwner.Body.String(), "platform admin required") {
+		t.Fatalf("owner get=%d %s", getOwner.Code, getOwner.Body.String())
+	}
+	putOwner := performAuthRequest(router, http.MethodPut, "/api/v1/auth/platform-settings", `{
+		"registration_enabled":false,
+		"require_email_verification":true
+	}`, ownerCookie, ownerCSRF)
+	if putOwner.Code != http.StatusForbidden || !strings.Contains(putOwner.Body.String(), "platform admin required") {
+		t.Fatalf("owner put=%d %s", putOwner.Code, putOwner.Body.String())
+	}
+}
+
+func TestEmailVerificationGateOnRegisterAndLogin(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	router := server.Router()
+
+	setup := performRequest(router, http.MethodPost, "/api/v1/auth/setup", `{
+		"organization_name":"Platform","email":"platform@example.com",
+		"display_name":"Platform","password":"correct horse battery staple"
+	}`, nil)
+	if setup.Code != http.StatusCreated {
+		t.Fatalf("setup=%d %s", setup.Code, setup.Body.String())
+	}
+	adminCookie := responseCookie(t, setup, "fly_session")
+	adminCSRF := authCSRFToken(t, setup)
+
+	enable := performAuthRequest(router, http.MethodPut, "/api/v1/auth/platform-settings", `{
+		"registration_enabled":true,
+		"require_email_verification":true
+	}`, adminCookie, adminCSRF)
+	if enable.Code != http.StatusOK {
+		t.Fatalf("enable verification=%d %s", enable.Code, enable.Body.String())
+	}
+
+	reg := performRequest(router, http.MethodPost, "/api/v1/auth/register", `{
+		"organization_name":"Indie Studio","email":"indie@example.com",
+		"display_name":"Indie","password":"correct horse battery staple"
+	}`, nil)
+	if reg.Code != http.StatusCreated {
+		t.Fatalf("register=%d %s", reg.Code, reg.Body.String())
+	}
+	for _, cookie := range reg.Result().Cookies() {
+		if cookie.Name == "fly_session" && cookie.Value != "" && cookie.MaxAge >= 0 {
+			t.Fatalf("session cookie should not be issued when verification is required: %#v", cookie)
+		}
+	}
+	payload := decodeResponse(t, reg)["data"].(map[string]any)
+	if payload["verification_required"] != true || payload["email"] != "indie@example.com" {
+		t.Fatalf("payload=%v", payload)
+	}
+
+	blockedLogin := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{
+		"email":"indie@example.com","password":"correct horse battery staple"
+	}`, nil)
+	if blockedLogin.Code != http.StatusForbidden || !strings.Contains(blockedLogin.Body.String(), "email verification required") {
+		t.Fatalf("blocked login=%d %s", blockedLogin.Code, blockedLogin.Body.String())
+	}
+	for _, cookie := range blockedLogin.Result().Cookies() {
+		if cookie.Name == "fly_session" && cookie.Value != "" && cookie.MaxAge >= 0 {
+			t.Fatalf("blocked login must not set session cookie: %#v", cookie)
+		}
+	}
+
+	now := response.Now()
+	if err := db.DB.Model(&models.User{}).Where("email = ?", "indie@example.com").Update("email_verified_at", now).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	okLogin := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{
+		"email":"indie@example.com","password":"correct horse battery staple"
+	}`, nil)
+	if okLogin.Code != http.StatusOK {
+		t.Fatalf("verified login=%d %s", okLogin.Code, okLogin.Body.String())
+	}
+	if responseCookie(t, okLogin, "fly_session") == "" {
+		t.Fatal("verified login missing session cookie")
 	}
 }

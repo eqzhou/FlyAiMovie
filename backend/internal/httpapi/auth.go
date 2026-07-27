@@ -52,6 +52,8 @@ func (s *Server) registerAuth(api *gin.RouterGroup) {
 	auth.GET("/organizations", s.requireSession(), s.authOrganizations)
 	auth.POST("/switch-organization", s.requireSession(), s.authSwitchOrganization)
 	auth.POST("/change-password", s.requireSession(), s.authChangePassword)
+	auth.GET("/platform-settings", s.requireSession(), s.getPlatformSettings)
+	auth.PUT("/platform-settings", s.requireSession(), s.putPlatformSettings)
 }
 
 func (s *Server) authStatus(c *gin.Context) {
@@ -307,6 +309,11 @@ func (s *Server) authLogin(c *gin.Context) {
 	user, organization, membership, err := verifyLogin(body.Email, body.Password)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": http.StatusUnauthorized, "message": "invalid credentials"})
+		return
+	}
+	settings := loadPlatformSettings()
+	if settings.RequireEmailVerification && user.EmailVerifiedAt == nil {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "email verification required"})
 		return
 	}
 	sessionToken, csrfToken, err := s.createSession(user.ID, organization.ID)
