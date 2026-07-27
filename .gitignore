@@ -26,3 +26,6 @@ artifacts/
 
 # Accidental sqlite artifacts from misconfigured DSN paths
 **/postgres:/
+
+# local worktrees
+.worktrees/
