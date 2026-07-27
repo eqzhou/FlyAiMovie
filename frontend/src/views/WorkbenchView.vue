@@ -1639,29 +1639,31 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="stage-tabs" role="tablist" aria-label="制作阶段">
-        <button
-          v-for="(stage, index) in stages"
-          :key="stage.id"
-          class="stage-tab"
-          :class="{ active: tab === stage.id, complete: stage.complete }"
-          role="tab"
-          :id="`workbench-stage-${stage.id}`"
-          :aria-controls="`workbench-stage-panel-${stage.id}`"
-          :aria-label="`${stage.label}${stage.complete ? '，已完成' : ''}`"
-          :aria-selected="tab === stage.id"
-          :aria-current="tab === stage.id ? 'step' : undefined"
-          :tabindex="tab === stage.id ? 0 : -1"
-          :title="`${stage.label} · ${stage.detail}${stage.complete ? ' · 已完成' : ''}`"
-          @click="selectStage(stage.id)"
-          @keydown="handleStageKeydown($event, index)"
-        >
-          <span class="stage-index" aria-hidden="true">{{ stage.complete ? '✓' : index + 1 }}</span>
-          <span class="stage-copy">
-            <strong>{{ stage.label }}</strong>
-            <small>{{ stage.detail }}</small>
-          </span>
-        </button>
+      <div class="stage-tabs-shell">
+        <div class="stage-tabs" role="tablist" aria-label="制作阶段">
+          <button
+            v-for="(stage, index) in stages"
+            :key="stage.id"
+            class="stage-tab"
+            :class="{ active: tab === stage.id, complete: stage.complete }"
+            role="tab"
+            :id="`workbench-stage-${stage.id}`"
+            :aria-controls="`workbench-stage-panel-${stage.id}`"
+            :aria-label="`${stage.label}${stage.complete ? '，已完成' : ''}`"
+            :aria-selected="tab === stage.id"
+            :aria-current="tab === stage.id ? 'step' : undefined"
+            :tabindex="tab === stage.id ? 0 : -1"
+            :title="`${stage.label} · ${stage.detail}${stage.complete ? ' · 已完成' : ''}`"
+            @click="selectStage(stage.id)"
+            @keydown="handleStageKeydown($event, index)"
+          >
+            <span class="stage-index" aria-hidden="true">{{ stage.complete ? '✓' : index + 1 }}</span>
+            <span class="stage-copy">
+              <strong>{{ stage.label }}</strong>
+              <small>{{ stage.detail }}</small>
+            </span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -2205,7 +2207,7 @@ onUnmounted(() => {
         </div>
         <p v-if="productionUsesExternalService" class="production-cost-note">包含外部 AI 服务，可能产生厂商费用。</p>
         <p class="muted">将使用本集绑定的图片、视频和音频服务。制作期间仍可返回手动调整，失败后可从当前阶段重试。</p>
-        <p v-if="productionError" class="auth-error" role="alert">{{ productionError }}</p>
+        <p v-if="productionError" class="form-error" role="alert">{{ productionError }}</p>
         <div class="modal-actions">
           <button class="btn" type="button" @click="showProductionModal=false">取消</button>
           <button class="btn btn-primary" type="button" :disabled="!!busy || !productionReady" @click="startProduction">{{ busy === 'production-start' ? '正在启动…' : '开始制作' }}</button>

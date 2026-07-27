@@ -131,7 +131,8 @@ async function delDrama(d: any) {
 
 function fmtDate(s?: string) {
   if (!s) return ''
-  return new Date(s).toLocaleString()
+  const date = new Date(s)
+  return Number.isNaN(date.getTime()) ? s : date.toLocaleString('zh-CN')
 }
 
 function progress(d: any) {
@@ -184,7 +185,7 @@ onMounted(load)
             <span class="badge">{{ d.episodes?.length || 0 }} 集</span>
             <div v-if="canManageProjects" class="toolbar project-card-actions">
               <button class="btn btn-ghost" type="button" :aria-label="`编辑项目 ${d.title}`" title="编辑项目" @click.stop="openEdit(d)"><Pencil :size="15" aria-hidden="true" /></button>
-              <button class="btn btn-ghost" type="button" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
+              <button class="btn btn-ghost" type="button" data-tone="danger" :aria-label="`删除项目 ${d.title}`" title="删除项目" @click.stop="delDrama(d)"><Trash2 :size="15" aria-hidden="true" /></button>
             </div>
           </div>
           <h3 class="project-title">{{ d.title }}</h3>
@@ -196,7 +197,17 @@ onMounted(load)
           </div>
         </div>
         <div class="card-footer">
-          <div class="progress-mini-track" :aria-label="`完成度 ${progress(d)}%`"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
+          <div
+            class="progress-mini"
+            role="progressbar"
+            :aria-valuenow="progress(d)"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="`完成度 ${progress(d)}%`"
+          >
+            <div class="progress-mini-track"><div class="progress-mini-fill" :style="`width: ${progress(d)}%`"></div></div>
+            <span class="progress-mini-label" aria-hidden="true">{{ progress(d) }}%</span>
+          </div>
           <span>{{ fmtDate(d.updated_at) }}</span>
         </div>
       </article>
@@ -227,7 +238,7 @@ onMounted(load)
         </div>
         <div v-if="!form.id" class="field"><label for="drama-episodes">集数 <span class="required-mark" aria-hidden="true">*</span></label><input id="drama-episodes" ref="episodeInput" v-model.number="form.total_episodes" type="number" min="1" max="50" step="1" required /></div>
         <p v-else class="muted sm">已有剧集数量不会因编辑标题或风格而改变，可在项目详情中单独管理剧集。</p>
-        <p v-if="formError" class="auth-error" role="alert">{{ formError }}</p>
+        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <div class="modal-actions">
           <button class="btn" type="button" :disabled="formBusy" @click="closeDialog">取消</button>
           <button class="btn btn-primary" type="submit" :disabled="formBusy">{{ formBusy ? '保存中…' : (form.id ? '保存项目' : '创建') }}</button>

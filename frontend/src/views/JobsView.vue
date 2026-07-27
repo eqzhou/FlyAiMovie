@@ -437,7 +437,7 @@ onUnmounted(() => {
           <div><h3 id="agent-run-detail-title">Agent 运行详情</h3><p>#{{ agentDetail.run.id }} · {{ agentTypeLabel(agentDetail.run.agent_type) }}</p></div>
           <span class="job-status" :class="agentDetail.run.status">{{ agentStatusLabel(agentDetail.run.status) }}</span>
         </div>
-        <div v-if="agentDetail.run.last_error" class="auth-error" role="alert">{{ agentDetail.run.last_error }}</div>
+        <div v-if="agentDetail.run.last_error" class="form-error" role="alert">{{ agentDetail.run.last_error }}</div>
         <section class="agent-detail-section"><h4>输入</h4><pre>{{ agentDetail.run.input || '无输入内容' }}</pre></section>
         <section class="agent-detail-section"><h4>结构化输出</h4><p v-if="outputText(agentDetail.run.output_json)" class="agent-output-text">{{ outputText(agentDetail.run.output_json) }}</p><pre>{{ prettyJSON(agentDetail.run.output_json) || '暂无输出' }}</pre></section>
         <section class="agent-detail-section"><h4>工具调用与事件</h4>

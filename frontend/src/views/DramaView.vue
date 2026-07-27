@@ -769,7 +769,7 @@ onUnmounted(() => {
         <div class="field"><label for="episode-image-config">图片服务</label><select id="episode-image-config" v-model.number="episodeForm.image_config_id"><option :value="0">请选择</option><option v-for="config in imageConfigs" :key="config.id" :value="config.id">{{ config.name }}</option></select></div>
         <div class="field"><label for="episode-video-config">视频服务</label><select id="episode-video-config" v-model.number="episodeForm.video_config_id"><option :value="0">请选择</option><option v-for="config in videoConfigs" :key="config.id" :value="config.id">{{ config.name }}</option></select></div>
         <div class="field"><label for="episode-audio-config">音频服务</label><select id="episode-audio-config" v-model.number="episodeForm.audio_config_id"><option :value="0">请选择</option><option v-for="config in audioConfigs" :key="config.id" :value="config.id">{{ config.name }}</option></select></div>
-        <p v-if="episodeError" class="auth-error" role="alert">{{ episodeError }}</p>
+        <p v-if="episodeError" class="form-error" role="alert">{{ episodeError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closeEpisodeDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'episode'">{{ busy === 'episode' ? '保存中…' : (episodeForm.id ? '保存剧集' : '创建剧集') }}</button></div>
       </form>
     </div>
@@ -790,7 +790,7 @@ onUnmounted(() => {
           </select>
         </div>
         <div class="field"><label for="character-reference-images">参考图 URL（每行一个，最多 8 张）</label><textarea id="character-reference-images" v-model="characterForm.reference_images" rows="3" maxlength="4000" placeholder="可选，生成形象时用于保持角色一致性" /></div>
-        <p v-if="characterError" class="auth-error" role="alert">{{ characterError }}</p>
+        <p v-if="characterError" class="form-error" role="alert">{{ characterError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closeCharacterDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'character'">{{ busy === 'character' ? '保存中…' : (characterForm.id ? '保存角色' : '添加角色') }}</button></div>
       </form>
     </div>
@@ -802,7 +802,7 @@ onUnmounted(() => {
         <div class="field"><label for="scene-location">地点 <span class="required-mark">*</span></label><input id="scene-location" ref="sceneLocationInput" v-model="sceneForm.location" maxlength="200" required /></div>
         <div class="field"><label for="scene-time">时间</label><input id="scene-time" v-model="sceneForm.time" maxlength="120" placeholder="夜 / 清晨" /></div>
         <div class="field"><label for="scene-prompt">画面提示词</label><textarea id="scene-prompt" v-model="sceneForm.prompt" rows="4" maxlength="4000" placeholder="可选，用于生成场景图" /></div>
-        <p v-if="sceneError" class="auth-error" role="alert">{{ sceneError }}</p>
+        <p v-if="sceneError" class="form-error" role="alert">{{ sceneError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closeSceneDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'scene'">{{ busy === 'scene' ? '保存中…' : (sceneForm.id ? '保存场景' : '添加场景') }}</button></div>
       </form>
     </div>
@@ -820,7 +820,7 @@ onUnmounted(() => {
         <div v-if="sceneTransfer.mode === 'move'" class="field">
           <label><input v-model="sceneTransfer.move_storyboards" type="checkbox" /> 同时迁移关联分镜</label>
         </div>
-        <p v-if="transferError" class="auth-error" role="alert">{{ transferError }}</p>
+        <p v-if="transferError" class="form-error" role="alert">{{ transferError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closeSceneTransfer">取消</button><button type="submit" class="btn btn-primary" :disabled="!!busy">{{ sceneTransfer.mode === 'copy' ? '确认复制' : '确认迁移' }}</button></div>
       </form>
     </div>
@@ -834,7 +834,7 @@ onUnmounted(() => {
         <div class="field"><label for="prop-description">描述</label><textarea id="prop-description" v-model="propForm.description" rows="4" maxlength="4000" /></div>
         <div class="field"><label for="prop-prompt">画面提示词</label><textarea id="prop-prompt" v-model="propForm.prompt" rows="3" maxlength="4000" placeholder="可选，用于生成道具形象" /></div>
         <div class="field"><label for="prop-reference-images">参考图 URL（每行一个，最多 8 张）</label><textarea id="prop-reference-images" v-model="propForm.reference_images" rows="3" maxlength="4000" placeholder="可选，生成道具图时用于保持外观一致" /></div>
-        <p v-if="propError" class="auth-error" role="alert">{{ propError }}</p>
+        <p v-if="propError" class="form-error" role="alert">{{ propError }}</p>
         <div class="modal-actions"><button type="button" class="btn" @click="closePropDialog">取消</button><button type="submit" class="btn btn-primary" :disabled="busy === 'prop'">{{ busy === 'prop' ? '保存中…' : (propForm.id ? '保存道具' : '添加道具') }}</button></div>
       </form>
     </div>
