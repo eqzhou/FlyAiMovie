@@ -72,7 +72,7 @@ watch(() => route.fullPath, () => { navigationOpen.value = false })
 // 会话失效（401）后 actor 会被清空：主动带回登录页，避免停留在已失效页面。
 watch(() => authStore.state.actor, (actor, previous) => {
   if (actor || !previous || !authStore.state.enabled) return
-  if (['login', 'setup', 'invite', 'password-reset'].includes(String(route.name))) return
+  if (['login', 'setup', 'register', 'invite', 'password-reset'].includes(String(route.name))) return
   router.replace('/login')
 })
 

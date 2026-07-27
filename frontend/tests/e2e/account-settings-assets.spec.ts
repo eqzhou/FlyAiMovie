@@ -10,6 +10,8 @@ const actor = {
 async function mockAccountAPI(page: Page, options: {
   signedIn?: boolean
   role?: 'owner' | 'admin' | 'editor' | 'viewer'
+  isPlatformAdmin?: boolean
+  platformSettings?: { registration_enabled: boolean; require_email_verification: boolean }
   failCharacterLibraryRequests?: number
   failCharacterLibraryCreates?: number
   failProviderRequests?: number
@@ -20,7 +22,18 @@ async function mockAccountAPI(page: Page, options: {
   let remainingCharacterLibraryFailures = options.failCharacterLibraryRequests ?? 0
   let remainingCharacterCreateFailures = options.failCharacterLibraryCreates ?? 0
   let remainingProviderFailures = options.failProviderRequests ?? 0
-  const currentActor = { ...actor, role: options.role || actor.role }
+  const platformSettings = {
+    registration_enabled: options.platformSettings?.registration_enabled ?? true,
+    require_email_verification: options.platformSettings?.require_email_verification ?? false,
+  }
+  const currentActor = {
+    ...actor,
+    role: options.role || actor.role,
+    user: {
+      ...actor.user,
+      is_platform_admin: options.isPlatformAdmin ?? false,
+    },
+  }
   await page.route('**/static/audio/voice-preview.mp3', (route) => route.fulfill({ status: 200, contentType: 'audio/mpeg', body: '' }))
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
@@ -29,7 +42,18 @@ async function mockAccountAPI(page: Page, options: {
     let data: unknown = {}
     let status = 200
 
-    if (path === '/api/v1/auth/status') data = { enabled: true, setup_required: false }
+    if (path === '/api/v1/auth/status') data = { enabled: true, setup_required: false, registration_enabled: platformSettings.registration_enabled, require_email_verification: platformSettings.require_email_verification }
+    else if (path === '/api/v1/auth/platform-settings' && request.method() === 'GET') data = { ...platformSettings }
+    else if (path === '/api/v1/auth/platform-settings' && request.method() === 'PUT') {
+      const payload = request.postDataJSON() as { registration_enabled?: boolean; require_email_verification?: boolean }
+      if (typeof payload.registration_enabled !== 'boolean' || typeof payload.require_email_verification !== 'boolean') {
+        status = 400
+        return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: status, message: 'invalid body' }) })
+      }
+      platformSettings.registration_enabled = payload.registration_enabled
+      platformSettings.require_email_verification = payload.require_email_verification
+      data = { ...platformSettings }
+    }
     else if (path === '/api/v1/auth/me' && !signedIn) {
       status = 401
       return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code: 401, message: 'unauthorized' }) })
@@ -123,6 +147,10 @@ async function mockAccountAPI(page: Page, options: {
 }
 
 test('desktop: login, settings and asset library workflows are reachable', async ({ page }) => {
+  // This workflow covers login + multiple settings tabs + assets. On CI WebKit the
+  // shared runner is slow enough that the default 30s budget is routinely exceeded
+  // mid-flow (especially around animated/composite-heavy voice preview clicks).
+  test.setTimeout(90_000)
   let updatedConfig: Request | undefined
   let updatedPrompt: Request | undefined
   let restoredPromptVersion: Request | undefined
@@ -227,8 +255,14 @@ test('desktop: login, settings and asset library workflows are reachable', async
   await page.getByRole('searchbox', { name: '搜索音色' }).fill('少女')
   await expect(page.getByRole('row', { name: /旧音色/ })).toHaveCount(0)
   await page.getByLabel('试听文本').fill('这是音色试听文本')
-  await page.getByRole('row', { name: /少女/ }).getByRole('button', { name: '试听少女' }).click()
-  expect(voicePreview?.postDataJSON()).toEqual({ text: '这是音色试听文本' })
+  const previewButton = page.getByRole('row', { name: /少女/ }).getByRole('button', { name: '试听少女' })
+  await expect(previewButton).toBeEnabled()
+  await previewButton.scrollIntoViewIfNeeded()
+  // WebKit on CI can keep this button in a perpetual "unstable" composite state.
+  // Force click still exercises the click handler and request path without waiting
+  // for animation frames that never settle under software rendering.
+  await previewButton.click({ force: true })
+  await expect.poll(() => voicePreview?.postDataJSON() ?? null).toEqual({ text: '这是音色试听文本' })
   await expect(page.getByLabel('少女试听音频')).toHaveAttribute('src', '/static/audio/voice-preview.mp3')
 
   await settingsNavigation.getByRole('tab', { name: '组织与权限' }).click()
@@ -424,6 +458,8 @@ test('desktop: editors can preview voices without managing the catalog', async (
 })
 
 test('desktop: project detail uses focused content views and creation dialogs', async ({ page }) => {
+  // Long multi-dialog project flow; CI WebKit regularly exceeds 30s mid-flow.
+  test.setTimeout(90_000)
   let createdCharacter: Request | undefined
   let updatedCharacter: Request | undefined
   let deletedCharacter: Request | undefined
@@ -493,9 +529,12 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   await expect(editCharacterDialog.getByLabel(/名称.*\*/)).toHaveValue('阿宁')
   await editCharacterDialog.getByLabel('定位').fill('核心主角')
   await editCharacterDialog.getByRole('button', { name: '保存角色' }).click()
+  await expect(editCharacterDialog).toHaveCount(0)
   expect(updatedCharacter?.postDataJSON()).toMatchObject({ name: '阿宁', role: '核心主角' })
 
-  await page.getByRole('button', { name: '添加角色' }).click()
+  const addCharacterButton = page.getByRole('button', { name: '添加角色' })
+  await expect(addCharacterButton).toBeEnabled()
+  await addCharacterButton.click({ force: true })
   const createCharacterDialog = page.getByRole('dialog', { name: '添加角色' })
   await createCharacterDialog.getByLabel(/名称.*\*/).fill('阿澈')
   await createCharacterDialog.getByLabel('定位').fill('配角')
@@ -524,11 +563,18 @@ test('desktop: project detail uses focused content views and creation dialogs', 
   const editSceneDialog = page.getByRole('dialog', { name: '编辑场景' })
   await editSceneDialog.getByLabel(/地点.*\*/).fill('旧车站·站台')
   await editSceneDialog.getByRole('button', { name: '保存场景' }).click()
+  await expect(editSceneDialog).toHaveCount(0)
   expect(updatedScene?.postDataJSON()).toMatchObject({ location: '旧车站·站台' })
-  await page.getByRole('button', { name: '添加场景' }).click()
+  const addSceneButton = page.getByRole('button', { name: '添加场景' })
+  await expect(addSceneButton).toBeEnabled()
+  await addSceneButton.scrollIntoViewIfNeeded()
+  // WebKit on CI can leave primary action buttons in perpetual composite instability.
+  await addSceneButton.click({ force: true })
   const createSceneDialog = page.getByRole('dialog', { name: '添加场景' })
+  await expect(createSceneDialog).toBeVisible()
   await createSceneDialog.getByLabel(/地点.*\*/).fill('码头')
   await createSceneDialog.getByRole('button', { name: '添加场景' }).click()
+  await expect(createSceneDialog).toHaveCount(0)
   expect(createdScene?.postDataJSON()).toMatchObject({ drama_id: 2, location: '码头' })
 
   await assetNavigation.getByRole('tab', { name: '道具 1' }).click()
@@ -635,4 +681,56 @@ test('mobile: login and asset library fit a 390px viewport', async ({ page }) =>
   await expect(page.getByText('剧本改写', { exact: true })).toBeVisible()
   const settingsLayout = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }))
   expect(settingsLayout.scrollWidth).toBeLessThanOrEqual(settingsLayout.width)
+})
+
+test('desktop: platform admin can see and save registration settings', async ({ page }) => {
+  let updatedSettings: Request | undefined
+  await mockAccountAPI(page, {
+    signedIn: true,
+    isPlatformAdmin: true,
+    platformSettings: { registration_enabled: true, require_email_verification: false },
+  })
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/v1/auth/platform-settings' && request.method() === 'PUT') {
+      updatedSettings = request
+    }
+  })
+
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '安全与数据' }).click()
+  await expect(page.getByText('注册设置', { exact: true })).toBeVisible()
+  await expect(page.getByText('开放公开注册')).toBeVisible()
+  await expect(page.getByText('要求邮箱校验')).toBeVisible()
+  await expect(page.getByText('不会自动发送验证邮件')).toBeVisible()
+  await expect(page.getByRole('button', { name: '修改密码' })).toBeVisible()
+
+  const registrationToggle = page.getByLabel('开放公开注册')
+  const verificationToggle = page.getByLabel('要求邮箱校验')
+  await expect(registrationToggle).toBeChecked()
+  await expect(verificationToggle).not.toBeChecked()
+  await registrationToggle.uncheck()
+  await verificationToggle.check()
+  await page.getByRole('button', { name: '保存注册设置' }).click()
+
+  await expect.poll(() => updatedSettings?.postDataJSON()).toMatchObject({
+    registration_enabled: false,
+    require_email_verification: true,
+  })
+  await expect(page.locator('.toast').filter({ hasText: '注册设置已保存' })).toBeVisible()
+})
+
+test('desktop: non-platform owner does not see registration settings', async ({ page }) => {
+  await mockAccountAPI(page, {
+    signedIn: true,
+    role: 'owner',
+    isPlatformAdmin: false,
+  })
+
+  await page.goto('/settings')
+  await page.getByRole('tab', { name: '安全与数据' }).click()
+  await expect(page.getByRole('button', { name: '修改密码' })).toBeVisible()
+  await expect(page.getByText('注册设置', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('开放公开注册')).toHaveCount(0)
+  await expect(page.getByText('要求邮箱校验')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '保存注册设置' })).toHaveCount(0)
 })

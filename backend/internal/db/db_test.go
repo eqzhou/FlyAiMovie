@@ -252,3 +252,59 @@ func TestSQLiteDirectoryIsPrivate(t *testing.T) {
 		t.Fatalf("database directory mode = %04o, want 0700", perm)
 	}
 }
+
+func TestAutoMigrateSeedsPlatformSettingsAndUserAuthFields(t *testing.T) {
+	database, err := Open(t.TempDir() + "/auth-register-migrate.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	if !database.Migrator().HasColumn(&models.User{}, "email_verified_at") {
+		t.Fatal("missing email_verified_at")
+	}
+	if !database.Migrator().HasColumn(&models.User{}, "is_platform_admin") {
+		t.Fatal("missing is_platform_admin")
+	}
+	var settings models.PlatformSettings
+	if err := database.First(&settings, 1).Error; err != nil {
+		t.Fatalf("platform settings: %v", err)
+	}
+	if !settings.RegistrationEnabled || settings.RequireEmailVerification {
+		t.Fatalf("defaults=%+v", settings)
+	}
+}
+
+func TestAutoMigrateBackfillsVerifiedAndPlatformAdmin(t *testing.T) {
+	database, err := Open(t.TempDir() + "/auth-register-backfill.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(database); err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-01-01T00:00:00Z"
+	org := models.Organization{Name: "Early", Slug: "early", Status: "active", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&org).Error; err != nil {
+		t.Fatal(err)
+	}
+	user := models.User{Email: "owner@example.com", PasswordHash: "x", DisplayName: "Owner", Status: "active", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	member := models.Membership{OrganizationID: org.ID, UserID: user.ID, Role: "owner", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&member).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := BackfillAuthRegistrationFields(database); err != nil {
+		t.Fatal(err)
+	}
+	var got models.User
+	if err := database.First(&got, user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.EmailVerifiedAt == nil || !got.IsPlatformAdmin {
+		t.Fatalf("backfill failed: %+v", got)
+	}
+}

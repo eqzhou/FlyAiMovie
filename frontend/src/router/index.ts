@@ -29,6 +29,7 @@ const router = createRouter({
 	{ path: '/jobs', name: 'jobs', component: JobsView },
     { path: '/audit', name: 'audit', component: AuditView },
     { path: '/login', name: 'login', component: AuthView },
+    { path: '/register', name: 'register', component: AuthView },
     { path: '/setup', name: 'setup', component: AuthView },
     { path: '/invite/:token', name: 'invite', component: InvitationView },
     { path: '/password-reset/:token', name: 'password-reset', component: () => import('../views/PasswordResetView.vue') },
@@ -45,8 +46,13 @@ router.beforeEach(async (to) => {
   if (to.name === 'invite' || to.name === 'password-reset') return true
   if (!authStore.state.enabled) return true
   if (authStore.state.setupRequired) return to.name === 'setup' ? true : { name: 'setup' }
-  if (!authStore.state.actor) return to.name === 'login' ? true : { name: 'login' }
-  if (to.name === 'login' || to.name === 'setup') return { name: 'home' }
+  const isRegisterRoute = to.name === 'register'
+  if (!authStore.state.actor) {
+    if (to.name === 'login') return true
+    if (isRegisterRoute && authStore.state.registrationEnabled) return true
+    return { name: 'login' }
+  }
+  if (to.name === 'login' || to.name === 'setup' || isRegisterRoute) return { name: 'home' }
   if (to.name === 'audit' && !['owner', 'admin'].includes(authStore.state.actor.role)) return { name: 'home' }
   return true
 })

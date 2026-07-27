@@ -45,6 +45,8 @@ export default defineConfig({
     {
       name: 'webkit',
       grep: /desktop:/,
+      // Shared CI runners make WebKit software-composite long flows exceed 30s.
+      timeout: 90_000,
       use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 1000 } },
     },
   ],

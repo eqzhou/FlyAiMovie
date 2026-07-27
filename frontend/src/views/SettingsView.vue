@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { FlaskConical, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
-import { cacheAPI, memberAPI, organizationDataAPI, quotaAPI, settingsAPI } from '../api'
+import { cacheAPI, memberAPI, organizationDataAPI, platformSettingsAPI, quotaAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
 import { passwordValidationMessage } from '../utils/password'
 import { confirmAction } from '../composables/useConfirm'
@@ -140,6 +140,12 @@ const changingPassword = ref(false)
 const invitations = ref<any[]>([])
 const passwordForm = ref({ current: '', next: '', confirm: '' })
 const deleteForm = ref({ password: '', confirmation: '' })
+const isPlatformAdmin = computed(() => !!authStore.state.actor?.user?.is_platform_admin)
+const platformSettings = ref({ registration_enabled: true, require_email_verification: false })
+const platformSettingsLoaded = ref(false)
+const platformSettingsLoading = ref(false)
+const platformSettingsError = ref('')
+const savingPlatformSettings = ref(false)
 const availableProviders = computed(() => providerChoices[form.value.service_type] || [])
 const filteredVoices = computed(() => {
   const keyword = voiceQuery.value.trim().toLocaleLowerCase('zh-CN')
@@ -386,6 +392,47 @@ async function removeMember(member: any) {
     return
   }
   try { members.value = await memberAPI.list() } catch { show('成员已移除，但成员列表暂未刷新') }
+}
+
+async function loadPlatformSettings() {
+  if (!isPlatformAdmin.value || platformSettingsLoading.value) return
+  platformSettingsLoading.value = true
+  platformSettingsError.value = ''
+  try {
+    const data = await platformSettingsAPI.get()
+    platformSettings.value = {
+      registration_enabled: data.registration_enabled !== false,
+      require_email_verification: !!data.require_email_verification,
+    }
+    platformSettingsLoaded.value = true
+  } catch (error) {
+    platformSettingsError.value = error instanceof Error ? error.message : '加载注册设置失败'
+  } finally {
+    platformSettingsLoading.value = false
+  }
+}
+
+async function savePlatformSettings() {
+  if (!isPlatformAdmin.value || savingPlatformSettings.value) return
+  savingPlatformSettings.value = true
+  platformSettingsError.value = ''
+  try {
+    const data = await platformSettingsAPI.update({
+      registration_enabled: !!platformSettings.value.registration_enabled,
+      require_email_verification: !!platformSettings.value.require_email_verification,
+    })
+    platformSettings.value = {
+      registration_enabled: data.registration_enabled !== false,
+      require_email_verification: !!data.require_email_verification,
+    }
+    platformSettingsLoaded.value = true
+    show('注册设置已保存')
+  } catch (error) {
+    platformSettingsError.value = error instanceof Error ? error.message : '保存注册设置失败'
+    show(platformSettingsError.value)
+  } finally {
+    savingPlatformSettings.value = false
+  }
 }
 
 async function changePassword() {
@@ -928,6 +975,18 @@ async function saveAgent() {
   }
 }
 
+watch(activeSection, (section) => {
+  if (section === 'security' && isPlatformAdmin.value) {
+    void loadPlatformSettings()
+  }
+})
+
+watch(isPlatformAdmin, (admin) => {
+  if (admin && activeSection.value === 'security') {
+    void loadPlatformSettings()
+  }
+})
+
 onMounted(load)
 onUnmounted(() => {
   if (toastTimer) window.clearTimeout(toastTimer)
@@ -1081,6 +1140,23 @@ onUnmounted(() => {
     <section v-if="(loaded || !loading) && activeSection === 'security'" class="settings-section" role="tabpanel">
       <div class="settings-section-head"><div><h2>安全与数据</h2><p class="muted">账户凭据、组织数据导出与删除</p></div></div>
       <div class="settings-command-list">
+        <div v-if="isPlatformAdmin" class="settings-command">
+          <div>
+            <strong>注册设置</strong>
+            <p class="muted">控制全站公开注册与邮箱校验门禁。开启邮箱校验后，未验证账号无法登录；第一期不会自动发送验证邮件。</p>
+            <div v-if="platformSettingsLoading && !platformSettingsLoaded" class="muted" role="status">正在加载注册设置…</div>
+            <div v-else-if="platformSettingsError && !platformSettingsLoaded" class="inline-alert" role="alert">
+              <div><strong>注册设置加载失败</strong><span>{{ platformSettingsError }}</span></div>
+              <button class="btn" type="button" @click="loadPlatformSettings">重试加载</button>
+            </div>
+            <div v-else class="service-toggle-grid" style="margin-top:12px">
+              <label class="settings-check"><input v-model="platformSettings.registration_enabled" type="checkbox" :disabled="savingPlatformSettings || platformSettingsLoading" /> 开放公开注册</label>
+              <label class="settings-check"><input v-model="platformSettings.require_email_verification" type="checkbox" :disabled="savingPlatformSettings || platformSettingsLoading" /> 要求邮箱校验</label>
+            </div>
+            <p v-if="platformSettingsError && platformSettingsLoaded" class="form-error" role="alert">{{ platformSettingsError }}</p>
+          </div>
+          <button class="btn btn-primary" type="button" :disabled="savingPlatformSettings || platformSettingsLoading || !platformSettingsLoaded" @click="savePlatformSettings">{{ savingPlatformSettings ? '保存中…' : '保存注册设置' }}</button>
+        </div>
         <div v-if="authStore.state.enabled" class="settings-command"><div><strong>登录密码</strong><p class="muted">更新当前账户的登录密码</p></div><button class="btn" @click="showPasswordModal = true">修改密码</button></div>
         <div v-if="authStore.state.actor?.role === 'owner'" class="settings-command"><div><strong>组织数据</strong><p class="muted">下载当前组织的完整 JSON 数据副本</p></div><button class="btn" @click="exportOrganization">导出组织数据</button></div>
         <div v-if="authStore.state.actor?.role === 'owner'" class="settings-command danger"><div><strong>永久删除组织</strong><p class="muted">删除组织、项目、任务和已缓存媒体，此操作无法撤销</p></div><button class="btn btn-danger" @click="showDeleteModal = true">永久删除组织</button></div>

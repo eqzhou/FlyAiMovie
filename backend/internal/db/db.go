@@ -91,6 +91,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.Session{},
 		&models.AuditLog{},
 		&models.OrganizationQuota{},
+		&models.PlatformSettings{},
 		&models.Drama{},
 		&models.Episode{},
 		&models.Character{},
@@ -134,7 +135,70 @@ func AutoMigrate(gdb *gorm.DB) error {
 	if err := gdb.Exec("DROP INDEX IF EXISTS idx_ai_voices_voice_id").Error; err != nil {
 		return err
 	}
-	return backfillPromptTemplateRevisions(gdb)
+	if err := backfillPromptTemplateRevisions(gdb); err != nil {
+		return err
+	}
+	if err := EnsurePlatformSettings(gdb); err != nil {
+		return err
+	}
+	return BackfillAuthRegistrationFields(gdb)
+}
+
+func EnsurePlatformSettings(gdb *gorm.DB) error {
+	var count int64
+	if err := gdb.Model(&models.PlatformSettings{}).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	row := models.PlatformSettings{
+		ID:                       1,
+		RegistrationEnabled:      true,
+		RequireEmailVerification: false,
+		UpdatedAt:                response.Now(),
+	}
+	return gdb.Create(&row).Error
+}
+
+func BackfillAuthRegistrationFields(gdb *gorm.DB) error {
+	// Mark active users without verification timestamps as verified using their creation time.
+	if err := gdb.Exec(`
+UPDATE users
+SET email_verified_at = CASE
+	WHEN created_at IS NOT NULL AND created_at <> '' THEN created_at
+	ELSE ?
+END
+WHERE status = 'active'
+  AND (email_verified_at IS NULL OR email_verified_at = '')
+`, response.Now()).Error; err != nil {
+		return err
+	}
+
+	var adminCount int64
+	if err := gdb.Model(&models.User{}).Where("is_platform_admin = ?", true).Count(&adminCount).Error; err != nil {
+		return err
+	}
+	if adminCount > 0 {
+		return nil
+	}
+
+	var userID uint
+	err := gdb.Raw(`
+SELECT m.user_id
+FROM memberships m
+INNER JOIN organizations o ON o.id = m.organization_id
+WHERE m.role = 'owner'
+ORDER BY o.id ASC, m.user_id ASC
+LIMIT 1
+`).Scan(&userID).Error
+	if err != nil {
+		return err
+	}
+	if userID == 0 {
+		return nil
+	}
+	return gdb.Model(&models.User{}).Where("id = ?", userID).Update("is_platform_admin", true).Error
 }
 
 // prepareSQLiteNotNullTextColumns adds missing text timestamps as nullable, then

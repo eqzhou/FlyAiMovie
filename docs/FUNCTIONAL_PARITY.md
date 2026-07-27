@@ -85,6 +85,7 @@
 | N-14 | 密码变更具备身份校验与会话撤销 | 已验收：校验当前密码、旋转自助会话、旧密码和旧 Session 失效；组织管理员不得修改成员的全局账号凭据 | `TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`TestOrganizationAdminCannotResetGlobalMemberPassword` |
 | N-16 | 忘记密码具备安全恢复流程 | 已验收核心及 SMTP 投递实现：请求响应不枚举账号；SMTP 支持 587 STARTTLS/465 隐式 TLS；token 只存哈希、30 分钟过期、一次性消费；成功后更新密码并撤销所有 Session；主动改密和组织删除会清理未消费 token。本地 SMTP 契约与邀请邮件投递已测；真实 SMTP 账号 smoke 通过 `TestLiveSmokeSMTPPasswordResetAndInvitation`（需 SMOKE_SMTP_*） | `TestPasswordResetRequestDoesNotEnumerateAccounts`、`TestPasswordResetConsumesTokenAndRevokesSessions`、`TestPasswordResetExpiredTokenRejected`、`TestSMTPPasswordResetSenderRequiresHTTPSAndCredentials` |
 | N-15 | 敏感组织操作具备 owner 权限与二次确认 | 已验收：组织导出仅 owner 可用；组织删除要求当前密码及组织 slug，在事务内撤销会话、删除租户数据并写入媒体补偿任务；失败任务可审计和重试 | 组织导出、删除与媒体补偿测试 |
+| N-17 | 公开自助注册与平台注册设置 | 已验收：setup 后开放 `POST /auth/register` 与注册 UI；注册创建 user/org/owner 且不认领 legacy 资源；默认开放注册、不强制邮箱校验；`require_email_verification` 第一期仅门禁（未验证不可登录、注册不发邮件）；仅 `is_platform_admin` 可读写平台设置；修改密码入口在设置 → 安全与数据 | `TestAuthRegisterCreatesOwnerWorkspaceAndSession`、`TestAuthRegisterRejectedWhenDisabledOrDuplicate`、`TestAuthRegisterRequiresCompletedSetup`、`TestAuthRegisterVerificationRequiredSkipsSession`、`TestPlatformSettingsOnlyPlatformAdmin`、`TestEmailVerificationGateOnRegisterAndLogin`、`TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`frontend/tests/e2e/auth-register.spec.ts`、`frontend/tests/e2e/account-settings-assets.spec.ts` |
 
 ## 独立表达红线
 
