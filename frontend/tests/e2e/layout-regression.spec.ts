@@ -211,9 +211,44 @@ test('desktop: theme toggle cycles light/dark/system and persists choice', async
   await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：跟随系统')
   await expect.poll(async () => page.evaluate(() => localStorage.getItem('theme'))).toBe('system')
 
+  const systemAppearance = await page.locator('html').getAttribute('data-theme')
   await themeButton.click()
+  // First click from system must change appearance (skip matching explicit theme).
+  const expected = systemAppearance === 'dark' ? 'light' : 'dark'
+  await expect(page.locator('html')).toHaveAttribute('data-theme', expected)
+  await expect(themeButton).toHaveAttribute('aria-label', expected === 'dark' ? '切换主题，当前：深色' : '切换主题，当前：浅色')
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('theme'))).toBe(expected)
+})
+
+test('desktop: theme toggle from system skips no-op light/dark step', async ({ page }) => {
+  await mockProjectHome(page, true)
+  await page.addInitScript(() => {
+    localStorage.setItem('theme', 'system')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query) => ({
+        matches: false, // light system preference
+        media: String(query),
+        onchange: null,
+        addEventListener() {},
+        removeEventListener() {},
+        addListener() {},
+        removeListener() {},
+        dispatchEvent() { return false },
+      }),
+    })
+  })
+  await page.goto('/')
+
+  const themeButton = page.getByRole('button', { name: /切换主题/ })
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：跟随系统')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：浅色')
+
+  await themeButton.click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(themeButton).toHaveAttribute('aria-label', '切换主题，当前：深色')
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('theme'))).toBe('dark')
 })
 
 test('desktop: workbench actions and stage navigation do not overflow at 1024px', async ({ page }) => {

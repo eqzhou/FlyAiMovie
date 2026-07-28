@@ -10,7 +10,7 @@ const route = useRoute()
 const navigationOpen = ref(false)
 
 type Theme = 'light' | 'dark' | 'system'
-const THEME_ORDER: Theme[] = ['system', 'light', 'dark']
+const THEME_ORDER: Theme[] = ['light', 'dark', 'system']
 const THEME_LABEL: Record<Theme, string> = {
   system: '跟随系统',
   light: '浅色',
@@ -61,8 +61,27 @@ onBeforeUnmount(() => {
 })
 
 function cycleTheme() {
-  const currentIndex = THEME_ORDER.indexOf(currentTheme.value)
-  applyTheme(THEME_ORDER[(currentIndex + 1) % THEME_ORDER.length])
+  // Preferred order: light → dark → system → light...
+  // Skip candidates that would keep the same resolved appearance, except
+  // "system" which is an intentional mode even when colors match.
+  const current = currentTheme.value
+  const currentResolved = resolveDataTheme(current)
+  let idx = THEME_ORDER.indexOf(current)
+  if (idx < 0) idx = 0
+
+  for (let step = 1; step <= THEME_ORDER.length; step += 1) {
+    const candidate = THEME_ORDER[(idx + step) % THEME_ORDER.length]
+    if (candidate === current) continue
+    const candidateResolved = resolveDataTheme(candidate)
+    const appearanceChanges = candidateResolved !== currentResolved
+    const selectingSystem = candidate === 'system'
+    if (appearanceChanges || selectingSystem) {
+      applyTheme(candidate)
+      return
+    }
+  }
+
+  applyTheme(THEME_ORDER[(idx + 1) % THEME_ORDER.length])
 }
 
 const themeButtonLabel = computed(() => `切换主题，当前：${THEME_LABEL[currentTheme.value]}`)
