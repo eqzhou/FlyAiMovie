@@ -410,7 +410,24 @@ func (s *Service) recordAgentRun(ctx context.Context, run *models.ProductionRun,
 		}
 		sequence++
 		eventErr = retryProductionWrite(func() error {
-			return s.DB.Create(&models.AgentRunEvent{OrganizationID: run.OrganizationID, AgentRunID: record.ID, Sequence: sequence, EventType: event.EventType, ToolName: event.ToolName, PayloadJSON: string(payload), CreatedAt: response.Now()}).Error
+			return s.DB.Transaction(func(tx *gorm.DB) error {
+				if event.EventType == "prompt_resolved" {
+					updates := map[string]any{
+						"skill_source": event.Payload["skill_source"], "skill_version": event.Payload["skill_version"],
+						"skill_content_sha256": event.Payload["skill_hash"], "skill_snapshot": event.Payload["skill_snapshot"], "updated_at": response.Now(),
+					}
+					if id, ok := event.Payload["skill_id"].(uint); ok && id > 0 {
+						updates["skill_id"] = id
+					}
+					if id, ok := event.Payload["skill_version_id"].(uint); ok && id > 0 {
+						updates["skill_version_id"] = id
+					}
+					if err := tx.Model(&record).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+				return tx.Create(&models.AgentRunEvent{OrganizationID: run.OrganizationID, AgentRunID: record.ID, Sequence: sequence, EventType: event.EventType, ToolName: event.ToolName, PayloadJSON: string(payload), CreatedAt: response.Now()}).Error
+			})
 		})
 	}
 	result, err := s.Agents.RunObserved(ctx, run.OrganizationID, agentType, run.DramaID, run.EpisodeID, instruction, observer)

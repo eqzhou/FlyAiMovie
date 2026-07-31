@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +28,32 @@ var (
 	errAgentRetryInvalidStatus  = errors.New("agent retry source is not retryable")
 	errAgentRetryEpisodeMissing = errors.New("agent retry episode not found")
 	errAgentRetryActive         = errors.New("agent retry is already active")
+	errAgentRetrySkillCorrupt   = errors.New("agent retry source skill snapshot is corrupt")
+	errAgentRunParentMissing    = errors.New("agent run parent not found")
+	errAgentRunOrganizationGone = errors.New("agent run organization not found")
 )
+
+type agentRunSummary struct {
+	ID                 uint    `json:"id"`
+	AgentType          string  `json:"agent_type"`
+	DramaID            uint    `json:"drama_id"`
+	EpisodeID          uint    `json:"episode_id"`
+	RetryOfID          *uint   `json:"retry_of_id,omitempty"`
+	SkillID            *uint   `json:"skill_id,omitempty"`
+	SkillVersionID     *uint   `json:"skill_version_id,omitempty"`
+	SkillVersion       int     `json:"skill_version"`
+	SkillSource        string  `json:"skill_source"`
+	SkillContentSHA256 string  `json:"skill_content_sha256"`
+	Status             string  `json:"status"`
+	Input              string  `json:"input"`
+	OutputJSON         string  `json:"output_json"`
+	LastError          string  `json:"last_error"`
+	CancelRequestedAt  *string `json:"cancel_requested_at,omitempty"`
+	StartedAt          string  `json:"started_at"`
+	CompletedAt        *string `json:"completed_at,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
+}
 
 func (s *Server) registerAgentRuns(api *gin.RouterGroup) {
 	api.GET("/agent-runs", s.listAgentRuns)
@@ -89,7 +116,21 @@ func (s *Server) executeAgentRun(run *models.AgentRun, runContext context.Contex
 		}
 	}()
 	observer, eventError := s.agentRunObserver(run)
-	result, runErr := s.Agents.RunObserved(runContext, run.OrganizationID, run.AgentType, run.DramaID, run.EpisodeID, run.Input, observer)
+	options := agents.RunOptions{}
+	if run.RetryOfID != nil && run.SkillSnapshot != "" {
+		override := agents.SkillSnapshotOverride{
+			SourceRunID: *run.RetryOfID, SkillSource: run.SkillSource, SkillVersion: run.SkillVersion,
+			SkillHash: run.SkillContentSHA256, SkillSnapshot: run.SkillSnapshot,
+		}
+		if run.SkillID != nil {
+			override.SkillID = *run.SkillID
+		}
+		if run.SkillVersionID != nil {
+			override.SkillVersionID = *run.SkillVersionID
+		}
+		options.SkillSnapshot = &override
+	}
+	result, runErr := s.Agents.RunObservedWithOptions(runContext, run.OrganizationID, run.AgentType, run.DramaID, run.EpisodeID, run.Input, observer, options)
 	if persistErr := eventError(); persistErr != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("persist agent event: %w", persistErr))
 	}
@@ -130,6 +171,39 @@ func appendAgentRunEvent(organizationID, runID uint, eventType, toolName string,
 	}
 	return retryAgentRunWrite(func() error {
 		return db.DB.Transaction(func(tx *gorm.DB) error {
+			if organizationID > 0 {
+				var organization models.Organization
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", organizationID).First(&organization).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+					return errAgentRunOrganizationGone
+				} else if err != nil {
+					return err
+				}
+			}
+			var parent models.AgentRun
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("organization_id = ? AND id = ?", organizationID, runID).First(&parent).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+				return errAgentRunParentMissing
+			} else if err != nil {
+				return err
+			}
+			if eventType == "prompt_resolved" {
+				updates := map[string]any{
+					"skill_source": payload["skill_source"], "skill_version": payload["skill_version"],
+					"skill_content_sha256": payload["skill_hash"], "skill_snapshot": payload["skill_snapshot"], "updated_at": response.Now(),
+				}
+				if id, ok := payload["skill_id"].(uint); ok && id > 0 {
+					updates["skill_id"] = id
+				}
+				if id, ok := payload["skill_version_id"].(uint); ok && id > 0 {
+					updates["skill_version_id"] = id
+				}
+				result := tx.Model(&models.AgentRun{}).Where("organization_id = ? AND id = ?", organizationID, runID).Updates(updates)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return errAgentRunParentMissing
+				}
+			}
 			var sequence int
 			if err := tx.Model(&models.AgentRunEvent{}).Where("organization_id = ? AND agent_run_id = ?", organizationID, runID).Select("COALESCE(MAX(sequence), 0)").Scan(&sequence).Error; err != nil {
 				return err
@@ -223,7 +297,7 @@ func (s *Server) finishAgentRun(run *models.AgentRun, result *agents.ChatResult,
 }
 
 func (s *Server) listAgentRuns(c *gin.Context) {
-	query := organizationDB(c).Order("id desc").Limit(100)
+	query := organizationDB(c).Model(&models.AgentRun{}).Order("id desc").Limit(100)
 	if value := strings.TrimSpace(c.Query("status")); value != "" {
 		if !isAgentRunStatus(value) {
 			response.BadRequest(c, "invalid status")
@@ -250,7 +324,7 @@ func (s *Server) listAgentRuns(c *gin.Context) {
 		}
 		query = query.Where("episode_id = ?", uint(id))
 	}
-	var rows []models.AgentRun
+	var rows []agentRunSummary
 	if err := query.Find(&rows).Error; err != nil {
 		response.ServerError(c, "failed to list agent runs")
 		return
@@ -292,7 +366,32 @@ func (s *Server) getAgentRun(c *gin.Context) {
 		response.ServerError(c, "failed to load agent run events")
 		return
 	}
-	response.Success(c, gin.H{"run": run, "events": events})
+	safeRun := run
+	safeRun.SkillSnapshot = ""
+	response.Success(c, gin.H{"run": safeRun, "events": redactAgentRunSkillSnapshots(events)})
+}
+
+func redactAgentRunSkillSnapshots(events []models.AgentRunEvent) []models.AgentRunEvent {
+	redacted := make([]models.AgentRunEvent, len(events))
+	copy(redacted, events)
+	for index := range redacted {
+		if redacted[index].EventType != "prompt_resolved" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(redacted[index].PayloadJSON), &payload); err != nil {
+			redacted[index].PayloadJSON = `{"redacted":true}`
+			continue
+		}
+		delete(payload, "skill_snapshot")
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			redacted[index].PayloadJSON = `{"redacted":true}`
+			continue
+		}
+		redacted[index].PayloadJSON = string(encoded)
+	}
+	return redacted
 }
 
 func (s *Server) cancelAgentRun(c *gin.Context) {
@@ -365,7 +464,10 @@ func (s *Server) retryAgentRun(c *gin.Context) {
 			}
 			var createErr error
 			run, createErr = createAgentRunRecord(tx, source.OrganizationID, source.AgentType, source.DramaID, source.EpisodeID, source.Input, &source.ID)
-			return createErr
+			if createErr != nil {
+				return createErr
+			}
+			return copyRetrySkillSnapshot(tx, source, run)
 		})
 	})
 	if err != nil {
@@ -378,6 +480,8 @@ func (s *Server) retryAgentRun(c *gin.Context) {
 			response.NotFound(c, "source episode not found")
 		case errors.Is(err, errAgentRetryActive):
 			response.Conflict(c, "agent run already has an active retry")
+		case errors.Is(err, errAgentRetrySkillCorrupt):
+			response.Conflict(c, "source agent run skill snapshot failed integrity validation")
 		default:
 			response.ServerError(c, "failed to create agent retry")
 		}
@@ -389,5 +493,37 @@ func (s *Server) retryAgentRun(c *gin.Context) {
 		cleanup()
 		timeoutCancel()
 	})
-	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "data": run, "message": "agent retry started"})
+	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "data": agentRunSummaryFromModel(*run), "message": "agent retry started"})
+}
+
+func copyRetrySkillSnapshot(tx *gorm.DB, source models.AgentRun, target *models.AgentRun) error {
+	if source.SkillSnapshot == "" {
+		return nil
+	}
+	digest := sha256.Sum256([]byte(source.SkillSnapshot))
+	computedHash := hex.EncodeToString(digest[:])
+	if source.SkillContentSHA256 != "" && !strings.EqualFold(source.SkillContentSHA256, computedHash) {
+		return errAgentRetrySkillCorrupt
+	}
+	target.SkillID = source.SkillID
+	target.SkillVersionID = source.SkillVersionID
+	target.SkillVersion = source.SkillVersion
+	target.SkillSource = source.SkillSource
+	target.SkillContentSHA256 = computedHash
+	target.SkillSnapshot = source.SkillSnapshot
+	return tx.Model(&models.AgentRun{}).Where("organization_id = ? AND id = ?", target.OrganizationID, target.ID).Updates(map[string]any{
+		"skill_id": target.SkillID, "skill_version_id": target.SkillVersionID, "skill_version": target.SkillVersion,
+		"skill_source": target.SkillSource, "skill_content_sha256": target.SkillContentSHA256,
+		"skill_snapshot": target.SkillSnapshot, "updated_at": response.Now(),
+	}).Error
+}
+
+func agentRunSummaryFromModel(run models.AgentRun) agentRunSummary {
+	return agentRunSummary{
+		ID: run.ID, AgentType: run.AgentType, DramaID: run.DramaID, EpisodeID: run.EpisodeID, RetryOfID: run.RetryOfID,
+		SkillID: run.SkillID, SkillVersionID: run.SkillVersionID, SkillVersion: run.SkillVersion,
+		SkillSource: run.SkillSource, SkillContentSHA256: run.SkillContentSHA256,
+		Status: run.Status, Input: run.Input, OutputJSON: run.OutputJSON, LastError: run.LastError, CancelRequestedAt: run.CancelRequestedAt,
+		StartedAt: run.StartedAt, CompletedAt: run.CompletedAt, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
 }

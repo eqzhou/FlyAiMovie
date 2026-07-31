@@ -6,6 +6,8 @@ import { cacheAPI, memberAPI, organizationDataAPI, platformSettingsAPI, quotaAPI
 import { authStore } from '../auth'
 import { passwordValidationMessage } from '../utils/password'
 import { confirmAction } from '../composables/useConfirm'
+import ServiceBundleDialog from '../components/ServiceBundleDialog.vue'
+import SkillRegistryEditor from '../components/SkillRegistryEditor.vue'
 
 const configs = ref<any[]>([])
 const router = useRouter()
@@ -34,7 +36,7 @@ const savingService = ref(false)
 const testingDraftService = ref(false)
 const serviceTestResult = ref('')
 const agentForm = ref<any | null>(null)
-const activeSection = ref<'services' | 'agents' | 'prompts' | 'voices' | 'organization' | 'security'>('services')
+const activeSection = ref<'services' | 'bundles' | 'agents' | 'skills' | 'prompts' | 'voices' | 'organization' | 'security'>('services')
 const showServiceModal = ref(false)
 const editingConfigID = ref<number | null>(null)
 const originalServiceIdentity = ref({ service_type: '', provider: '', base_url: '', api_key_set: false })
@@ -127,6 +129,7 @@ const quota = ref({ daily_job_limit: 200, max_active_jobs: 10, daily_jobs_used: 
 const cache = ref({ objects: 0, references: 0, bytes: 0, orphaned: 0 })
 const canManageQuota = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
 const canManageSettings = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
+const canManageSkills = computed(() => !authStore.state.enabled || ['owner', 'admin'].includes(authStore.state.actor?.role || ''))
 const canPreviewVoices = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const members = ref<any[]>([])
 const memberForm = ref({ email: '', display_name: '', password: '', role: 'editor' })
@@ -1007,7 +1010,9 @@ onUnmounted(() => {
 
     <div class="settings-tabs" role="tablist" aria-label="设置分类">
       <button role="tab" :aria-selected="activeSection === 'services'" :class="{ active: activeSection === 'services' }" @click="activeSection = 'services'">AI 服务</button>
+      <button role="tab" :aria-selected="activeSection === 'bundles'" :class="{ active: activeSection === 'bundles' }" @click="activeSection = 'bundles'">服务组合</button>
       <button role="tab" :aria-selected="activeSection === 'agents'" :class="{ active: activeSection === 'agents' }" @click="activeSection = 'agents'">Agent</button>
+      <button role="tab" :aria-selected="activeSection === 'skills'" :class="{ active: activeSection === 'skills' }" @click="activeSection = 'skills'">Skills</button>
       <button role="tab" :aria-selected="activeSection === 'prompts'" :class="{ active: activeSection === 'prompts' }" @click="activeSection = 'prompts'">提示词</button>
       <button role="tab" :aria-selected="activeSection === 'voices'" :class="{ active: activeSection === 'voices' }" @click="activeSection = 'voices'">音色库</button>
       <button role="tab" :aria-selected="activeSection === 'organization'" :class="{ active: activeSection === 'organization' }" @click="activeSection = 'organization'">组织与权限</button>
@@ -1044,6 +1049,14 @@ onUnmounted(() => {
         <div v-if="!configs.length" class="surface-empty empty" role="status"><strong>尚未配置 AI 服务</strong><span class="muted">添加文本、图片、视频或音频服务后即可在工作台调用。</span></div>
       </div>
     </section>
+
+    <div v-if="(loaded || !loading) && activeSection === 'bundles'" role="tabpanel" aria-label="服务组合">
+      <ServiceBundleDialog :can-manage="canManageSettings" @applied="load" />
+    </div>
+
+    <div v-if="(loaded || !loading) && activeSection === 'skills'" role="tabpanel" aria-label="Skills">
+      <SkillRegistryEditor :can-manage="canManageSkills" :auth-enabled="authStore.state.enabled" />
+    </div>
 
     <section v-if="(loaded || !loading) && activeSection === 'voices'" class="settings-section" role="tabpanel">
       <div class="settings-section-head">
@@ -1165,7 +1178,22 @@ onUnmounted(() => {
 
     <div v-if="showServiceModal" class="modal-mask" @click.self="showServiceModal = false"><form class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" @keydown.esc="showServiceModal = false" @submit.prevent="saveService"><h3 id="service-modal-title">{{ editingConfigID ? '编辑 AI 服务' : '添加 AI 服务' }}</h3><div class="field"><label for="service-type">类型</label><select id="service-type" v-model="form.service_type" autofocus><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频/TTS</option></select></div><div class="field"><label for="service-provider">厂商</label><select id="service-provider" v-model="form.provider"><option v-for="provider in availableProviders" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></div><div class="field"><label for="service-name">名称</label><input id="service-name" v-model="form.name" placeholder="我的 GPT" /></div><div class="field"><label for="service-url">Base URL</label><input id="service-url" v-model="form.base_url" /></div><div class="field"><label for="service-key">API Key</label><input id="service-key" v-model="form.api_key" type="password" :placeholder="editingConfigID ? '留空保持原密钥' : ''" /></div><div class="field"><label for="service-model">模型</label><input id="service-model" v-model="form.model" placeholder="gpt-4o-mini" /></div><div class="service-toggle-grid"><label class="settings-check"><input v-model="form.is_active" type="checkbox" /> 启用服务</label><label class="settings-check" :class="{ disabled: !form.is_active }"><input v-model="form.is_default" type="checkbox" :disabled="!form.is_active" /> 设为默认</label></div><div class="service-test-row"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="testDraftService"><FlaskConical :size="14" aria-hidden="true" />{{ testingDraftService ? '测试中…' : '测试当前配置' }}</button><span v-if="serviceTestResult" class="service-test-ok" role="status">{{ serviceTestResult }}</span></div><p v-if="serviceError" class="form-error" role="alert">{{ serviceError }}</p><div class="modal-actions"><button type="button" class="btn" :disabled="savingService || testingDraftService" @click="showServiceModal = false">取消</button><button type="submit" class="btn btn-primary" :disabled="savingService || testingDraftService">{{ savingService ? '保存中…' : editingConfigID ? '保存修改' : '保存配置' }}</button></div></form></div>
 
-    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent"><h3 id="agent-modal-title">编辑 Agent</h3><div class="field-grid"><div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" /></div><div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" /></div><div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div><div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div><div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="5" /><p class="field-help muted">复杂提取/分镜建议 3–5；越高耗时与费用越高。</p></div><label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label></div><div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div></form></div>
+    <div v-if="agentForm" class="modal-mask" @click.self="agentForm = null">
+      <form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" @submit.prevent="saveAgent">
+        <h3 id="agent-modal-title">编辑 Agent</h3>
+        <div class="field-grid">
+          <div class="field"><label for="agent-name">名称</label><input id="agent-name" v-model="agentForm.name" maxlength="200" /></div>
+          <div class="field"><label for="agent-model">模型</label><input id="agent-model" v-model="agentForm.model" placeholder="继承文本默认" maxlength="2000" /></div>
+          <div class="field settings-span"><label for="agent-description">说明</label><input id="agent-description" v-model="agentForm.description" maxlength="2000" /></div>
+          <div class="field settings-span"><label for="agent-system-prompt">系统提示词</label><textarea id="agent-system-prompt" v-model="agentForm.system_prompt" rows="8" maxlength="20000" placeholder="留空时使用 Agent 内置提示词" /></div>
+          <div class="field"><label for="agent-temperature">温度</label><input id="agent-temperature" v-model.number="agentForm.temperature" type="number" min="0" max="2" step="0.1" /></div>
+          <div class="field"><label for="agent-tokens">最大输出 token</label><input id="agent-tokens" v-model.number="agentForm.max_tokens" type="number" min="1" max="128000" /></div>
+          <div class="field"><label for="agent-iterations">最大模型迭代</label><input id="agent-iterations" v-model.number="agentForm.max_iterations" type="number" min="1" max="5" /><p class="field-help muted">复杂提取/分镜建议 3–5；越高耗时与费用越高。</p></div>
+          <label class="settings-check"><input v-model="agentForm.is_active" type="checkbox" /> 启用</label>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn" @click="agentForm = null">取消</button><button type="submit" class="btn btn-primary">保存 Agent</button></div>
+      </form>
+    </div>
 
     <div v-if="promptForm" class="modal-mask" @click.self="promptForm = null"><form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'" @keydown.esc="promptForm = null" @submit.prevent="savePrompt"><h3 :id="promptForm.id ? 'edit-prompt-title' : 'create-prompt-title'">{{ promptForm.id ? '编辑提示词' : '新建提示词' }}</h3><div class="field-grid"><div class="field"><label for="prompt-name">名称 *</label><input id="prompt-name" v-model="promptForm.name" autofocus maxlength="200" /></div><div class="field"><label for="prompt-key">标识 *</label><input id="prompt-key" v-model="promptForm.key" :disabled="!!promptForm.id" pattern="[a-z][a-z0-9_]{1,63}" /></div><div class="field"><label for="prompt-category">分类 *</label><select id="prompt-category" v-model="promptForm.category"><option v-for="(label, value) in promptCategoryLabels" :key="value" :value="value">{{ label }}</option></select></div><label class="settings-check"><input v-model="promptForm.is_active" type="checkbox" /> 启用</label><div class="field settings-span"><label for="prompt-description">说明</label><input id="prompt-description" v-model="promptForm.description" maxlength="2000" /></div><div class="field settings-span"><label for="prompt-content">模板内容 *</label><textarea id="prompt-content" ref="promptContentInput" v-model="promptForm.content" rows="10" maxlength="20000" /></div><div class="prompt-token-picker settings-span"><span>插入变量</span><div><button v-for="(label, variable) in promptVariableLabels" :key="variable" type="button" :aria-label="`插入变量 ${label}`" :title="promptToken(variable)" @click="insertPromptVariable(variable)"><strong>{{ label }}</strong><code>{{ promptToken(variable) }}</code></button></div></div></div><p v-if="promptFormError" class="form-error" role="alert">{{ promptFormError }}</p><div v-if="promptDraftPreview" class="prompt-draft-preview" role="status"><strong>草稿预览</strong><div class="prompt-preview-result">{{ promptDraftPreview }}</div></div><div class="modal-actions"><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft" @click="promptForm = null">取消</button><button type="button" class="btn" :disabled="savingPrompt || previewingPromptDraft || !promptForm.content.trim()" @click="previewPromptForm">{{ previewingPromptDraft ? '检查中…' : '检查并预览' }}</button><button type="submit" class="btn btn-primary" :disabled="savingPrompt || previewingPromptDraft">{{ savingPrompt ? '保存中…' : promptForm.id ? '保存修改' : '创建模板' }}</button></div></form></div>
 

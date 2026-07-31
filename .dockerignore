@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+artifacts
+data
+frontend/node_modules
+frontend/dist
+backend/coverage.out
+*.log
+flyaimovie

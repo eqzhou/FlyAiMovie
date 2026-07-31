@@ -4,8 +4,8 @@
 
 ## 规格来源
 
-- 正式发布基线：[huobao-drama v1.0.4](https://github.com/chatfire-AI/huobao-drama/releases/tag/v1.0.4)。截至 2026-07-19，它仍是最新 GitHub Release。
-- 开发版体验基线：[huobao-drama README（固定提交）](https://github.com/chatfire-AI/huobao-drama/blob/ad1cd7cd0127389ce8304aa9ebda3cfc8f406a6d/README.md)。该 README 的更新日志另行声明 `v2.0.0 (2026-04)`，包含紧凑单集工作台、重做分镜编辑以及配音、镜头图、视频、合成、导出连续流程；它不等同于已经发布的 GitHub Release。
+- 正式发布基线：[huobao-drama v1.0.4](https://github.com/chatfire-AI/huobao-drama/releases/tag/v1.0.4)。截至 2026-08-01，它仍是最新 GitHub Release。
+- 开发版体验基线：[huobao-drama README（固定提交）](https://github.com/chatfire-AI/huobao-drama/blob/eb117853385be136035a519fdffe8ae68c73081b/README.md)。该 README 的更新日志另行声明 `v2.0.0 (2026-04)`，包含紧凑单集工作台、重做分镜编辑以及配音、镜头图、视频、合成、导出连续流程；它不等同于已经发布的 GitHub Release。
 - 许可参考：[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 - 不使用上游源码、提示词、CSS、测试、数据库脚本、截图或演示素材作为实现输入。
 - 厂商适配只依据各厂商官方 API 文档和自行构造的请求/响应样例。
@@ -30,6 +30,10 @@
 
 2026-07-26 字段级入口收口：本轮审计从「后端字段可写、前端不可见」的角度复查资源模型，补齐四处真实缺口。分镜此前只能通过三个单字段小窗改图片提示词、视频提示词和对白，`location`、`time`、`angle`、`movement`、`action`、`result`、`atmosphere`、`bgm_prompt`、`sound_effect` 九个字段用户既看不到也改不了；现在工作台提供完整镜头编辑弹窗并在检查器同步展示。道具的 `type` 分类字段同样未暴露，现已可编辑并在列表显示。角色与道具的 `reference_images` 之前即使写入数据库也不会进入生成请求，参考图形同虚设；现在创建、更新与单张/批量形象生成全链路透传，并保持原有组织归属校验。镜头出场角色（`character_ids`）此前只能由 Agent 拆解时写入，UI 无法调整；现已接入编辑弹窗，绑定关系仍只存于后端 `storyboard_characters` 表，前端不保留关系副本。
 
+2026-07-28 对照上游公开 `master@ad1cd7cd` 的最新功能后，补齐两项此前只有局部能力的设置工作流：AI 服务设置新增严格覆盖 text/image/video/audio 四类的无凭据组合模板，可一次预览冲突、并发测试并事务应用；五类 Agent 的磁盘 Skill 升级为组织级数据库 Registry，支持不可变版本、发布、回滚、归档和运行快照。镜像供应链同时增加本地 amd64/arm64 OCI archive、镜像 SBOM 与离线签名配置；全部路径均由 no-publish 门禁约束，不登录或推送仓库。
+
+2026-08-01 再次核对公开 `master@eb117853`：相对上一基线只有 README 删除，没有新增代码功能，正式 Release 仍为 `v1.0.4`。代码级复查补齐了三个此前遗漏的语义差异：服务组合默认把文本模型同步到五类 Agent，并将 Agent 当前状态纳入预览 token、与四类服务同事务提交；关闭登录时 Skill Registry 使用严格的本地 `(organization=0,user=0)` 作用域并允许完整版本管理，Runner 同样优先解析已发布的本地版本；AgentRun 重试复用来源运行的完整 Skill 快照并校验 SHA-256，不受后续发布影响。另补齐 Agent 说明/系统提示词编辑和归档 Skill 恢复入口。
+
 关于状态归属：镜头与角色、场景的关联均以后端表为唯一事实来源，前端表单只在弹窗打开时读取服务端返回值、保存时整组提交，不做本地缓存或增量合并。场景与角色选择器只加载本集数据，而后端按项目校验，因此对跨集绑定补了只读占位项，避免保存时静默丢失既有关系。
 
 仍存在的差异属于有意的 clean-room 技术实现差异或外部验收门槛：后端使用 Go + PostgreSQL/SQLite，不采用上游 TypeScript/Mastra/Drizzle；真实厂商、真实 SMTP、公开 HTTPS 和许可证归档仍需对应账号或发布环境，不能由 Mock/契约测试替代。
@@ -49,8 +53,8 @@
 | P-11 | 镜头合成 | 视频、音频、字幕合成为镜头成片 | 已验收：持久任务执行 FFmpeg，支持字幕、取消、租约和恢复 | Mock FFmpeg compose E2E；`TestComposeShotAndMergeEpisode`、`TestComposeAndMergeValidationAndCancellation` |
 | P-12 | 整集导出 | 按分镜顺序拼接并写回单集视频 | 已验收 Mock 主路径：按分镜顺序合并、任务恢复和缺失镜头返回 409 | `TestMockPipelineEndToEnd`、`TestComposeShotAndMergeEpisode` |
 | P-13 | 生成历史与进度 | 查询图片、视频、宫格和合成状态 | 已验收：图片、视频、TTS、镜头合成与整集导出统一进入任务系统 | jobs 并发、恢复、重试、claim；`TestAsyncImagePollingCompletesPersistentJob`、`TestAsyncVideoPollingCompletesPersistentJob` |
-| P-14 | AI 服务设置 | 配置文本/图片/视频/音频供应商，密钥不回显；支持编辑模型、保存前测试当前配置、已保存配置连接测试、启停和组织内原子切换默认服务 | 已验收：草稿测试不落库、不返回密钥；仅在厂商、类型和 Base URL 均未改变时复用已保存密钥；远程厂商强制 HTTPS | `TestAIConfigResponsesNeverExposeAPIKey`、`TestAIConfigDraftConnectionTest*`、`TestAIConfigConnectionTestRejectsLegacyInsecureBaseURL`、`TestAIConfigDefaultIsExclusiveAndMustBeActive`、`frontend/tests/e2e/account-settings-assets.spec.ts` |
-| P-15 | Agent 配置与 Skills | 运行时读取独立编写的技能说明并覆盖 Agent 配置 | 已验收：模型、温度、最大 token 与模型迭代限制生效；五类 Agent 离线流程写回数据库 | `TestChatWithMaxTokensForwardsLimit`、`TestOfflineFallbackAgentsPersistWorkflow` |
+| P-14 | AI 服务设置 | 配置文本/图片/视频/音频供应商，密钥不回显；支持编辑模型、保存前测试当前配置、已保存配置连接测试、启停和组织内原子切换默认服务 | 已验收：除单配置流程外，新增严格四类无凭据服务组合模板；管理员可预览 create/reuse 与默认切换、并发测试四项并用 preview token 原子应用。默认同时预览并同步五类 Agent 的文本模型，Agent 状态也参与陈旧检测；服务和 Agent 任一失败都会整体回滚，也可显式关闭 Agent 同步。草稿测试不落 AI 配置、不返回密钥；仅在厂商、类型和 Base URL 均未改变时复用已保存密钥；远程厂商强制 HTTPS | `TestServiceBundle*`、`TestAIConfigResponsesNeverExposeAPIKey`、`TestAIConfigDraftConnectionTest*`、`TestAIConfigDefaultIsExclusiveAndMustBeActive`、`frontend/tests/e2e/service-bundles-skills.spec.ts` |
+| P-15 | Agent 配置与 Skills | 运行时读取独立编写的技能说明并覆盖 Agent 配置 | 已验收：五类 Agent 使用组织级数据库 Skill Registry；版本追加后不可变，支持发布、回滚、归档和归档恢复，数据库未配置时才回退镜像内置 Skill；认证关闭时以严格本地作用域提供同等版本管理，认证开启时保持管理员权限和组织隔离；运行记录冻结实际 Skill ID、版本、来源、最终内容 SHA-256 与完整快照。Agent 名称、说明、模型、系统提示词、温度、最大 token 与模型迭代限制均可编辑并继续生效 | `skill_registry_test.go`、`runner_skill_registry_test.go`、`TestPromptResolvedEventPersistsExactSkillSnapshot`、`TestUpsertAgentConfigPersistsEditablePromptFields`、`frontend/tests/e2e/service-bundles-skills.spec.ts` |
 | P-16 | 本地离线演示 | 无外部密钥时通过 mock 走完整流程 | 已验收 | `TestMockPipelineEndToEnd` |
 | P-17 | 统一素材库 | 按项目、集、镜头和类型浏览、复用与删除素材 | 已验收：专用项目素材页支持筛选、图片/视频/音频预览、收藏、编辑、删除及分镜帧复用 | `TestAssetLibraryWorkflow`；桌面与 390px 浏览器验收 |
 | P-18 | 上传并绑定资产 | 从工作台上传角色、场景、道具与参考图并持久绑定 | 已验收：素材页可绑定项目、剧集、角色、场景、道具或分镜，拒绝多目标和跨项目关联 | `TestImageUploadBindsPropAndRegistersAsset`、`TestImageUploadRejectsMultipleBindingTargets` |
@@ -61,7 +65,7 @@
 | P-23 | 跨项目角色模板 | 模板独立增删改并复制到项目，项目修改不影响模板 | 已验收 API 主路径与组织隔离；角色库支持列表搜索、弹窗新建/编辑、导入和删除 | `TestCharacterTemplateImportCreatesIndependentCharacter`、`frontend/tests/e2e/account-settings-assets.spec.ts` |
 | P-24 | 场景复制与迁移 | 复制到目标集；迁移时事务更新场景、剧集关联与可选关联分镜 | 已验收后端事务和前端操作；跨项目必须显式确认 | `TestSceneMoveAcrossDramaRequiresExplicitOptions`、`frontend/tests/e2e/workbench.spec.ts` |
 | P-25 | 媒体元数据与迁移 | 上传视频/音频后读取真实时长；历史外链可 dry-run 和断点迁移 | 已验收：FFprobe 失败保存错误而非错误的 0；迁移仅在验证成功后替换 URL | `mediainfo/probe_test.go`、`mediamigrate/service_test.go` |
-| P-26 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；手动、重试和自动制作 Agent 均按 `started → tool_call → tool_result → terminal` 持久化有序事件，运行中详情自动刷新；任务中心支持筛选、中文状态、输入/结构化输出、审计详情、取消和失败/取消重试，只读成员仅可查看；重试创建带来源关系的独立异步运行并重新校验剧集归属，结构化失败不会误记成功；服务重启遗留运行标记为中断失败 | jobs service/API tests、`agent_runs_retry_test.go`、production service tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
+| P-26 | 任务日志与 Agent 历史 | 持久化阶段、失败、重试、工具调用和运行结果 | 已验收任务事件、批量取消、Agent 运行历史；手动、重试和自动制作 Agent 均按 `started → tool_call → tool_result → terminal` 持久化有序事件，运行中详情自动刷新；任务中心支持筛选、中文状态、输入/结构化输出、审计详情、取消和失败/取消重试，只读成员仅可查看；重试创建带来源关系的独立异步运行并重新校验剧集归属，来源有 Skill 快照时校验哈希并精确复用，旧记录没有快照时保持实时解析；结构化失败不会误记成功，服务重启遗留运行标记为中断失败 | jobs service/API tests、`agent_runs_retry_test.go`、production service tests、`TestMockAgentAndGridWorkflow`、`frontend/tests/e2e/jobs.spec.ts` |
 | P-27 | 统一缓存生命周期 | AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按组织隔离缓存，可去重、计数、过期和手动清理 | 已验收：图片/视频/音频上传及所有生成链路均接入；物理对象按组织/类型/内容哈希去重，逻辑引用独立计数；过期对象进入可重试删除补偿队列，设置页展示容量并提供管理员清理入口；组织导出/删除包含缓存记录 | `mediacache/service_test.go`、`TestPostgresCacheLifecycle`、`TestMediaCacheStatsAndPurgeWorkflow`、图片/媒体重复上传测试、`TestChatCachesIdenticalRequestsWithinOrganization`、live browser E2E |
 | P-28 | 单集自动制作 | 一次启动后按剧本、提取、分镜、首帧、视频、配音、合成和导出持续推进，可取消、恢复和重试 | 已验收 Mock 主路径：`ProductionRun` 持久化阶段、续租心跳和父子任务关系；媒体 Job 创建时立即绑定父流程，生成记录/素材写回与 Job 终态在同一条件事务内提交，取消与晚到结果不会同时成功；长阶段不会被其他 Worker 重复领取，服务重启后可继续领取；首帧、视频和 TTS 严格使用任务创建时绑定的配置；活跃子任务不会重复创建；取消会传递到正在运行的 Agent/媒体 Worker、同步媒体状态且不会触发离线回退写入；Worker 停止会释放正在执行的流程租约；旧失败流程不得与新流程并行重试；组织导出/删除包含流程记录 | `internal/services/production/service_test.go`、`generation/async_test.go`、`jobs/service_test.go`、`productions_test.go`、`frontend/tests/e2e/workbench.spec.ts` |
 
@@ -76,8 +80,8 @@
 | N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
 | N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；公共 AI 配置拒绝回环、私网、链路本地、运营商级 NAT、基准测试、文档保留地址和云元数据主机，远程厂商必须使用 HTTPS；仅开发环境可为 `openai_local` 精确放行本地文本主机和 HTTP，生产模式拒绝该白名单；已保存的历史配置在测试连接和实际任务加载时都会重新校验；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport、禁用重定向和代理绕过。私有 HTTPS 端点必须同时提供可解析的 `AI_PROVIDER_CA_FILE` 与精确 `AI_PROVIDER_PRIVATE_HOSTS` 白名单，不关闭 TLS 校验，域名解析到私网 IP 时也按该契约放行；带 Bearer 的媒体下载拒绝跨 authority 重定向；厂商响应设有大小上限，图像、视频、TTS 和文本厂商错误均不持久化原始响应体或查询串密钥；本地宫格源图和切片来源需通过组织归属校验，不能用任意 `/static` 路径自声明归属 | `netguard`、`mediafetch`、`storage` 单元测试；`TestProviderHTTPClientRejectsReservedLiteralAddress`、`TestPrivateProviderHostnameRequiresExactAllowlistAndCustomCA`、`TestDownloadAuthorizedRejectsCrossAuthorityRedirect`、`TestGeminiImageNetworkErrorDoesNotExposeAPIKey`、`TestChatProviderErrorDoesNotExposeResponseBodyOrAPIKey`、`TestOpenAICompatImage*`、`TestPrivateProviderRequiresValidCAAndExactHostAllowlist`、`TestTaskConfigRejectsLegacyInsecureRemoteURL`、宫格归属测试 |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
-| N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-07-19 全包精确实测 80.1248%（工具显示 80.1%），HTTP API 80.4%；`go test ./... -race -count=1`、`go vet ./...` 通过 | `go test ./... -race -coverprofile=coverage.out -count=1` |
-| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：43 条 Mock E2E 覆盖登录、邀请、设置、模型草稿测试、提示词草稿检查/过滤/竞态保护、角色库、素材、URL 阶段恢复、紧凑分镜编辑、宫格切片重分配、旧历史恢复、首尾生成前校验、自动制作确认、局部失败重试、AI 配置加载失败提示、viewer 项目/工作台/任务中心只读；桌面与 390px 移动端菜单均做真实命中检查；PostgreSQL Live 浏览器验证工作台与模型编辑弹窗，WebKit 已纳入 Playwright 项目与 CI（desktop grep 同跑）；真实设备 Safari 手测仍建议发布前完成 | `frontend/tests/e2e/*.spec.ts`、`frontend/tests/live/local-system.spec.ts` |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-08-01 全包实测 80.5%；全量 race、定向最终 race 与 `go vet ./...` 通过 | `go test ./... -race -coverprofile=coverage.out -count=1` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：58 条桌面/移动 Mock E2E 覆盖登录、邀请、设置、服务组合同步 Agent、本地/组织 Skill 版本与恢复、Agent 字段编辑、模型草稿测试、提示词草稿检查/过滤/竞态保护、角色库、素材、URL 阶段恢复、紧凑分镜编辑、宫格切片重分配、旧历史恢复、首尾生成前校验、自动制作确认、局部失败重试、AI 配置加载失败提示、viewer 项目/工作台/任务中心只读；桌面与 390px 移动端菜单均做真实命中检查；PostgreSQL Live 浏览器验证工作台与模型编辑弹窗，WebKit 已纳入 Playwright 项目与 CI；真实设备 Safari 手测仍建议发布前完成 | `frontend/tests/e2e/*.spec.ts`、`frontend/tests/live/local-system.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
 | N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务、活跃任务和每日金额预算；按厂商/任务类型预留估算成本，成功任务记录实际成本，幂等请求不重复计额，超限返回 429，并暴露预算使用量和预警状态 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestCostEstimationAndBudgetReservation`、`TestOrganizationQuotaIsScopedAndAdminManaged` |

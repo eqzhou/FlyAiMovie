@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -169,6 +168,7 @@ func (s *Server) createAIConfig(c *gin.Context) {
 		IsActive      *bool  `json:"is_active"`
 		Settings      string `json:"settings"`
 	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid body")
 		return
@@ -203,6 +203,8 @@ func (s *Server) createAIConfig(c *gin.Context) {
 		IsDefault: body.IsDefault, IsActive: active, Settings: body.Settings,
 		CreatedAt: ts, UpdatedAt: ts,
 	}
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
 	if err := db.DB.Transaction(func(tx *gorm.DB) error {
 		organizationID := currentOrganizationID(c)
 		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
@@ -228,6 +230,7 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 		return
 	}
 	var body map[string]any
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid JSON body")
 		return
@@ -350,6 +353,8 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 	}
 	organizationID := currentOrganizationID(c)
 	var affected int64
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
 			return err
@@ -381,6 +386,9 @@ func (s *Server) updateAIConfig(c *gin.Context) {
 
 func lockAIConfigOrganization(tx *gorm.DB, organizationID uint) error {
 	if organizationID == 0 {
+		if tx.Dialector.Name() == "postgres" {
+			return tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(-7046029254386353131)).Error
+		}
 		return nil
 	}
 	var organization models.Organization
@@ -461,9 +469,24 @@ func aiConfigResponse(row models.AIServiceConfig) gin.H {
 }
 
 func (s *Server) deleteAIConfig(c *gin.Context) {
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
 	id, _ := strconv.Atoi(c.Param("id"))
-	result := organizationDB(c).Delete(&models.AIServiceConfig{}, id)
-	if result.RowsAffected == 0 {
+	organizationID := currentOrganizationID(c)
+	var affected int64
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		result := tx.Where("organization_id = ? AND id = ?", organizationID, id).Delete(&models.AIServiceConfig{})
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		response.ServerError(c, "failed to delete AI config")
+		return
+	}
+	if affected == 0 {
 		response.NotFound(c, "AI config not found")
 		return
 	}
@@ -517,8 +540,20 @@ func (s *Server) upsertAgentConfig(c *gin.Context) {
 		MaxIterations *int     `json:"max_iterations"`
 		IsActive      *bool    `json:"is_active"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.AgentType == "" {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.AgentType == "" {
 		response.BadRequest(c, "agent_type required")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		response.BadRequest(c, "invalid agent config body")
+		return
+	}
+	body.AgentType = strings.TrimSpace(body.AgentType)
+	if len([]rune(body.AgentType)) > maxNameRunes || len([]rune(body.Name)) > maxNameRunes || len([]rune(body.Description)) > maxTextRunes || len([]rune(body.Model)) > maxTextRunes || len([]rune(body.SystemPrompt)) > maxTextRunes {
+		response.BadRequest(c, "agent config field is too long")
 		return
 	}
 	if !s.Agents.IsValid(body.AgentType) {
@@ -538,36 +573,50 @@ func (s *Server) upsertAgentConfig(c *gin.Context) {
 		return
 	}
 	ts := response.Now()
-	var existing models.AgentConfig
-	err := organizationDB(c).Where("agent_type = ?", body.AgentType).First(&existing).Error
-	if err == nil {
-		updates := map[string]any{
-			"name": body.Name, "model": body.Model, "system_prompt": body.SystemPrompt,
-			"temperature": body.Temperature, "max_tokens": body.MaxTokens, "max_iterations": body.MaxIterations,
-			"deleted_at": nil, "updated_at": ts,
-		}
-		if body.IsActive != nil {
-			updates["is_active"] = *body.IsActive
-		}
-		if body.Name == "" {
-			delete(updates, "name")
-		}
-		organizationDB(c).Model(&existing).Updates(updates)
-		organizationDB(c).First(&existing, existing.ID)
-		response.Success(c, existing)
-		return
-	}
 	active := true
 	if body.IsActive != nil {
 		active = *body.IsActive
 	}
-	row := models.AgentConfig{
-		OrganizationID: currentOrganizationID(c),
-		AgentType:      body.AgentType, Name: body.Name, Description: body.Description, Model: body.Model,
-		SystemPrompt: body.SystemPrompt, Temperature: body.Temperature, MaxTokens: body.MaxTokens,
-		MaxIterations: body.MaxIterations, IsActive: active, CreatedAt: ts, UpdatedAt: ts,
+	organizationID := currentOrganizationID(c)
+	var row models.AgentConfig
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		queryErr := tx.Where("organization_id = ? AND agent_type = ?", organizationID, body.AgentType).Order("id DESC").First(&row).Error
+		if queryErr == nil {
+			updates := map[string]any{
+				"description": body.Description, "model": body.Model, "system_prompt": body.SystemPrompt,
+				"temperature": body.Temperature, "max_tokens": body.MaxTokens, "max_iterations": body.MaxIterations,
+				"deleted_at": nil, "updated_at": ts,
+			}
+			if body.IsActive != nil {
+				updates["is_active"] = *body.IsActive
+			}
+			if body.Name != "" {
+				updates["name"] = body.Name
+			}
+			if err := tx.Model(&row).Updates(updates).Error; err != nil {
+				return err
+			}
+			return tx.First(&row, row.ID).Error
+		}
+		if !errors.Is(queryErr, gorm.ErrRecordNotFound) {
+			return queryErr
+		}
+		row = models.AgentConfig{
+			OrganizationID: organizationID, AgentType: body.AgentType, Name: body.Name, Description: body.Description, Model: body.Model,
+			SystemPrompt: body.SystemPrompt, Temperature: body.Temperature, MaxTokens: body.MaxTokens,
+			MaxIterations: body.MaxIterations, IsActive: active, CreatedAt: ts, UpdatedAt: ts,
+		}
+		return tx.Create(&row).Error
+	})
+	if err != nil {
+		response.ServerError(c, "failed to save agent config")
+		return
 	}
-	organizationDB(c).Create(&row)
 	response.Success(c, row)
 }
 
@@ -578,6 +627,7 @@ func (s *Server) updateAgentConfig(c *gin.Context) {
 		return
 	}
 	var body map[string]any
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, "invalid JSON body")
 		return
@@ -633,21 +683,54 @@ func (s *Server) updateAgentConfig(c *gin.Context) {
 		response.BadRequest(c, "at least one agent config field is required")
 		return
 	}
-	result := organizationDB(c).Model(&models.AgentConfig{}).Where("id = ? AND deleted_at IS NULL", id).Updates(updates)
-	if result.RowsAffected == 0 {
+	organizationID := currentOrganizationID(c)
+	var affected int64
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		result := tx.Model(&models.AgentConfig{}).Where("organization_id = ? AND id = ? AND deleted_at IS NULL", organizationID, id).Updates(updates)
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		response.ServerError(c, "failed to update agent config")
+		return
+	}
+	if affected == 0 {
 		response.NotFound(c, "agent config not found")
 		return
 	}
 	var row models.AgentConfig
-	organizationDB(c).First(&row, id)
+	if err := organizationDB(c).First(&row, id).Error; err != nil {
+		response.ServerError(c, "failed to reload agent config")
+		return
+	}
 	response.Success(c, row)
 }
 
 func (s *Server) deleteAgentConfig(c *gin.Context) {
+	s.configWriteMu.Lock()
+	defer s.configWriteMu.Unlock()
 	id, _ := strconv.Atoi(c.Param("id"))
 	now := response.Now()
-	result := organizationDB(c).Model(&models.AgentConfig{}).Where("id = ? AND deleted_at IS NULL", id).Update("deleted_at", now)
-	if result.RowsAffected == 0 {
+	organizationID := currentOrganizationID(c)
+	var affected int64
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAIConfigOrganization(tx, organizationID); err != nil {
+			return err
+		}
+		result := tx.Model(&models.AgentConfig{}).Where("organization_id = ? AND id = ? AND deleted_at IS NULL", organizationID, id).Update("deleted_at", now)
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		response.ServerError(c, "failed to delete agent config")
+		return
+	}
+	if affected == 0 {
 		response.NotFound(c, "agent config not found")
 		return
 	}
@@ -671,8 +754,19 @@ func (s *Server) agentChat(c *gin.Context) {
 		DramaID   uint   `json:"drama_id"`
 		EpisodeID uint   `json:"episode_id"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.DramaID == 0 || body.EpisodeID == 0 {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.DramaID == 0 || body.EpisodeID == 0 {
 		response.BadRequest(c, "drama_id and episode_id are required")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		response.BadRequest(c, "invalid agent request body")
+		return
+	}
+	if len([]rune(body.Message)) > maxTextRunes {
+		response.BadRequest(c, "message is too long")
 		return
 	}
 	var episode models.Episode
@@ -712,29 +806,7 @@ func (s *Server) agentDebug(c *gin.Context) {
 }
 
 func (s *Server) registerSkills(api *gin.RouterGroup) {
-	api.GET("/skills", func(c *gin.Context) {
-		entries, _ := os.ReadDir(s.Agents.SkillsDir)
-		list := make([]gin.H, 0)
-		for _, e := range entries {
-			if e.IsDir() && s.Agents.IsValid(e.Name()) {
-				list = append(list, gin.H{"id": e.Name()})
-			}
-		}
-		response.Success(c, list)
-	})
-	api.GET("/skills/:id", func(c *gin.Context) {
-		id := c.Param("id")
-		if !s.Agents.IsValid(id) {
-			response.NotFound(c, "skill not found")
-			return
-		}
-		b, err := os.ReadFile(filepath.Join(s.Agents.SkillsDir, id, "SKILL.md"))
-		if err != nil {
-			response.NotFound(c, "skill not found")
-			return
-		}
-		response.Success(c, gin.H{"id": id, "content": string(b)})
-	})
+	s.registerSkillRegistryRoutes(api)
 }
 
 func (s *Server) registerVoices(api *gin.RouterGroup) {

@@ -156,6 +156,7 @@ test('desktop: login, settings and asset library workflows are reachable', async
   let restoredPromptVersion: Request | undefined
   let voicePreview: Request | undefined
   let draftConfigTest: Request | undefined
+  let updatedAgent: Request | undefined
   await mockAccountAPI(page)
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/v1/ai-configs/10' && request.method() === 'PUT') updatedConfig = request
@@ -163,6 +164,7 @@ test('desktop: login, settings and asset library workflows are reachable', async
     if (new URL(request.url()).pathname === '/api/v1/prompt-templates/80/revisions/1/restore' && request.method() === 'POST') restoredPromptVersion = request
     if (new URL(request.url()).pathname === '/api/v1/ai-voices/female-shaonv/preview' && request.method() === 'POST') voicePreview = request
     if (new URL(request.url()).pathname === '/api/v1/ai-configs/test' && request.method() === 'POST') draftConfigTest = request
+    if (new URL(request.url()).pathname === '/api/v1/agent-configs' && request.method() === 'POST') updatedAgent = request
   })
   await page.goto('/login')
   await page.getByLabel('邮箱').fill('owner@example.com')
@@ -221,8 +223,15 @@ test('desktop: login, settings and asset library workflows are reachable', async
 
   await settingsNavigation.getByRole('tab', { name: 'Agent' }).click()
   await page.getByRole('button', { name: '编辑' }).first().click()
-  await expect(page.getByRole('dialog', { name: '编辑 Agent' })).toBeVisible()
-  await page.getByRole('dialog', { name: '编辑 Agent' }).getByRole('button', { name: '取消' }).click()
+  const agentDialog = page.getByRole('dialog', { name: '编辑 Agent' })
+  await expect(agentDialog).toBeVisible()
+  await agentDialog.getByLabel('说明').fill('保持人物与叙事一致性')
+  await agentDialog.getByLabel('系统提示词').fill('输出结构化短剧脚本')
+  await agentDialog.getByRole('button', { name: '保存 Agent' }).click()
+  expect(updatedAgent?.postDataJSON()).toMatchObject({
+    description: '保持人物与叙事一致性',
+    system_prompt: '输出结构化短剧脚本',
+  })
 
   await settingsNavigation.getByRole('tab', { name: '提示词' }).click()
   await expect(page.getByRole('row', { name: /剧本改写/ })).toContainText('v3')

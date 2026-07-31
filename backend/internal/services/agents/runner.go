@@ -2,7 +2,10 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +18,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
+	"github.com/eqzhou/flyaimovie/internal/services/skillregistry"
 	"gorm.io/gorm"
 )
 
@@ -57,11 +61,36 @@ type RunEvent struct {
 type EventObserver func(RunEvent)
 
 type PromptResolution struct {
-	System     string
-	Source     string
-	TemplateID uint
-	Key        string
-	Version    int
+	System                   string
+	Source                   string
+	TemplateID               uint
+	Key                      string
+	Version                  int
+	SkillSource              string
+	SkillID                  uint
+	SkillVersionID           uint
+	SkillVersion             int
+	SkillHash                string
+	SkillSnapshot            string
+	SkillSnapshotMode        string
+	SkillSnapshotSourceRunID uint
+}
+
+// SkillSnapshotOverride freezes the exact Skill content and provenance used by
+// an earlier run. It deliberately does not freeze the model, AgentConfig, or
+// organization prompt template.
+type SkillSnapshotOverride struct {
+	SourceRunID    uint
+	SkillSource    string
+	SkillID        uint
+	SkillVersionID uint
+	SkillVersion   int
+	SkillHash      string
+	SkillSnapshot  string
+}
+
+type RunOptions struct {
+	SkillSnapshot *SkillSnapshotOverride
 }
 
 type Runner struct {
@@ -86,6 +115,10 @@ func (r *Runner) Run(ctx context.Context, organizationID uint, agentType string,
 }
 
 func (r *Runner) RunObserved(ctx context.Context, organizationID uint, agentType string, dramaID, episodeID uint, message string, observer EventObserver) (*ChatResult, error) {
+	return r.RunObservedWithOptions(ctx, organizationID, agentType, dramaID, episodeID, message, observer, RunOptions{})
+}
+
+func (r *Runner) RunObservedWithOptions(ctx context.Context, organizationID uint, agentType string, dramaID, episodeID uint, message string, observer EventObserver, options RunOptions) (*ChatResult, error) {
 	if !r.IsValid(agentType) {
 		return nil, fmt.Errorf("unsupported agent type %q", agentType)
 	}
@@ -116,10 +149,16 @@ func (r *Runner) RunObserved(ctx context.Context, organizationID uint, agentType
 		}
 	}
 
-	resolution := r.resolveSystemPrompt(organizationID, agentType, dramaID, requestedEpisode, message, agentConfig.SystemPrompt)
+	resolution, err := r.resolveSystemPromptWithOptions(organizationID, agentType, dramaID, requestedEpisode, message, agentConfig.SystemPrompt, options)
+	if err != nil {
+		return nil, err
+	}
 	system := resolution.System
 	emitRunEvent(observer, RunEvent{EventType: "prompt_resolved", Payload: map[string]any{
 		"source": resolution.Source, "template_id": resolution.TemplateID, "key": resolution.Key, "version": resolution.Version,
+		"skill_source": resolution.SkillSource, "skill_id": resolution.SkillID, "skill_version_id": resolution.SkillVersionID,
+		"skill_version": resolution.SkillVersion, "skill_hash": resolution.SkillHash, "skill_snapshot": resolution.SkillSnapshot,
+		"skill_snapshot_mode": resolution.SkillSnapshotMode, "skill_snapshot_source_run_id": resolution.SkillSnapshotSourceRunID,
 	}})
 	temperature := float32(0.4)
 	if agentConfig.Temperature != nil {
@@ -539,7 +578,11 @@ func (r *Runner) buildSystemPrompt(agentType string) string {
 	return base + "\n\n" + skill + "\n\n" + tools
 }
 
-func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string) PromptResolution {
+func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string) (PromptResolution, error) {
+	return r.resolveSystemPromptWithOptions(organizationID, agentType, dramaID, episode, message, legacyPrompt, RunOptions{})
+}
+
+func (r *Runner) resolveSystemPromptWithOptions(organizationID uint, agentType string, dramaID uint, episode models.Episode, message, legacyPrompt string, options RunOptions) (PromptResolution, error) {
 	base := defaultPrompt(agentType)
 	resolution := PromptResolution{Source: "builtin", Key: agentType}
 	version := 0
@@ -577,8 +620,60 @@ func (r *Runner) resolveSystemPrompt(organizationID uint, agentType string, dram
 	if version > 0 {
 		base += fmt.Sprintf("\n\n提示词模板版本: %d", version)
 	}
-	resolution.System = base + "\n\n" + r.loadSkill(agentType) + "\n\n" + toolCatalog(agentType)
-	return resolution
+	skillText := ""
+	if override := options.SkillSnapshot; override != nil {
+		if override.SkillSnapshot == "" {
+			return PromptResolution{}, fmt.Errorf("source run skill snapshot is empty")
+		}
+		digest := sha256.Sum256([]byte(override.SkillSnapshot))
+		computedHash := hex.EncodeToString(digest[:])
+		if override.SkillHash != "" && !strings.EqualFold(override.SkillHash, computedHash) {
+			return PromptResolution{}, fmt.Errorf("source run skill snapshot hash mismatch")
+		}
+		skillText = override.SkillSnapshot
+		resolution.SkillSource = override.SkillSource
+		if resolution.SkillSource == "" {
+			resolution.SkillSource = "builtin"
+		}
+		resolution.SkillID = override.SkillID
+		resolution.SkillVersionID = override.SkillVersionID
+		resolution.SkillVersion = override.SkillVersion
+		resolution.SkillHash = computedHash
+		resolution.SkillSnapshotMode = "source_run"
+		resolution.SkillSnapshotSourceRunID = override.SourceRunID
+	} else {
+		resolution.SkillSource = "builtin"
+	}
+	if options.SkillSnapshot == nil {
+		published, resolveErr := skillregistry.New(db.DB).ResolvePublished(organizationID, agentType)
+		switch {
+		case resolveErr == nil:
+			rendered, renderErr := skillregistry.RenderVersion(*published)
+			if renderErr != nil {
+				return PromptResolution{}, fmt.Errorf("render published skill: %w", renderErr)
+			}
+			skillText = rendered
+			resolution.SkillSource = "database"
+			resolution.SkillID = published.SkillID
+			resolution.SkillVersionID = published.ID
+			resolution.SkillVersion = published.Version
+			digest := sha256.Sum256([]byte(rendered))
+			resolution.SkillHash = hex.EncodeToString(digest[:])
+		case errors.Is(resolveErr, skillregistry.ErrNotFound):
+			// An absent or unpublished organization skill deliberately uses the
+			// built-in skill snapshot.
+		default:
+			return PromptResolution{}, fmt.Errorf("resolve published skill: %w", resolveErr)
+		}
+	}
+	if options.SkillSnapshot == nil && resolution.SkillSource == "builtin" {
+		skillText = r.loadSkill(agentType)
+		digest := sha256.Sum256([]byte(skillText))
+		resolution.SkillHash = hex.EncodeToString(digest[:])
+	}
+	resolution.SkillSnapshot = skillText
+	resolution.System = base + "\n\n" + skillText + "\n\n" + toolCatalog(agentType)
+	return resolution, nil
 }
 
 func (r *Runner) loadSkill(agentType string) string {

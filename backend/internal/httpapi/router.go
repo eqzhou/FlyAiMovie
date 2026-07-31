@@ -33,21 +33,22 @@ import (
 const authRequestBodyLimit int64 = 64 << 10
 
 type Server struct {
-	Cfg          *config.Config
-	Store        *storage.LocalStorage
-	Agents       *agents.Runner
-	Images       *generation.ImageService
-	Videos       *generation.VideoService
-	TTS          *generation.TTSService
-	Jobs         *jobs.Service
-	Productions  *production.Service
-	Cache        *mediacache.Service
-	Frontend     string // dist path optional
-	ResetSender  PasswordResetSender
-	InviteSender InvitationSender
-	agentRunMu   sync.Mutex
-	agentRetryMu sync.Mutex
-	agentCancels map[uint]context.CancelFunc
+	Cfg           *config.Config
+	Store         *storage.LocalStorage
+	Agents        *agents.Runner
+	Images        *generation.ImageService
+	Videos        *generation.VideoService
+	TTS           *generation.TTSService
+	Jobs          *jobs.Service
+	Productions   *production.Service
+	Cache         *mediacache.Service
+	Frontend      string // dist path optional
+	ResetSender   PasswordResetSender
+	InviteSender  InvitationSender
+	agentRunMu    sync.Mutex
+	agentRetryMu  sync.Mutex
+	configWriteMu sync.Mutex
+	agentCancels  map[uint]context.CancelFunc
 }
 
 func NewServer(cfg *config.Config, store *storage.LocalStorage, skillsDir, frontendDist string) *Server {
@@ -121,6 +122,7 @@ func (s *Server) Router() *gin.Engine {
 		s.registerVideos(api)
 		s.registerUpload(api)
 		s.registerAIConfigs(api)
+		s.registerServiceBundles(api)
 		s.registerAgentConfigs(api)
 		s.registerPromptTemplates(api)
 		s.registerAgent(api)

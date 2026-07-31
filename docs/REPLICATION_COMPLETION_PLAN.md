@@ -139,3 +139,24 @@
 - [x] 回写 `FUNCTIONAL_PARITY.md` / `CLEAN_ROOM.md`
 - [x] 可自动 L2：SBOM、依赖扫描、Compose 冷启动/备份
 - [ ] 外部 L2：真实厂商/SMTP/正式 SPDX 法务归档（有意保留，需外部账号）
+
+## 8. 2026-07-28 最新能力增量 — ✅ 已实现
+
+本轮固定对照上游公开 `master@ad1cd7cd`，没有复制其源码、提示词、Skill、CSS 或数据结构。实现范围：
+
+1. 四类 AI 服务组合：内置与组织模板列表、严格输入校验、无写入预览、四项并发连接测试、带陈旧检测的事务应用，以及设置页完整入口。
+2. 组织级 Skill Registry：五 Agent 导航、不可变版本、发布/回滚/归档、权限隔离、数据库优先解析和 AgentRun 精确快照。
+3. 本地供应链产物：Buildx amd64/arm64 OCI archive、镜像级 SPDX SBOM、可选 cosign 离线 blob 签名、只读 CI artifact 与静态 no-publish 门禁。
+
+边界保持不变：本轮不执行 registry 登录、镜像 push、签名透明日志上传或其他外部发布动作。真实双架构构建、SBOM 和签名仍要求执行环境预装 Docker Buildx、Syft 与 Cosign；缺少工具时只把静态配置验收标记为通过，不能冒充已经生成产物。
+
+## 9. 2026-08-01 最新差异复核与实施 — ✅ 已完成
+
+最新对照为上游公开 `master@eb117853` 和正式 Release `v1.0.4`。`ad1cd7cd..eb117853` 只有 README 删除，没有新的代码功能。本轮代码级审计发现的遗漏均已按 TDD 完成：
+
+1. 服务组合默认同步五类 Agent 的文本模型，预览显示 `create/update/reuse`；Agent 状态纳入 preview token，四类服务与五类 Agent 在一个事务中提交。已有 Agent 只更新模型、启用和恢复状态，保留名称、说明、系统提示词及运行参数；用户可显式关闭同步。
+2. 关闭登录时，Skill Registry 使用本地 `(organization=0,user=0)` 作用域并开放创建、发布、回滚、归档和恢复；混合的零/非零主体被拒绝。Runner 会使用本地已发布版本，认证开启时原有组织隔离不变。
+3. AgentRun 重试在来源快照存在时校验 SHA-256、复制完整 Skill 元数据并精确复用；损坏快照返回 409 且不创建重试，旧记录没有快照时保持向后兼容。
+4. Agent 设置补齐说明与系统提示词表单，并修复 POST upsert 遗漏说明和数据库错误未处理；归档 Skill 增加恢复入口。
+
+本轮没有增加新的外部发布动作。剩余事项仍只有真实厂商/SMTP smoke、正式许可证与媒体授权归档，以及真实设备 Safari 发布前手测；它们属于发布门槛，不是 huobao-drama 功能差异。

@@ -212,6 +212,154 @@ export const agentAPI = {
 	 retryRun: (id: number) => api.post(`/agent-runs/${id}/retry`),
 }
 
+export type AIServiceType = 'text' | 'image' | 'video' | 'audio'
+
+export interface AIServiceBundleItem {
+  service_type: AIServiceType
+  provider: string
+  name: string
+  base_url: string
+  model: string
+  endpoint?: string
+  query_endpoint?: string
+  priority?: number
+  is_default: boolean
+  is_active?: boolean
+  settings?: string
+}
+
+export interface AIServiceBundle {
+  id: number
+  key: string
+  name: string
+  description: string
+  is_builtin: boolean
+  services: AIServiceBundleItem[]
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ServiceBundlePlanItem {
+  service_type: AIServiceType
+  action: 'create' | 'reuse'
+  config_id?: number
+  provider: string
+  name: string
+  is_default: boolean
+}
+
+export type BundleAgentType = 'script_rewriter' | 'extractor' | 'storyboard_breaker' | 'voice_assigner' | 'grid_prompt_generator'
+
+export interface ServiceBundleAgentPlanItem {
+  agent_type: BundleAgentType
+  action: 'create' | 'update' | 'reuse'
+  config_id?: number
+  model: string
+}
+
+export interface ServiceBundleConflict {
+  service_type: AIServiceType
+  kind: 'reused' | 'default_replaced' | string
+  config_id: number
+  message: string
+}
+
+export interface ServiceBundlePreview {
+  items: ServiceBundlePlanItem[]
+  agents: ServiceBundleAgentPlanItem[]
+  conflicts: ServiceBundleConflict[]
+  preview_token: string
+}
+
+export interface ServiceBundleTestResult {
+  service_type: AIServiceType
+  status: string
+  detail?: string
+  message?: string
+  provider?: string
+  model?: string
+  latency_ms?: number
+}
+
+export interface ServiceBundleDraft {
+  bundle_key?: string
+  bundle_id?: number
+  services?: AIServiceBundleItem[]
+  apply_agent_defaults?: boolean
+  credentials: Partial<Record<AIServiceType, string>>
+}
+
+export interface SkillRegistryItem {
+  id: string
+  agent_type: string
+  source: 'builtin' | 'database'
+  registry?: SkillRoot
+}
+
+export interface SkillRoot {
+  id: number
+  agent_type: string
+  published_version_id?: number
+  archived_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface SkillVersion {
+  id: number
+  skill_id: number
+  version: number
+  main_markdown: string
+  references_json: string
+  content_sha256: string
+  created_by_user_id: number
+  created_at: string
+}
+
+export interface SkillPublication {
+  id: number
+  skill_id: number
+  version_id?: number
+  action: 'publish' | 'rollback' | 'archive'
+  created_by_user_id: number
+  created_at: string
+}
+
+export interface SkillDetail {
+  id: number | string
+  agent_type: string
+  source?: 'builtin' | 'database'
+  published_version_id?: number
+  archived_at?: string
+  created_at?: string
+  updated_at?: string
+  content?: string
+  versions: SkillVersion[]
+  publications: SkillPublication[]
+  published_version?: SkillVersion
+}
+
+export interface CreateSkillVersionInput {
+  main_markdown: string
+  references: Record<string, string>
+}
+
+export const serviceBundleAPI = {
+  list: () => api.get<AIServiceBundle[]>('/ai-service-bundles'),
+  test: (draft: ServiceBundleDraft) => api.post<{ results: ServiceBundleTestResult[] }>('/ai-service-bundles/test', draft),
+  preview: (draft: ServiceBundleDraft) => api.post<ServiceBundlePreview>('/ai-service-bundles/preview', draft),
+  apply: (draft: ServiceBundleDraft & { preview_token: string }) => api.post<Pick<ServiceBundlePreview, 'items' | 'agents' | 'conflicts'>>('/ai-service-bundles/apply', draft),
+}
+
+export const skillRegistryAPI = {
+  list: () => api.get<SkillRegistryItem[]>('/skills'),
+  get: (agentType: string) => api.get<SkillDetail>(`/skills/${encodeURIComponent(agentType)}`),
+  createVersion: (agentType: string, input: CreateSkillVersionInput) => api.post<SkillVersion>(`/skills/${encodeURIComponent(agentType)}/versions`, input),
+  publish: (agentType: string, versionID: number) => api.post<SkillRoot>(`/skills/${encodeURIComponent(agentType)}/versions/${versionID}/publish`, {}),
+  rollback: (agentType: string, versionID: number) => api.post<SkillRoot>(`/skills/${encodeURIComponent(agentType)}/versions/${versionID}/rollback`, {}),
+  archive: (agentType: string) => api.post<SkillRoot>(`/skills/${encodeURIComponent(agentType)}/archive`, {}),
+}
+
 export const settingsAPI = {
   aiConfigs: () => api.get('/ai-configs'),
   createAIConfig: (d: any) => api.post('/ai-configs', d),

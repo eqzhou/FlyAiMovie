@@ -41,9 +41,26 @@ func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
 	if _, _, err := server.Cache.PutValue(organization.ID, "ai_request", "export-cache", "text", "private cached output", time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	bundle := models.AIServiceBundle{
+		OrganizationID: organization.ID, Key: "export-bundle", Name: "Export bundle",
+		ServicesJSON: `[{"service_type":"text","provider":"openai","name":"Text","base_url":"https://api.example.test","model":"gpt-test","is_default":true,"is_active":true}]`,
+		IsActive:     true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.DB.Create(&bundle).Error; err != nil {
+		t.Fatal(err)
+	}
 	exported := performAuthRequest(router, http.MethodGet, "/api/v1/organization/export", "", cookie, "")
 	if exported.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", exported.Code, exported.Body.String())
+	}
+	if got := exported.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control=%q", got)
+	}
+	if got := exported.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("Pragma=%q", got)
+	}
+	if got := exported.Header().Get("Content-Disposition"); got != `attachment; filename="flyaimovie-organization-export.json"` {
+		t.Fatalf("Content-Disposition=%q", got)
 	}
 	body := exported.Body.String()
 	if !strings.Contains(body, "exported drama") || strings.Contains(body, "foreign drama") {
@@ -62,6 +79,12 @@ func TestOrganizationExportIsScopedAndRedactsCredentials(t *testing.T) {
 	}
 	if !strings.Contains(body, `"prompt_templates"`) || !strings.Contains(body, `"prompt_template_revisions"`) {
 		t.Fatalf("prompt history missing from export: %s", body)
+	}
+	if !strings.Contains(body, `"service_bundles"`) || !strings.Contains(body, `"skills"`) || !strings.Contains(body, `"skill_versions"`) || !strings.Contains(body, `"skill_publications"`) {
+		t.Fatalf("service bundle or skill registry data missing from export: %s", body)
+	}
+	if !strings.Contains(body, `"export-bundle"`) || !strings.Contains(body, `"services":[{"service_type":"text"`) {
+		t.Fatalf("service bundle payload missing from export: %s", body)
 	}
 }
 
@@ -122,6 +145,21 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 	if err := db.DB.Create(&models.MediaMigration{OrganizationID: organization.ID, TargetType: "asset", TargetID: asset.ID, SourceURL: "https://cdn.example/private", Status: "completed", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
+	bundle := models.AIServiceBundle{OrganizationID: organization.ID, Key: "private-bundle", Name: "Private bundle", ServicesJSON: `[]`, IsActive: true, CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&bundle).Error; err != nil {
+		t.Fatal(err)
+	}
+	skill := models.Skill{OrganizationID: organization.ID, AgentType: "extractor", CreatedAt: now, UpdatedAt: now}
+	if err := db.DB.Create(&skill).Error; err != nil {
+		t.Fatal(err)
+	}
+	skillVersion := models.SkillVersion{OrganizationID: organization.ID, SkillID: skill.ID, Version: 1, MainMarkdown: "private skill", ReferencesJSON: `{}`, ContentSHA256: strings.Repeat("a", 64), CreatedByUserID: user.ID, CreatedAt: now}
+	if err := db.DB.Create(&skillVersion).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Create(&models.SkillPublication{OrganizationID: organization.ID, SkillID: skill.ID, VersionID: &skillVersion.ID, Action: "publish", CreatedByUserID: user.ID, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	wrong := performAuthRequest(router, http.MethodDelete, "/api/v1/organization", `{"password":"test actor password","confirmation":"wrong"}`, cookie, csrf)
 	if wrong.Code != http.StatusBadRequest {
@@ -147,6 +185,7 @@ func TestOrganizationDeletionPurgesDataMediaAndSessionsButKeepsSharedUser(t *tes
 		&models.AgentRun{}: "agent run", &models.AgentRunEvent{}: "agent event", &models.MediaMigration{}: "media migration",
 		&models.MediaCacheObject{}: "cache object", &models.MediaCacheReference{}: "cache reference",
 		&models.PromptTemplate{}: "prompt template", &models.PromptTemplateRevision{}: "prompt template revision",
+		&models.AIServiceBundle{}: "service bundle", &models.Skill{}: "skill", &models.SkillVersion{}: "skill version", &models.SkillPublication{}: "skill publication",
 	} {
 		var count int64
 		query := db.DB.Model(model).Where("organization_id = ?", organization.ID)

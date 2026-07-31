@@ -27,6 +27,27 @@ docker compose -f docker-compose.sqlite.yml up --build
 
 两个模式都会检查 HTTP 健康状态，应用启动时自动迁移数据库，并要求镜像内存在 FFmpeg/FFprobe。生产环境必须设置 `APP_ENV=production`、`AUTH_SECURE_COOKIES=true`，并通过 Secret Manager 或部署环境注入 `WEBHOOK_SECRET` 与 `AI_CONFIG_ENCRYPTION_KEY`。
 
+### 本地 OCI 供应链产物
+
+供应链命令只在本地生成文件，不登录镜像仓库，也不 push 镜像。多架构构建需要 Docker Buildx；镜像级 SPDX JSON SBOM 需要本机已有 `syft`；离线签名是可选步骤，需要本机已有 `cosign`。仓库脚本不会自动安装这些工具。
+
+```bash
+# 静态检查构建、权限和 no-publish 约束
+make supply-chain-test
+
+# 构建 linux/amd64 + linux/arm64 OCI archive
+make oci
+
+# 从 OCI archive 分别生成 amd64/arm64 SPDX JSON
+make image-sbom
+
+# 可选：把 OCI archive 当作不可变 blob 离线签名/验签
+scripts/cosign-offline.sh sign artifacts/flyaimovie-oci.tar cosign.key
+scripts/cosign-offline.sh verify artifacts/flyaimovie-oci.tar cosign.pub
+```
+
+独立的 `supply-chain-build` GitHub workflow 只有 `contents: read` 权限，只构建多架构 OCI archive 并上传短期 artifact。它不读取 secrets、不申请 `packages`/`id-token` 写权限、不登录 registry，也不发布镜像。
+
 ### 本地正式使用
 
 首次打开会进入“初始化制作空间”，创建 owner 账号后再登录。默认本地配置会启用认证、PostgreSQL 持久化和本地素材存储；已有数据库和 `data/storage/` 会继续使用，不会在重启时清空。
@@ -60,7 +81,8 @@ docker compose -f docker-compose.sqlite.yml up --build
 - 宫格历史、切片持久分配与冲突替换、任务查询/取消、统一素材库 API、批量帧/视频/配音、道具管理、本地存储 `/static`
 - 跨项目角色模板库、项目内场景复制/迁移、视频/音频上传与 FFprobe 元数据
 - 组织音色库：MiniMax/Mock 增量同步、失效标记、搜索和自定义文本试听；工作台只分配可用音色
-- 任务中心：阶段日志、筛选、单任务重试/取消与批量取消；Agent 运行历史、失败恢复及运行中工具调用/结果审计
+- 任务中心：阶段日志、筛选、单任务重试/取消与批量取消；Agent 运行历史、失败恢复及运行中工具调用/结果审计；Agent 重试精确复用来源 Skill 快照
+- 服务组合与 Skills：四类 AI 服务可一次预览、测试并原子应用，默认同步五类 Agent 模型；Skill 支持组织/本地版本、发布、回滚、归档与恢复
 - 组织隔离缓存：AI 请求、外部媒体、上传、生成、TTS、合成和任务结果按内容哈希去重；设置页可查看容量并清理过期项
 - **Mock 厂商**（`provider=mock`）：无外网密钥时也可跑通演示链路
 

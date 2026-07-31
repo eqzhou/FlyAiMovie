@@ -24,6 +24,10 @@ func newRunnerFixture(t *testing.T, modelURL string, agentConfig *models.AgentCo
 	t.Helper()
 	database := testsupport.OpenDatabase(t)
 	now := response.Now()
+	organization := models.Organization{ID: 21, Name: "Runner Org", Slug: "runner-org", Status: "active", CreatedAt: now, UpdatedAt: now}
+	if err := database.Create(&organization).Error; err != nil {
+		t.Fatal(err)
+	}
 	drama := models.Drama{OrganizationID: 21, Title: "Runner Drama", CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&drama).Error; err != nil {
 		t.Fatal(err)

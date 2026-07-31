@@ -28,6 +28,16 @@ FFmpeg 是独立进程依赖，许可证取决于实际分发的构建参数。�
 
 Docker 运行镜像当前通过 Debian 包安装 FFmpeg，发布镜像前必须记录该具体包版本、构建配置和许可证文本。
 
+仓库的 P3 供应链配置提供本地 `linux/amd64` + `linux/arm64` OCI archive、镜像级 SPDX JSON SBOM 和可选 cosign 离线 blob 签名。执行入口与边界如下：
+
+- `make supply-chain-test`：静态验证 Dockerfile、OCI 输出和 CI no-publish 约束；
+- `make oci`：仅生成 `artifacts/flyaimovie-oci.tar`，不登录或推送 registry；
+- `make image-sbom`：使用外部 `syft` 从 OCI archive 分别生成 amd64/arm64 SPDX JSON；
+- `scripts/cosign-offline.sh sign|verify`：显式禁用 transparency log 网络路径，对 OCI archive 本身签名或验签；私钥不得进入仓库；
+- `.github/workflows/supply-chain-build.yml`：只读权限构建并上传短期 artifact，不具备 packages/id-token write 权限。
+
+Docker、syft、cosign 缺失时对应脚本会退出并明确提示；脚本不会自行安装依赖。上述产物是发布审计输入，不代表已经发布镜像，也不替代许可证和法务复核。
+
 ## AI 与内容权利
 
 - 分别审阅文本、图片、视频和 TTS 厂商的商业使用、训练数据、输出归属、地域和内容审核条款。

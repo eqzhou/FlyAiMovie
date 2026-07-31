@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,7 +49,9 @@ func (s *Server) auditMutations() gin.HandlerFunc {
 		if entry.Path == "" {
 			entry.Path = c.Request.URL.Path
 		}
-		_ = db.DB.Create(&entry).Error
+		if err := db.DB.Create(&entry).Error; err != nil {
+			log.Printf("persist audit log method=%s path=%s organization_id=%d: %v", entry.Method, entry.Path, entry.OrganizationID, err)
+		}
 	}
 }
 

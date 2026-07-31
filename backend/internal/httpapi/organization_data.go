@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Server) registerOrganizationData(api *gin.RouterGroup) {
@@ -34,12 +36,34 @@ func (s *Server) exportOrganizationData(c *gin.Context) {
 	if !ok {
 		return
 	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Pragma", "no-cache")
+	c.Header("Content-Disposition", `attachment; filename="flyaimovie-organization-export.json"`)
 	organizationID := actor.Organization.ID
 	export := gin.H{"exported_at": response.Now(), "organization": actor.Organization}
 	if err := loadExportRows(export, organizationID); err != nil {
 		response.ServerError(c, "failed to export organization data")
 		return
 	}
+	var bundles []models.AIServiceBundle
+	if err := db.DB.Where("organization_id = ?", organizationID).Order("id").Find(&bundles).Error; err != nil {
+		response.ServerError(c, "failed to export service bundles")
+		return
+	}
+	safeBundles := make([]gin.H, 0, len(bundles))
+	for _, bundle := range bundles {
+		var services []models.AIServiceBundleTemplateItem
+		if err := json.Unmarshal([]byte(bundle.ServicesJSON), &services); err != nil {
+			response.ServerError(c, "failed to export service bundles")
+			return
+		}
+		safeBundles = append(safeBundles, gin.H{
+			"id": bundle.ID, "key": bundle.Key, "name": bundle.Name, "description": bundle.Description,
+			"services": services, "is_builtin": bundle.IsBuiltin, "is_active": bundle.IsActive,
+			"created_at": bundle.CreatedAt, "updated_at": bundle.UpdatedAt,
+		})
+	}
+	export["service_bundles"] = safeBundles
 	var configs []models.AIServiceConfig
 	if err := db.DB.Where("organization_id = ?", organizationID).Order("id").Find(&configs).Error; err != nil {
 		response.ServerError(c, "failed to export AI configs")
@@ -85,6 +109,7 @@ func loadExportRows(out gin.H, organizationID uint) error {
 		{"media_cache_objects", &[]models.MediaCacheObject{}}, {"media_cache_references", &[]models.MediaCacheReference{}},
 		{"agent_configs", &[]models.AgentConfig{}}, {"voices", &[]models.AIVoice{}}, {"audit_logs", &[]models.AuditLog{}}, {"quota", &[]models.OrganizationQuota{}},
 		{"prompt_templates", &[]models.PromptTemplate{}}, {"prompt_template_revisions", &[]models.PromptTemplateRevision{}},
+		{"skills", &[]models.Skill{}}, {"skill_versions", &[]models.SkillVersion{}}, {"skill_publications", &[]models.SkillPublication{}},
 		{"invitations", &[]models.OrganizationInvitation{}},
 	}
 	for _, query := range queries {
@@ -146,11 +171,16 @@ func (s *Server) deleteOrganizationData(c *gin.Context) {
 
 func purgeOrganization(database *gorm.DB, store *storage.LocalStorage, organizationID uint, userIDs []uint, paths []string) error {
 	return database.Transaction(func(tx *gorm.DB) error {
+		var organization models.Organization
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", organizationID).First(&organization).Error; err != nil {
+			return err
+		}
 		if err := mediacleanup.New(tx, store).Queue(organizationID, paths); err != nil {
 			return err
 		}
 		resources := []any{
 			&models.AgentRunEvent{}, &models.AgentRun{}, &models.JobEvent{}, &models.MediaMigration{}, &models.MediaCacheReference{}, &models.MediaCacheObject{},
+			&models.SkillPublication{}, &models.SkillVersion{}, &models.Skill{}, &models.AIServiceBundle{},
 			&models.PromptTemplateRevision{}, &models.PromptTemplate{},
 			&models.StoryboardCharacter{}, &models.EpisodeCharacter{}, &models.EpisodeScene{}, &models.Asset{}, &models.GridHistory{},
 			&models.ImageGeneration{}, &models.VideoGeneration{}, &models.VideoMerge{}, &models.GenerationJob{}, &models.ProductionRun{}, &models.Storyboard{},
