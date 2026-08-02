@@ -548,7 +548,7 @@ func isAdminMutation(method, path string) bool {
 	if strings.HasPrefix(path, "/api/v1/prompt-templates/") && strings.HasSuffix(path, "/preview") {
 		return false
 	}
-	return strings.HasPrefix(path, "/api/v1/ai-configs") || strings.HasPrefix(path, "/api/v1/service-bundles") || strings.HasPrefix(path, "/api/v1/ai-service-bundles") || strings.HasPrefix(path, "/api/v1/agent-configs") || strings.HasPrefix(path, "/api/v1/prompt-templates") || path == "/api/v1/ai-voices/sync" || strings.HasPrefix(path, "/api/v1/organization/")
+	return strings.HasPrefix(path, "/api/v1/ai-configs") || strings.HasPrefix(path, "/api/v1/service-bundles") || strings.HasPrefix(path, "/api/v1/ai-service-bundles") || strings.HasPrefix(path, "/api/v1/agent-configs") || strings.HasPrefix(path, "/api/v1/prompt-templates") || strings.HasPrefix(path, "/api/v1/skills") || path == "/api/v1/ai-voices/sync" || strings.HasPrefix(path, "/api/v1/organization/")
 }
 
 func randomToken() (string, error) {

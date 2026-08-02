@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -118,6 +119,66 @@ func TestSkillRegistryDetailSanitizesNonAdminView(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSkillRegistryListReportsBuiltinUntilPublished(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth.Enabled = false
+	router := server.Router()
+
+	// A skill row that only has an unpublished draft must still report the
+	// builtin source, because the runner falls back to builtin when there is
+	// no non-archived published version.
+	draft := performRequest(router, http.MethodPost, "/api/v1/skills/extractor/versions", `{"main_markdown":"draft only"}`, nil)
+	if draft.Code != http.StatusCreated {
+		t.Fatalf("create draft status=%d body=%s", draft.Code, draft.Body.String())
+	}
+	versionID := jsonNumber(decodeResponse(t, draft)["data"].(map[string]any)["id"].(float64))
+
+	beforePublish := performRequest(router, http.MethodGet, "/api/v1/skills", "", nil)
+	if beforePublish.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", beforePublish.Code, beforePublish.Body.String())
+	}
+	if extractorSource(t, beforePublish) != "builtin" {
+		t.Fatalf("unpublished draft should report builtin: %s", beforePublish.Body.String())
+	}
+
+	if published := performRequest(router, http.MethodPost, "/api/v1/skills/extractor/versions/"+versionID+"/publish", `{}`, nil); published.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	afterPublish := performRequest(router, http.MethodGet, "/api/v1/skills", "", nil)
+	if extractorSource(t, afterPublish) != "database" {
+		t.Fatalf("published skill should report database: %s", afterPublish.Body.String())
+	}
+
+	// Archiving unpublishes the skill, so the list must report builtin again.
+	if archived := performRequest(router, http.MethodPost, "/api/v1/skills/extractor/archive", `{}`, nil); archived.Code != http.StatusOK {
+		t.Fatalf("archive status=%d body=%s", archived.Code, archived.Body.String())
+	}
+	afterArchive := performRequest(router, http.MethodGet, "/api/v1/skills", "", nil)
+	if extractorSource(t, afterArchive) != "builtin" {
+		t.Fatalf("archived skill should report builtin: %s", afterArchive.Body.String())
+	}
+}
+
+func extractorSource(t *testing.T, recorded *httptest.ResponseRecorder) string {
+	t.Helper()
+	data, ok := decodeResponse(t, recorded)["data"].([]any)
+	if !ok {
+		t.Fatalf("data is not a list: %s", recorded.Body.String())
+	}
+	for _, entry := range data {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["agent_type"] == "extractor" {
+			source, _ := item["source"].(string)
+			return source
+		}
+	}
+	t.Fatalf("extractor entry not found: %s", recorded.Body.String())
+	return ""
 }
 
 func createSkillRegistryActorInOrganization(t *testing.T, server *Server, organizationID uint, email, role string) string {

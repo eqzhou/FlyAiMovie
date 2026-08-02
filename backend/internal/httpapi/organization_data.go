@@ -38,7 +38,6 @@ func (s *Server) exportOrganizationData(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("Pragma", "no-cache")
-	c.Header("Content-Disposition", `attachment; filename="flyaimovie-organization-export.json"`)
 	organizationID := actor.Organization.ID
 	export := gin.H{"exported_at": response.Now(), "organization": actor.Organization}
 	if err := loadExportRows(export, organizationID); err != nil {
@@ -89,6 +88,7 @@ func (s *Server) exportOrganizationData(c *gin.Context) {
 		members = append(members, gin.H{"user_id": user.ID, "email": user.Email, "display_name": user.DisplayName, "status": user.Status, "role": membership.Role})
 	}
 	export["members"] = members
+	c.Header("Content-Disposition", `attachment; filename="flyaimovie-organization-export.json"`)
 	response.Success(c, export)
 }
 

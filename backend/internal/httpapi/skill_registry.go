@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/eqzhou/flyaimovie/internal/db"
+	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/agents"
 	"github.com/eqzhou/flyaimovie/internal/services/skillregistry"
@@ -35,7 +36,7 @@ func (s *Server) listSkillRegistry(c *gin.Context) {
 		response.ServerError(c, "failed to list skills")
 		return
 	}
-	byAgent := make(map[string]any, len(rows))
+	byAgent := make(map[string]models.Skill, len(rows))
 	for _, row := range rows {
 		byAgent[row.AgentType] = row
 	}
@@ -44,7 +45,11 @@ func (s *Server) listSkillRegistry(c *gin.Context) {
 		item := gin.H{"id": agentType, "agent_type": agentType, "source": "builtin"}
 		if row, ok := byAgent[agentType]; ok {
 			item["registry"] = row
-			item["source"] = "database"
+			// The runner only uses the database skill when a non-archived
+			// published version exists; otherwise it falls back to builtin.
+			if row.ArchivedAt == nil && row.PublishedVersionID != nil {
+				item["source"] = "database"
+			}
 		}
 		out = append(out, item)
 	}
