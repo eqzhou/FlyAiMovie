@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/eqzhou/flyaimovie/internal/config"
@@ -112,6 +113,50 @@ func TestAuthSetupSeedsOrganizationDefaultsWithoutLegacyRows(t *testing.T) {
 	}
 	if mockCount != 4 || agentCount != 5 {
 		t.Fatalf("organization defaults: mock=%d agents=%d", mockCount, agentCount)
+	}
+}
+
+func TestAuthSetupIsAtomicUnderConcurrency(t *testing.T) {
+	server, router := testServerRouter(t)
+	server.Cfg.Auth = config.AuthConfig{Enabled: true, SessionTTLHours: 24, CookieName: "fly_session"}
+	body := `{"organization_name":"Concurrent Studio","email":"concurrent-owner@example.com","password":"concurrent secure password"}`
+	responses := make([]*httptest.ResponseRecorder, 2)
+	var wait sync.WaitGroup
+	wait.Add(len(responses))
+	for index := range responses {
+		go func(index int) {
+			defer wait.Done()
+			responses[index] = performRequest(router, http.MethodPost, "/api/v1/auth/setup", body, map[string]string{"Content-Type": "application/json"})
+		}(index)
+	}
+	wait.Wait()
+
+	created, conflicts := 0, 0
+	for _, response := range responses {
+		switch response.Code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent setup status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if created != 1 || conflicts != 1 {
+		t.Fatalf("concurrent setup created=%d conflicts=%d", created, conflicts)
+	}
+	var users, organizations, admins int64
+	if err := db.DB.Model(&models.User{}).Count(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Model(&models.Organization{}).Count(&organizations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Model(&models.User{}).Where("is_platform_admin = ?", true).Count(&admins).Error; err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 || organizations != 1 || admins != 1 {
+		t.Fatalf("setup created users=%d organizations=%d admins=%d", users, organizations, admins)
 	}
 }
 

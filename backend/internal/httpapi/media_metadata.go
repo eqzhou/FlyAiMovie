@@ -58,10 +58,15 @@ func (s *Server) uploadMedia(c *gin.Context) {
 	mime := http.DetectContentType(header)
 	assetType := ""
 	switch {
-	case strings.HasPrefix(mime, "video/") || mime == "application/octet-stream":
+	case strings.HasPrefix(mime, "video/"):
 		assetType = "video"
-	case strings.HasPrefix(mime, "audio/"):
+	case strings.HasPrefix(mime, "audio/"), mime == "application/ogg":
 		assetType = "audio"
+	case mime == "application/octet-stream":
+		// Some valid containers (for example MKV) are reported as generic
+		// octet-stream by net/http.  They are accepted only after ffprobe
+		// verifies a real audio/video stream below.
+		assetType = "probe"
 	default:
 		response.BadRequest(c, "only video and audio uploads are supported")
 		return
@@ -74,10 +79,57 @@ func (s *Server) uploadMedia(c *gin.Context) {
 		return
 	}
 	hash := sha256.New()
-	rel, abs, err := s.Store.Save("uploads", fileHeader.Filename, io.TeeReader(io.LimitReader(reader, maxMediaUploadBytes+1), hash))
+	// Never preserve a client-provided extension for uploaded media.  Static
+	// files are served from the same origin, so a filename such as
+	// `payload.html` must not turn an otherwise valid media upload into inline
+	// executable HTML.  Unknown MIME types are stored temporarily as `.bin`
+	// and must pass ffprobe before receiving a canonical media extension.
+	ext := canonicalMediaUploadExtension(mime)
+	if ext == "" && assetType == "probe" {
+		ext = ".bin"
+	}
+	if ext == "" {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"code": http.StatusUnsupportedMediaType, "message": "unsupported media content type"})
+		return
+	}
+	var verifiedProbe mediainfo.Info
+	hasVerifiedProbe := false
+	rel, abs, err := s.Store.Save("uploads", "upload"+ext, io.TeeReader(io.LimitReader(reader, maxMediaUploadBytes+1), hash))
 	if err != nil {
 		response.ServerError(c, "failed to save media")
 		return
+	}
+	if assetType == "probe" {
+		probeInfo, probeErr := mediainfo.Probe(c.Request.Context(), abs)
+		if probeErr != nil {
+			_ = os.Remove(abs)
+			c.JSON(http.StatusUnsupportedMediaType, gin.H{"code": http.StatusUnsupportedMediaType, "message": "uploaded file is not a supported audio or video"})
+			return
+		}
+		if probeInfo.Width > 0 {
+			assetType = "video"
+		} else if probeInfo.Codec != "" {
+			assetType = "audio"
+		} else {
+			_ = os.Remove(abs)
+			c.JSON(http.StatusUnsupportedMediaType, gin.H{"code": http.StatusUnsupportedMediaType, "message": "uploaded file is not a supported audio or video"})
+			return
+		}
+		verifiedProbe, hasVerifiedProbe = probeInfo, true
+		probeExt := canonicalMediaProbeExtension(probeInfo.Format, assetType)
+		if probeExt == "" {
+			_ = os.Remove(abs)
+			c.JSON(http.StatusUnsupportedMediaType, gin.H{"code": http.StatusUnsupportedMediaType, "message": "uploaded media container is not supported"})
+			return
+		}
+		newRel := strings.TrimSuffix(rel, filepath.Ext(rel)) + probeExt
+		newAbs := filepath.Join(s.Store.Root, filepath.FromSlash(newRel))
+		if err := os.Rename(abs, newAbs); err != nil {
+			_ = os.Remove(abs)
+			response.ServerError(c, "failed to finalize media upload")
+			return
+		}
+		rel, abs, ext = newRel, newAbs, probeExt
 	}
 	now := response.Now()
 	asset := models.Asset{OrganizationID: currentOrganizationID(c), DramaID: dramaID, EpisodeID: episodeID, StoryboardID: storyboardID,
@@ -85,7 +137,11 @@ func (s *Server) uploadMedia(c *gin.Context) {
 		Category: firstNonEmpty(strings.TrimSpace(c.PostForm("category")), "reference"), URL: s.Store.PublicURL(rel),
 		LocalPath: rel, FileSize: fileHeader.Size, MimeType: mime, ContentHash: hex.EncodeToString(hash.Sum(nil)),
 		ReferenceCount: 1, ProbeStatus: "pending", CreatedAt: now, UpdatedAt: now}
-	applyProbe(c.Request.Context(), abs, &asset)
+	if hasVerifiedProbe {
+		applyProbeInfo(verifiedProbe, &asset)
+	} else {
+		applyProbe(c.Request.Context(), abs, &asset)
+	}
 	var cacheObject *models.MediaCacheObject
 	reused := false
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
@@ -115,6 +171,88 @@ func (s *Server) uploadMedia(c *gin.Context) {
 	response.Created(c, asset)
 }
 
+func canonicalMediaUploadExtension(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/quicktime":
+		return ".mov"
+	case "video/avi", "video/x-msvideo":
+		return ".avi"
+	case "video/x-matroska":
+		return ".mkv"
+	case "video/mpeg":
+		return ".mpeg"
+	case "video/ogg":
+		return ".ogv"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/wave", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg", "application/ogg":
+		return ".ogg"
+	case "audio/webm":
+		return ".weba"
+	case "audio/mp4":
+		return ".m4a"
+	case "audio/aac":
+		return ".aac"
+	case "audio/flac":
+		return ".flac"
+	case "audio/x-flac":
+		return ".flac"
+	case "audio/aiff":
+		return ".aiff"
+	case "audio/midi":
+		return ".mid"
+	case "audio/x-m4a":
+		return ".m4a"
+	default:
+		return ""
+	}
+}
+
+func canonicalMediaProbeExtension(format, assetType string) string {
+	name := strings.ToLower(strings.TrimSpace(strings.Split(format, ",")[0]))
+	switch name {
+	case "mp4", "mov", "m4v", "3gp", "3g2", "mj2":
+		if assetType == "video" {
+			return ".mp4"
+		}
+		return ".m4a"
+	case "matroska":
+		return ".mkv"
+	case "webm":
+		return ".webm"
+	case "avi":
+		return ".avi"
+	case "mpeg", "mpegts", "m2ts":
+		return ".mpeg"
+	case "ogg", "ogv":
+		if assetType == "video" {
+			return ".ogv"
+		}
+		return ".ogg"
+	case "mp3":
+		return ".mp3"
+	case "wav", "aiff":
+		if name == "aiff" {
+			return ".aiff"
+		}
+		return ".wav"
+	case "flac":
+		return ".flac"
+	case "aac":
+		return ".aac"
+	case "midi", "mid":
+		return ".mid"
+	default:
+		return ""
+	}
+}
+
 func optionalFormID(value string) *uint {
 	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 32)
 	if err != nil || parsed == 0 {
@@ -130,6 +268,10 @@ func applyProbe(ctx context.Context, path string, asset *models.Asset) {
 		asset.ProbeStatus, asset.ProbeError = "failed", err.Error()
 		return
 	}
+	applyProbeInfo(info, asset)
+}
+
+func applyProbeInfo(info mediainfo.Info, asset *models.Asset) {
 	asset.ProbeStatus, asset.ProbeError = "completed", ""
 	asset.DurationSeconds, asset.FrameRate, asset.Codec, asset.Format = info.Duration, info.FrameRate, info.Codec, info.Format
 	asset.Width, asset.Height = info.Width, info.Height

@@ -1,4 +1,13 @@
 import { authSessionFingerprint, authStore, handleUnauthorized } from '../auth'
+import type {
+  Drama, DramaListResponse, Episode, Character, CharacterTemplate, Scene, Storyboard,
+  Prop, Asset, GridHistory, GenerationJob, JobEvent, ProductionRun, AgentRun, AgentRunEvent, AIVoice,
+} from './types'
+
+export type {
+  Drama, DramaListResponse, Episode, Character, CharacterTemplate, Scene, Storyboard, Prop, Asset,
+  GridHistory, GenerationJob, JobEvent, ProductionRun, AgentRun, AgentRunEvent, AIVoice,
+} from './types'
 
 const BASE = '/api/v1'
 
@@ -10,6 +19,13 @@ async function parseResponseJSON(resp: Response): Promise<Record<string, any>> {
   } catch {
     return { message: text.slice(0, 200) }
   }
+}
+
+function responseData<T>(json: Record<string, any>): T {
+  // `data: null` is a valid success payload.  Using nullish coalescing here
+  // would incorrectly return the whole response envelope for successful
+  // update/delete endpoints that intentionally have no body.
+  return Object.prototype.hasOwnProperty.call(json, 'data') ? json.data as T : json as T
 }
 
 async function req<T = any>(method: string, path: string, body?: any): Promise<T> {
@@ -24,7 +40,7 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   if (!resp.ok || (json.code && json.code >= 400)) {
     throw new Error(json.message || `请求失败（${resp.status}）`)
   }
-  return (json.data ?? json) as T
+  return responseData<T>(json)
 }
 
 export const api = {
@@ -45,7 +61,7 @@ async function uploadRequest(endpoint: string, file: File, fields: Record<string
   const json = await parseResponseJSON(resp)
   if (resp.status === 401) handleUnauthorized(requestSession)
   if (!resp.ok || (json.code && json.code >= 400)) throw new Error(json.message || `请求失败（${resp.status}）`)
-  return json.data ?? json
+  return responseData(json)
 }
 
 export const uploadAPI = {
@@ -54,29 +70,29 @@ export const uploadAPI = {
 }
 
 export const dramaAPI = {
-  list: () => api.get<{ items: any[] }>('/dramas'),
-  get: (id: number) => api.get(`/dramas/${id}`),
-  create: (data: any) => api.post('/dramas', data),
-  update: (id: number, data: any) => api.put(`/dramas/${id}`, data),
+  list: () => api.get<DramaListResponse>('/dramas'),
+  get: (id: number) => api.get<Drama>(`/dramas/${id}`),
+  create: (data: Partial<Drama>) => api.post<Drama>('/dramas', data),
+  update: (id: number, data: Partial<Drama>) => api.put<null>(`/dramas/${id}`, data),
   del: (id: number) => api.del(`/dramas/${id}`),
 }
 
 export const episodeAPI = {
-  create: (data: any) => api.post('/episodes', data),
-  update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
+  create: (data: Partial<Episode>) => api.post<Episode>('/episodes', data),
+  update: (id: number, data: Partial<Episode>) => api.put<null>(`/episodes/${id}`, data),
   del: (id: number) => api.del(`/episodes/${id}`),
-  copy: (id: number, data?: { title?: string }) => api.post(`/episodes/${id}/copy`, data || {}),
+  copy: (id: number, data?: { title?: string }) => api.post<Episode>(`/episodes/${id}/copy`, data || {}),
   move: (id: number, direction: 'up' | 'down') => api.post(`/episodes/${id}/move`, { direction }),
-  characters: (id: number) => api.get(`/episodes/${id}/characters`),
-  scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
-  storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
+  characters: (id: number) => api.get<Character[]>(`/episodes/${id}/characters`),
+  scenes: (id: number) => api.get<Scene[]>(`/episodes/${id}/scenes`),
+  storyboards: (id: number) => api.get<Storyboard[]>(`/episodes/${id}/storyboards`),
   pipelineStatus: (id: number) => api.get(`/episodes/${id}/pipeline-status`),
 }
 
 export const storyboardAPI = {
-  create: (data: any) => api.post('/storyboards', data),
-  update: (id: number, data: any) => api.put(`/storyboards/${id}`, data),
-  copy: (id: number, data?: { title?: string }) => api.post(`/storyboards/${id}/copy`, data || {}),
+  create: (data: Partial<Storyboard>) => api.post<Storyboard>('/storyboards', data),
+  update: (id: number, data: Partial<Storyboard>) => api.put<null>(`/storyboards/${id}`, data),
+  copy: (id: number, data?: { title?: string }) => api.post<Storyboard>(`/storyboards/${id}/copy`, data || {}),
   move: (id: number, direction: 'up' | 'down') => api.post(`/storyboards/${id}/move`, { direction }),
   generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
   generateFrame: (id: number, data: any) => api.post(`/storyboards/${id}/generate-frame`, data),
@@ -88,8 +104,8 @@ export const storyboardAPI = {
 }
 
 export const characterAPI = {
-  create: (data: any) => api.post('/characters', data),
-  update: (id: number, data: any) => api.put(`/characters/${id}`, data),
+  create: (data: Partial<Character>) => api.post<Character>('/characters', data),
+  update: (id: number, data: Partial<Character>) => api.put<null>(`/characters/${id}`, data),
   voiceSample: (id: number, episodeId: number) =>
     api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
   generateImage: (id: number, episodeId: number) =>
@@ -101,19 +117,19 @@ export const characterAPI = {
 }
 
 export const characterLibraryAPI = {
-  list: () => api.get<any[]>('/character-library'),
-  create: (data: any) => api.post('/character-library', data),
-  update: (id: number, data: any) => api.put(`/character-library/${id}`, data),
+  list: () => api.get<CharacterTemplate[]>('/character-library'),
+  create: (data: Partial<CharacterTemplate>) => api.post<CharacterTemplate>('/character-library', data),
+  update: (id: number, data: Partial<CharacterTemplate>) => api.put<null>(`/character-library/${id}`, data),
   del: (id: number) => api.del(`/character-library/${id}`),
   import: (id: number, dramaId: number, episodeId?: number) =>
     api.post(`/character-library/${id}/import`, { drama_id: dramaId, episode_id: episodeId }),
 }
 
 export const sceneAPI = {
-  create: (data: any) => api.post('/scenes', data),
+  create: (data: Partial<Scene>) => api.post<Scene>('/scenes', data),
   generateImage: (id: number, episodeId: number) =>
     api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
-  update: (id: number, data: any) => api.put(`/scenes/${id}`, data),
+  update: (id: number, data: Partial<Scene>) => api.put<null>(`/scenes/${id}`, data),
   del: (id: number) => api.del(`/scenes/${id}`),
   copy: (id: number, episodeId: number, allowCrossDrama = false) =>
     api.post(`/scenes/${id}/copy`, { episode_id: episodeId, allow_cross_drama: allowCrossDrama }),
@@ -143,9 +159,9 @@ export const gridAPI = {
     const q = new URLSearchParams()
     if (params?.episode_id) q.set('episode_id', String(params.episode_id))
     if (params?.drama_id) q.set('drama_id', String(params.drama_id))
-    return api.get(`/grid/history${q.size ? `?${q}` : ''}`)
+    return api.get<GridHistory[]>(`/grid/history${q.size ? `?${q}` : ''}`)
   },
-  historyGet: (id: number) => api.get(`/grid/history/${id}`),
+  historyGet: (id: number) => api.get<GridHistory>(`/grid/history/${id}`),
 }
 
 export const videoAPI = {
@@ -177,39 +193,41 @@ export const jobsAPI = {
     if (params?.status) q.set('status', params.status)
     if (params?.kind) q.set('kind', params.kind)
     if (params?.limit) q.set('limit', String(params.limit))
-    return api.get(`/jobs${q.size ? `?${q}` : ''}`)
+    // The backend returns the rows directly, unlike the paginated drama list.
+    return api.get<GenerationJob[]>(`/jobs${q.size ? `?${q}` : ''}`)
   },
-  get: (id: number) => api.get(`/jobs/${id}`),
-	 events: (id: number) => api.get<any[]>(`/jobs/${id}/events`),
-  cancel: (id: number) => api.post(`/jobs/${id}/cancel`),
-  retry: (id: number) => api.post(`/jobs/${id}/retry`),
-	 batchCancel: (jobIds: number[]) => api.post('/jobs/batch-cancel', { job_ids: jobIds }),
+  get: (id: number) => api.get<GenerationJob>(`/jobs/${id}`),
+  events: (id: number) => api.get<JobEvent[]>(`/jobs/${id}/events`),
+  cancel: (id: number) => api.post<GenerationJob>(`/jobs/${id}/cancel`),
+  retry: (id: number) => api.post<GenerationJob>(`/jobs/${id}/retry`),
+  // The backend serializes failures as a map keyed by job id.
+  batchCancel: (jobIds: number[]) => api.post<{ canceled: number[]; failures: Record<string, string> }>('/jobs/batch-cancel', { job_ids: jobIds }),
 }
 
 export const productionAPI = {
   list: (episodeId?: number, limit = 20) => {
     const q = new URLSearchParams({ limit: String(limit) })
     if (episodeId) q.set('episode_id', String(episodeId))
-    return api.get<any[]>(`/productions?${q}`)
+    return api.get<ProductionRun[]>(`/productions?${q}`)
   },
-  get: (id: number) => api.get(`/productions/${id}`),
-  create: (dramaId: number, episodeId: number) => api.post('/productions', { drama_id: dramaId, episode_id: episodeId }),
-  cancel: (id: number) => api.post(`/productions/${id}/cancel`),
-  retry: (id: number) => api.post(`/productions/${id}/retry`),
+  get: (id: number) => api.get<ProductionRun>(`/productions/${id}`),
+  create: (dramaId: number, episodeId: number) => api.post<ProductionRun>('/productions', { drama_id: dramaId, episode_id: episodeId }),
+  cancel: (id: number) => api.post<ProductionRun>(`/productions/${id}/cancel`),
+  retry: (id: number) => api.post<ProductionRun>(`/productions/${id}/retry`),
 }
 
 export const agentAPI = {
   chat: (type: string, data: any) => api.post(`/agent/${type}/chat`, data),
-	 runs: (params?: { episode_id?: number; status?: string; agent_type?: string }) => {
-		 const q = new URLSearchParams()
-		 if (params?.episode_id) q.set('episode_id', String(params.episode_id))
-		 if (params?.status) q.set('status', params.status)
-		 if (params?.agent_type) q.set('agent_type', params.agent_type)
-		 return api.get<any[]>(`/agent-runs${q.size ? `?${q}` : ''}`)
-	 },
-	 run: (id: number) => api.get(`/agent-runs/${id}`),
-	 cancelRun: (id: number) => api.post(`/agent-runs/${id}/cancel`),
-	 retryRun: (id: number) => api.post(`/agent-runs/${id}/retry`),
+  runs: (params?: { episode_id?: number; status?: string; agent_type?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.episode_id) q.set('episode_id', String(params.episode_id))
+    if (params?.status) q.set('status', params.status)
+    if (params?.agent_type) q.set('agent_type', params.agent_type)
+    return api.get<AgentRun[]>(`/agent-runs${q.size ? `?${q}` : ''}`)
+  },
+  run: (id: number) => api.get<{ run: AgentRun; events: AgentRunEvent[] }>(`/agent-runs/${id}`),
+  cancelRun: (id: number) => api.post<{ id: number; cancel_requested: boolean }>(`/agent-runs/${id}/cancel`),
+  retryRun: (id: number) => api.post<AgentRun>(`/agent-runs/${id}/retry`),
 }
 
 export type AIServiceType = 'text' | 'image' | 'video' | 'audio'
@@ -379,8 +397,8 @@ export const settingsAPI = {
   restorePromptTemplate: (id: number) => api.post(`/prompt-templates/${id}/restore-default`, {}),
   promptTemplateRevisions: (id: number) => api.get<any[]>(`/prompt-templates/${id}/revisions`),
   restorePromptTemplateRevision: (id: number, version: number) => api.post(`/prompt-templates/${id}/revisions/${version}/restore`, {}),
-  voices: (includeInactive = false) => api.get(`/ai-voices${includeInactive ? '?include_inactive=1' : ''}`),
-  syncVoices: () => api.post('/ai-voices/sync'),
+  voices: (includeInactive = false) => api.get<AIVoice[]>(`/ai-voices${includeInactive ? '?include_inactive=1' : ''}`),
+  syncVoices: () => api.post<{ count: number; message: string }>('/ai-voices/sync'),
   previewVoice: (voiceId: string, text: string, configId?: number) => api.post<{ voice_id: string; provider: string; audio_url: string }>(`/ai-voices/${encodeURIComponent(voiceId)}/preview`, { text, ...(configId ? { config_id: configId } : {}) }),
 }
 
@@ -440,9 +458,9 @@ export const organizationDataAPI = {
 
 
 export const propAPI = {
-  list: (dramaId: number) => api.get(`/props?drama_id=${dramaId}`),
-  create: (d: any) => api.post('/props', d),
-  update: (id: number, d: any) => api.put(`/props/${id}`, d),
+  list: (dramaId: number) => api.get<Prop[]>(`/props?drama_id=${dramaId}`),
+  create: (d: Partial<Prop>) => api.post<Prop>('/props', d),
+  update: (id: number, d: Partial<Prop>) => api.put<null>(`/props/${id}`, d),
   del: (id: number) => api.del(`/props/${id}`),
   generateImage: (id: number, episodeId?: number) =>
     api.post(`/props/${id}/generate-image`, episodeId ? { episode_id: episodeId } : {}),
@@ -455,11 +473,11 @@ export const assetAPI = {
       const value = params?.[key]
       if (value !== undefined && value !== '') q.set(key, String(value))
     }
-    return api.get(`/assets${q.size ? `?${q}` : ''}`)
+    return api.get<Asset[]>(`/assets${q.size ? `?${q}` : ''}`)
   },
-  get: (id: number) => api.get(`/assets/${id}`),
-  create: (data: any) => api.post('/assets', data),
-  update: (id: number, data: any) => api.put(`/assets/${id}`, data),
+  get: (id: number) => api.get<Asset>(`/assets/${id}`),
+  create: (data: Partial<Asset>) => api.post<Asset>('/assets', data),
+  update: (id: number, data: Partial<Asset>) => api.put<Asset>(`/assets/${id}`, data),
   del: (id: number) => api.del(`/assets/${id}`),
   apply: (id: number, data: { storyboard_id: number; frame_type: string }) => api.post(`/assets/${id}/apply`, data),
 }

@@ -1,15 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
-import DramaView from '../views/DramaView.vue'
-import WorkbenchView from '../views/WorkbenchView.vue'
-import SettingsView from '../views/SettingsView.vue'
-import AssetsView from '../views/AssetsView.vue'
 import AuthView from '../views/AuthView.vue'
-import AuditView from '../views/AuditView.vue'
-import InvitationView from '../views/InvitationView.vue'
-import CharacterLibraryView from '../views/CharacterLibraryView.vue'
-import JobsView from '../views/JobsView.vue'
 import { authStore } from '../auth'
+
+// 首屏必需的 HomeView / AuthView 静态引入；其余按需懒加载，减小初始 chunk 体积。
+const DramaView = () => import('../views/DramaView.vue')
+const WorkbenchView = () => import('../views/WorkbenchView.vue')
+const SettingsView = () => import('../views/SettingsView.vue')
+const AssetsView = () => import('../views/AssetsView.vue')
+const AuditView = () => import('../views/AuditView.vue')
+const InvitationView = () => import('../views/InvitationView.vue')
+const CharacterLibraryView = () => import('../views/CharacterLibraryView.vue')
+const JobsView = () => import('../views/JobsView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,7 +28,7 @@ const router = createRouter({
     { path: '/drama/:id/episode/:episodeNumber', name: 'workbench', component: WorkbenchView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/character-library', name: 'character-library', component: CharacterLibraryView },
-	{ path: '/jobs', name: 'jobs', component: JobsView },
+    { path: '/jobs', name: 'jobs', component: JobsView },
     { path: '/audit', name: 'audit', component: AuditView },
     { path: '/login', name: 'login', component: AuthView },
     { path: '/register', name: 'register', component: AuthView },

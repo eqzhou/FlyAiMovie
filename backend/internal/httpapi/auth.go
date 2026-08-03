@@ -31,6 +31,7 @@ const (
 var (
 	slugPattern      = regexp.MustCompile(`[^a-z0-9]+`)
 	errSetupComplete = errors.New("setup already completed")
+	errSetupLock     = errors.New("initial setup lock is unavailable")
 	errEmailTaken    = errors.New("email already registered")
 )
 
@@ -180,41 +181,66 @@ func createInitialAccount(body setupInput, email, passwordHash string) (models.U
 	now := response.Now()
 	var user models.User
 	var organization models.Organization
-	err := db.DB.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&models.User{}).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return errSetupComplete
-		}
-		organization = models.Organization{Name: strings.TrimSpace(body.OrganizationName), Slug: uniqueSlug(tx, body.OrganizationName), Status: "active", CreatedAt: now, UpdatedAt: now}
-		if err := tx.Create(&organization).Error; err != nil {
-			return err
-		}
-		displayName := strings.TrimSpace(body.DisplayName)
-		if displayName == "" {
-			displayName = email
-		}
-		verifiedAt := now
-		user = models.User{
-			Email: email, PasswordHash: passwordHash, DisplayName: displayName, Status: "active",
-			IsPlatformAdmin: true, EmailVerifiedAt: &verifiedAt,
-			CreatedAt: now, UpdatedAt: now,
-		}
-		if err := tx.Create(&user).Error; err != nil {
-			return err
-		}
-		membership := models.Membership{OrganizationID: organization.ID, UserID: user.ID, Role: "owner", CreatedAt: now, UpdatedAt: now}
-		if err := tx.Create(&membership).Error; err != nil {
-			return err
-		}
-		if err := claimLegacyResources(tx, organization.ID); err != nil {
-			return err
-		}
-		return db.SeedOrganizationDefaults(tx, organization.ID)
+	err := retrySetupTransaction(func() error {
+		return db.DB.Transaction(func(tx *gorm.DB) error {
+			// Platform settings is a database-backed singleton created during
+			// migration. Updating it first serializes the initial setup across
+			// requests and works on both PostgreSQL row locks and SQLite's
+			// write-transaction lock.
+			lockResult := tx.Model(&models.PlatformSettings{}).Where("id = ?", 1).Update("updated_at", response.Now())
+			if lockResult.Error != nil {
+				return lockResult.Error
+			}
+			if lockResult.RowsAffected != 1 {
+				return errSetupLock
+			}
+			var count int64
+			if err := tx.Model(&models.User{}).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return errSetupComplete
+			}
+			organization = models.Organization{Name: strings.TrimSpace(body.OrganizationName), Slug: uniqueSlug(tx, body.OrganizationName), Status: "active", CreatedAt: now, UpdatedAt: now}
+			if err := tx.Create(&organization).Error; err != nil {
+				return err
+			}
+			displayName := strings.TrimSpace(body.DisplayName)
+			if displayName == "" {
+				displayName = email
+			}
+			verifiedAt := now
+			user = models.User{
+				Email: email, PasswordHash: passwordHash, DisplayName: displayName, Status: "active",
+				IsPlatformAdmin: true, EmailVerifiedAt: &verifiedAt,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if err := tx.Create(&user).Error; err != nil {
+				return err
+			}
+			membership := models.Membership{OrganizationID: organization.ID, UserID: user.ID, Role: "owner", CreatedAt: now, UpdatedAt: now}
+			if err := tx.Create(&membership).Error; err != nil {
+				return err
+			}
+			if err := claimLegacyResources(tx, organization.ID); err != nil {
+				return err
+			}
+			return db.SeedOrganizationDefaults(tx, organization.ID)
+		})
 	})
 	return user, organization, err
+}
+
+func retrySetupTransaction(operation func() error) error {
+	var operationErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		operationErr = operation()
+		if operationErr == nil || errors.Is(operationErr, errSetupComplete) || !isSQLiteBusyError(operationErr) {
+			return operationErr
+		}
+		time.Sleep(time.Duration(1<<attempt) * 5 * time.Millisecond)
+	}
+	return operationErr
 }
 
 func createRegisteredAccount(body setupInput, email, passwordHash string, requireEmailVerification bool) (models.User, models.Organization, error) {

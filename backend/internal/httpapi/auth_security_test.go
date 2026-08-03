@@ -290,4 +290,26 @@ func TestPublicStaticRejectsSymlinkOutsideStorageRoot(t *testing.T) {
 	if regular.Code != http.StatusOK || regular.Body.String() != "inside media" {
 		t.Fatalf("regular static status=%d body=%q", regular.Code, regular.Body.String())
 	}
+	if got := regular.Header().Get("Content-Disposition"); got != "attachment" {
+		t.Fatalf("passive non-media Content-Disposition=%q", got)
+	}
+}
+
+func TestStaticActiveDocumentsAreForcedToDownload(t *testing.T) {
+	server, _ := testServerRouter(t)
+	server.Cfg.Auth.Enabled = false
+	path := filepath.Join(server.Store.Root, "payload.html")
+	if err := os.WriteFile(path, []byte("<script>alert(1)</script>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := performRequest(server.Router(), http.MethodGet, "/static/payload.html", "", nil)
+	if result.Code != http.StatusOK {
+		t.Fatalf("static document status=%d body=%s", result.Code, result.Body.String())
+	}
+	if got := result.Header().Get("Content-Disposition"); got != "attachment" {
+		t.Fatalf("Content-Disposition=%q", got)
+	}
+	if got := result.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("Content-Type=%q", got)
+	}
 }

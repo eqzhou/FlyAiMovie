@@ -52,6 +52,18 @@ func TestMediaUploadProbeRepairAndAssetApplication(t *testing.T) {
 	if data["probe_status"] != "completed" || data["duration_seconds"].(float64) <= 0 || data["width"] != float64(64) || data["height"] != float64(48) {
 		t.Fatalf("metadata=%#v", data)
 	}
+	dangerousName := performMediaUploadNamed(t, router, videoPath, "payload.html", map[string]string{"name": "Dangerous Filename"})
+	if dangerousName.Code != http.StatusCreated {
+		t.Fatalf("dangerous filename upload status=%d body=%s", dangerousName.Code, dangerousName.Body.String())
+	}
+	dangerousData := decodeResponse(t, dangerousName)["data"].(map[string]any)
+	if strings.HasSuffix(strings.ToLower(dangerousData["url"].(string)), ".html") {
+		t.Fatalf("uploaded media retained active extension: %#v", dangerousData)
+	}
+	static := performRequest(router, http.MethodGet, dangerousData["url"].(string), "", nil)
+	if static.Code != http.StatusOK || !strings.HasPrefix(static.Header().Get("Content-Type"), "video/mp4") || static.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("safe media static response status=%d type=%q disposition=%q", static.Code, static.Header().Get("Content-Type"), static.Header().Get("Content-Disposition"))
+	}
 	duplicateResponse := performMediaUpload(t, router, videoPath, map[string]string{"name": "Duplicate Video"})
 	if duplicateResponse.Code != http.StatusCreated {
 		t.Fatalf("duplicate upload status=%d body=%s", duplicateResponse.Code, duplicateResponse.Body.String())
@@ -65,8 +77,8 @@ func TestMediaUploadProbeRepairAndAssetApplication(t *testing.T) {
 	if err := db.DB.Where("organization_id = ? AND content_hash = ?", 0, data["content_hash"]).First(&cacheObject).Error; err != nil {
 		t.Fatal(err)
 	}
-	if cacheObject.ReferenceCount != 2 {
-		t.Fatalf("cache reference count=%d want 2", cacheObject.ReferenceCount)
+	if cacheObject.ReferenceCount != 3 {
+		t.Fatalf("cache reference count=%d want 3", cacheObject.ReferenceCount)
 	}
 	assertRequestStatus(t, router, http.MethodPost, "/api/v1/assets/"+idText(assetID)+"/probe", `{}`, http.StatusOK)
 	assertRequestStatus(t, router, http.MethodPost, "/api/v1/assets/metadata/repair", `{}`, http.StatusOK)
@@ -124,11 +136,55 @@ func TestMediaUploadRejectsOversizedContentBeforeParsingMultipart(t *testing.T) 
 	}
 }
 
+func TestMediaUploadRejectsUnknownBinaryContent(t *testing.T) {
+	_, router := testServerRouter(t)
+	path := filepath.Join(t.TempDir(), "payload.html")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{0}, 512), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := performMediaUpload(t, router, path, nil)
+	if result.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unknown binary status=%d body=%s", result.Code, result.Body.String())
+	}
+}
+
+func TestCanonicalMediaUploadExtensionNeverUsesActiveClientExtension(t *testing.T) {
+	for mime, want := range map[string]string{
+		"video/mp4":                ".mp4",
+		"video/webm":               ".webm",
+		"audio/mpeg":               ".mp3",
+		"audio/x-wav":              ".wav",
+		"text/html":                "",
+		"application/octet-stream": "",
+	} {
+		if got := canonicalMediaUploadExtension(mime); got != want {
+			t.Fatalf("mime %q extension=%q want %q", mime, got, want)
+		}
+	}
+	for format, test := range map[string]struct {
+		assetType string
+		want      string
+	}{
+		"matroska,webm": {assetType: "video", want: ".mkv"},
+		"avi":           {assetType: "video", want: ".avi"},
+		"ogg":           {assetType: "audio", want: ".ogg"},
+		"aiff":          {assetType: "audio", want: ".aiff"},
+	} {
+		if got := canonicalMediaProbeExtension(format, test.assetType); got != test.want {
+			t.Fatalf("format %q type %q extension=%q want %q", format, test.assetType, got, test.want)
+		}
+	}
+}
+
 func performMediaUpload(t *testing.T, router http.Handler, filePath string, fields map[string]string) *httptest.ResponseRecorder {
+	return performMediaUploadNamed(t, router, filePath, filepath.Base(filePath), fields)
+}
+
+func performMediaUploadNamed(t *testing.T, router http.Handler, filePath, filename string, fields map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	fileWriter, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	fileWriter, err := writer.CreateFormFile("file", filename)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -236,7 +236,7 @@ function stopAgentDetailRefresh() {
 function startAgentDetailRefresh() {
   stopAgentDetailRefresh()
   if (agentDetail.value?.run.status !== 'running') return
-  detailTimer = window.setInterval(refreshAgentDetail, 1000)
+  detailTimer = window.setInterval(refreshAgentDetail, 2000)
 }
 
 async function refreshAgentDetail() {

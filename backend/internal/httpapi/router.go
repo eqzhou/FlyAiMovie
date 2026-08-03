@@ -188,7 +188,27 @@ func (s *Server) serveStaticFile(c *gin.Context, relativePath string) {
 		response.NotFound(c, "media not found")
 		return
 	}
+	if requiresStaticDownload(info.Name()) {
+		// User-controlled media is same-origin.  Active document types must
+		// never be rendered inline, even if an older row or a manually placed
+		// file bypassed the upload extension normalizer.
+		c.Header("Content-Type", "application/octet-stream")
+		c.Header("Content-Disposition", "attachment")
+	}
 	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
+}
+
+func requiresStaticDownload(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif",
+		".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".ogv", ".mpeg", ".mpg",
+		".mp3", ".wav", ".ogg", ".oga", ".aac", ".flac", ".m4a", ".weba", ".aiff", ".mid", ".midi", ".vtt":
+		return false
+	default:
+		// Only known passive media is safe to render inline.  This also covers
+		// active types such as HTML/SVG/JS and arbitrary text or binary files.
+		return true
+	}
 }
 
 func routeTemplateLogger() gin.HandlerFunc {
