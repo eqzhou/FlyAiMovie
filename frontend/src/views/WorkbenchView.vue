@@ -10,6 +10,10 @@ import {
 import { authStore } from '../auth'
 import { safeMediaHref } from '../utils/mediaUrl'
 import { confirmAction } from '../composables/useConfirm'
+import {
+  gridFrameLabel, productionStageLabel, productionStatusLabel,
+  referenceImagesToText, shotStatusDot, storyboardStatusLabel,
+} from './workbench/labels'
 
 const route = useRoute()
 const router = useRouter()
@@ -363,10 +367,6 @@ function updateGridCellTarget(index: number, patch: Partial<GridCellTarget>) {
   gridCellErrors.value = { ...gridCellErrors.value, [index]: '' }
 }
 
-function gridFrameLabel(frameType: string) {
-  return ({ first_frame: '首帧', last_frame: '尾帧', composed: '分镜板' } as Record<string, string>)[frameType] || frameType
-}
-
 function gridAssignmentLabel(index: number) {
   const assignment = gridAssignments.value.find((item) => item.cell_index === index)
   const storyboard = storyboards.value.find((item) => item.id === assignment?.storyboard_id)
@@ -591,14 +591,6 @@ async function retryProduction() {
   } finally {
     busy.value = ''
   }
-}
-
-function productionStageLabel(stage?: string) {
-  return ({ script: '剧本生成', extract: '角色场景提取', storyboards: '分镜拆解', frames: '首帧生成', videos: '视频生成', tts: '对白配音', compose: '镜头合成', merge: '成片导出', completed: '制作完成' } as Record<string, string>)[stage || ''] || '准备中'
-}
-
-function productionStatusLabel(status?: string) {
-  return ({ queued: '制作中', succeeded: '已完成', failed: '失败', canceled: '已取消' } as Record<string, string>)[status || ''] || status || '等待中'
 }
 
 async function runAgent(type: string, message: string) {
@@ -1198,22 +1190,6 @@ async function assignGridCell(index: number) {
   }
 }
 
-function referenceImagesToText(value: any): string {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  if (!raw) return ''
-  if (raw.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        return parsed.map((item) => String(item ?? '').trim()).filter(Boolean).join('\n')
-      }
-    } catch {
-      // 非法 JSON 时退回按行解析
-    }
-  }
-  return raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join('\n')
-}
-
 // 镜头与角色的绑定关系保存在后端 storyboard_characters 表，分镜列表接口会同时
 // 返回 character_ids 与 characters。这里只把服务端返回值归一化成表单可用的数组，
 // 不在前端另存一份状态。
@@ -1505,17 +1481,6 @@ function toggleShot(id: number) {
   selectedShotIds.value = selectedShotIds.value.includes(id)
     ? selectedShotIds.value.filter((item) => item !== id)
     : [...selectedShotIds.value, id]
-}
-
-function shotStatusDot(sb: any) {
-  if (sb.composed_video_url) return 'ok'
-  if (sb.video_url) return 'run'
-  if (sb.status === 'failed') return 'fail'
-  return ''
-}
-
-function storyboardStatusLabel(value?: string) {
-  return ({ pending: '待制作', processing: '制作中', generated: '已生成', composed: '已合成', completed: '已完成', failed: '失败' } as Record<string, string>)[value || ''] || value || '待制作'
 }
 
 function selectStage(stage: string) {
