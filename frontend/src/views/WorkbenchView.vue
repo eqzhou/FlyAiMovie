@@ -26,6 +26,8 @@ import CharacterLibraryImportModal from './workbench/CharacterLibraryImportModal
 import CharacterFormModal from './workbench/CharacterFormModal.vue'
 import SceneFormModal from './workbench/SceneFormModal.vue'
 import StoryboardFormModal from './workbench/StoryboardFormModal.vue'
+import ProductionConfirmModal from './workbench/ProductionConfirmModal.vue'
+import EpisodeConfigModal from './workbench/EpisodeConfigModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -2023,55 +2025,25 @@ onUnmounted(() => {
       @save="savePromptEditor"
     />
 
-    <div v-if="showProductionModal" class="modal-mask" @click.self="showProductionModal=false">
-      <div class="modal production-modal" role="dialog" aria-modal="true" aria-labelledby="production-modal-title" @keydown.esc="showProductionModal=false">
-        <h3 id="production-modal-title">自动制作本集</h3>
-        <div class="production-modal-flow" aria-label="自动制作阶段">
-          <span v-for="label in ['剧本', '角色场景', '分镜', '首帧', '视频', '配音', '合成', '成片']" :key="label">{{ label }}</span>
-        </div>
-        <div class="production-service-list" aria-label="本次使用服务">
-          <span v-for="service in productionServices" :key="service.type" :class="{ missing: !service.config }"><small>{{ service.label }}</small><strong>{{ service.config?.name || '未绑定' }}</strong><em>{{ service.config?.provider || '请先配置' }}</em></span>
-        </div>
-        <p v-if="productionUsesExternalService" class="production-cost-note">包含外部 AI 服务，可能产生厂商费用。</p>
-        <p class="muted">将使用本集绑定的图片、视频和音频服务。制作期间仍可返回手动调整，失败后可从当前阶段重试。</p>
-        <p v-if="productionError" class="form-error" role="alert">{{ productionError }}</p>
-        <div class="modal-actions">
-          <button class="btn" type="button" @click="showProductionModal=false">取消</button>
-          <button class="btn btn-primary" type="button" :disabled="!!busy || !productionReady" @click="startProduction">{{ busy === 'production-start' ? '正在启动…' : '开始制作' }}</button>
-        </div>
-      </div>
-    </div>
+    <ProductionConfirmModal
+      v-if="showProductionModal"
+      :services="productionServices"
+      :uses-external-service="productionUsesExternalService"
+      :ready="productionReady"
+      :error="productionError"
+      :busy="busy"
+      @close="showProductionModal = false"
+      @start="startProduction"
+    />
 
-    <div v-if="episodeConfigForm" class="modal-mask" @click.self="episodeConfigForm=null">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="episode-config-title">
-        <h3 id="episode-config-title">剧集生成配置</h3>
-        <div class="field">
-          <label for="episode-image-config">图片配置</label>
-          <select id="episode-image-config" v-model.number="episodeConfigForm.image_config_id">
-            <option :value="0">请选择</option>
-            <option v-for="item in configs.filter(row => row.service_type === 'image')" :key="item.id" :value="item.id">{{ item.name }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="episode-video-config">视频配置</label>
-          <select id="episode-video-config" v-model.number="episodeConfigForm.video_config_id">
-            <option :value="0">请选择</option>
-            <option v-for="item in configs.filter(row => row.service_type === 'video')" :key="item.id" :value="item.id">{{ item.name }}</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="episode-audio-config">音频配置</label>
-          <select id="episode-audio-config" v-model.number="episodeConfigForm.audio_config_id">
-            <option :value="0">请选择</option>
-            <option v-for="item in configs.filter(row => row.service_type === 'audio')" :key="item.id" :value="item.id">{{ item.name }}</option>
-          </select>
-        </div>
-        <div class="modal-actions">
-          <button class="btn" @click="episodeConfigForm=null">取消</button>
-          <button class="btn btn-primary" :disabled="!!busy" @click="saveEpisodeConfig">保存配置</button>
-        </div>
-      </div>
-    </div>
+    <EpisodeConfigModal
+      v-if="episodeConfigForm"
+      :form="episodeConfigForm"
+      :configs="configs"
+      :busy="busy"
+      @close="episodeConfigForm = null"
+      @save="saveEpisodeConfig"
+    />
 
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
     <div v-if="busy" class="toast busy" role="status" aria-live="polite"><span class="busy-indicator" aria-hidden="true"></span>{{ busyLabel }}</div>
