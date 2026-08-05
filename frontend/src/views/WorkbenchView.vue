@@ -25,6 +25,7 @@ import PromptEditorModal from './workbench/PromptEditorModal.vue'
 import CharacterLibraryImportModal from './workbench/CharacterLibraryImportModal.vue'
 import CharacterFormModal from './workbench/CharacterFormModal.vue'
 import SceneFormModal from './workbench/SceneFormModal.vue'
+import StoryboardFormModal from './workbench/StoryboardFormModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -98,7 +99,7 @@ const sceneError = ref('')
 const storyboardError = ref('')
 const characterFormModal = ref<{ focus: () => void } | null>(null)
 const sceneFormModal = ref<{ focus: () => void } | null>(null)
-const storyboardTitleInput = ref<HTMLInputElement | null>(null)
+const storyboardFormModal = ref<{ focus: () => void } | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
@@ -1235,7 +1236,7 @@ async function openStoryboardForm(storyboard?: any) {
       }
     : blank
   await nextTick()
-  storyboardTitleInput.value?.focus()
+  storyboardFormModal.value?.focus()
 }
 
 async function addStoryboard() {
@@ -1251,7 +1252,7 @@ async function saveStoryboard() {
   storyboardError.value = ''
   if (!form?.title?.trim()) {
     storyboardError.value = '请输入分镜标题'
-    storyboardTitleInput.value?.focus()
+    storyboardFormModal.value?.focus()
     return
   }
   const duration = Number(form.duration)
@@ -1999,61 +2000,18 @@ onUnmounted(() => {
       @submit="saveScene"
     />
 
-    <div v-if="storyboardForm" class="modal-mask" @click.self="storyboardForm=null">
-      <form class="modal settings-modal settings-modal-wide storyboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-storyboard-title" @keydown.esc="storyboardForm=null" @submit.prevent="saveStoryboard">
-        <h3 id="add-storyboard-title">{{ storyboardForm.id ? '编辑镜头' : '添加分镜' }}</h3>
-        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
-        <p class="storyboard-form-group">基础信息</p>
-        <div class="field-grid">
-          <div class="field"><label for="storyboard-title">分镜标题 <span class="required-mark">*</span></label><input id="storyboard-title" ref="storyboardTitleInput" v-model="storyboardForm.title" maxlength="200" required /></div>
-          <div class="field"><label for="storyboard-duration">时长（秒）</label><input id="storyboard-duration" v-model.number="storyboardForm.duration" type="number" min="1" max="3600" /></div>
-          <div class="field settings-span">
-            <label for="storyboard-scene">所属场景</label>
-            <select id="storyboard-scene" v-model.number="storyboardForm.scene_id">
-              <option :value="0">不绑定场景</option>
-              <option v-for="option in storyboardSceneOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
-            </select>
-          </div>
-        </div>
-        <p class="storyboard-form-group">镜头语言</p>
-        <div class="field-grid">
-          <div class="field"><label for="storyboard-shot-type">景别</label><input id="storyboard-shot-type" v-model="storyboardForm.shot_type" maxlength="200" placeholder="如：中景" /></div>
-          <div class="field"><label for="storyboard-angle">机位角度</label><input id="storyboard-angle" v-model="storyboardForm.angle" maxlength="200" placeholder="如：平视" /></div>
-          <div class="field settings-span"><label for="storyboard-movement">运镜</label><input id="storyboard-movement" v-model="storyboardForm.movement" maxlength="200" placeholder="如：固定、推轨" /></div>
-        </div>
-        <p class="storyboard-form-group">场景信息</p>
-        <div class="field-grid">
-          <div class="field"><label for="storyboard-location">地点</label><input id="storyboard-location" v-model="storyboardForm.location" maxlength="200" placeholder="如：老城车站站台" /></div>
-          <div class="field"><label for="storyboard-time">时间</label><input id="storyboard-time" v-model="storyboardForm.time" maxlength="200" placeholder="如：黄昏" /></div>
-          <div class="field settings-span"><label for="storyboard-atmosphere">氛围</label><input id="storyboard-atmosphere" v-model="storyboardForm.atmosphere" maxlength="200" placeholder="如：克制而伤感" /></div>
-        </div>
-        <p class="storyboard-form-group">出场角色</p>
-        <div v-if="storyboardCharacterOptions.length" class="storyboard-character-picker" role="group" aria-label="出场角色">
-          <label v-for="option in storyboardCharacterOptions" :key="option.id" class="storyboard-character-option">
-            <input type="checkbox" :value="option.id" :checked="storyboardForm.character_ids.includes(option.id)" @change="toggleStoryboardCharacter(option.id)" />
-            <span>{{ option.label }}</span>
-          </label>
-        </div>
-        <p v-else class="muted sm">本集暂无角色，可先在角色阶段新增或用 AI 提取。</p>
-        <p class="storyboard-form-group">镜头内容</p>
-        <div class="field-grid">
-          <div class="field"><label for="storyboard-action">动作</label><textarea id="storyboard-action" v-model="storyboardForm.action" rows="3" maxlength="10000" /></div>
-          <div class="field"><label for="storyboard-result">结果</label><textarea id="storyboard-result" v-model="storyboardForm.result" rows="3" maxlength="10000" /></div>
-          <div class="field settings-span"><label for="storyboard-dialogue">对白</label><textarea id="storyboard-dialogue" v-model="storyboardForm.dialogue" rows="2" maxlength="10000" /></div>
-          <div class="field settings-span"><label for="storyboard-description">镜头描述</label><textarea id="storyboard-description" v-model="storyboardForm.description" rows="3" maxlength="10000" /></div>
-        </div>
-        <p class="storyboard-form-group">生成提示词</p>
-        <div class="field-grid">
-          <div class="field"><label for="storyboard-image-prompt">图片提示词</label><textarea id="storyboard-image-prompt" v-model="storyboardForm.image_prompt" rows="3" maxlength="10000" /></div>
-          <div class="field"><label for="storyboard-video-prompt">视频提示词</label><textarea id="storyboard-video-prompt" v-model="storyboardForm.video_prompt" rows="3" maxlength="10000" /></div>
-          <div class="field"><label for="storyboard-bgm-prompt">背景音乐提示词</label><textarea id="storyboard-bgm-prompt" v-model="storyboardForm.bgm_prompt" rows="3" maxlength="10000" /></div>
-          <div class="field"><label for="storyboard-sound-effect">音效</label><textarea id="storyboard-sound-effect" v-model="storyboardForm.sound_effect" rows="3" maxlength="10000" /></div>
-          <div class="field settings-span"><label for="storyboard-reference-images">多参考图 URL（每行一个，最多 8 张）</label><textarea id="storyboard-reference-images" v-model="storyboardForm.reference_images" rows="3" maxlength="10000" /></div>
-        </div>
-        <p v-if="storyboardError" class="form-error" role="alert">{{ storyboardError }}</p>
-        <div class="modal-actions"><button class="btn" type="button" @click="storyboardForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'storyboard-save' ? '保存中…' : '保存分镜' }}</button></div>
-      </form>
-    </div>
+    <StoryboardFormModal
+      v-if="storyboardForm"
+      ref="storyboardFormModal"
+      :form="storyboardForm"
+      :scene-options="storyboardSceneOptions"
+      :character-options="storyboardCharacterOptions"
+      :error="storyboardError"
+      :busy="busy"
+      @close="storyboardForm = null"
+      @submit="saveStoryboard"
+      @toggle-character="toggleStoryboardCharacter"
+    />
 
     <PromptEditorModal
       v-if="promptEditor"

@@ -590,7 +590,7 @@ test('mobile: global navigation collapses without hiding destinations', async ({
   expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth)
 })
 
-test('desktop: character and scene dialogs autofocus their first field', async ({ page }) => {
+test('desktop: character, scene and storyboard dialogs autofocus their first field', async ({ page }) => {
   await mockWorkbenchAPI(page)
   await page.goto('/drama/2/episode/1?stage=cast')
   await expect(page.getByRole('heading', { name: '角色' })).toBeVisible()
@@ -605,4 +605,12 @@ test('desktop: character and scene dialogs autofocus their first field', async (
   const sceneDialog = page.getByRole('dialog', { name: '添加场景' })
   await expect(sceneDialog).toBeVisible()
   await expect(sceneDialog.getByLabel(/地点.*\*/)).toBeFocused()
+
+  await sceneDialog.getByRole('button', { name: '取消' }).click()
+
+  await page.getByRole('tab', { name: '分镜与视频' }).click()
+  await page.getByRole('button', { name: '添加分镜' }).click()
+  const storyboardDialog = page.getByRole('dialog', { name: '添加分镜' })
+  await expect(storyboardDialog).toBeVisible()
+  await expect(storyboardDialog.getByLabel(/分镜标题.*\*/)).toBeFocused()
 })
