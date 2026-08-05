@@ -20,6 +20,7 @@ import {
   defaultGridAssignments, listOf, parseJSONList,
   type GridCellAssignment, type GridCellTarget,
 } from './workbench/grid'
+import { useWorkbenchStages } from './workbench/useWorkbenchStages'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,12 +34,7 @@ const voices = ref<any[]>([])
 const configs = ref<any[]>([])
 const promptTemplates = ref<any[]>([])
 const gridHist = ref<any[]>([])
-type WorkbenchStage = 'script' | 'cast' | 'grid' | 'boards' | 'export'
-const workbenchStages: WorkbenchStage[] = ['script', 'cast', 'grid', 'boards', 'export']
-const initialStage = workbenchStages.includes(String(route.query.stage) as WorkbenchStage)
-  ? String(route.query.stage) as WorkbenchStage
-  : 'script'
-const tab = ref<WorkbenchStage>(initialStage)
+const { active: tab, select: selectStage, handleKeydown: handleStageKeydown } = useWorkbenchStages()
 const rawContent = ref('')
 const busy = ref('')
 const log = ref('')
@@ -1451,32 +1447,6 @@ function toggleShot(id: number) {
     ? selectedShotIds.value.filter((item) => item !== id)
     : [...selectedShotIds.value, id]
 }
-
-function selectStage(stage: string) {
-  if (!workbenchStages.includes(stage as WorkbenchStage)) return
-  tab.value = stage as WorkbenchStage
-  router.replace({ query: { ...route.query, stage } })
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' })
-  nextTick(() => document.getElementById(`workbench-stage-${stage}`)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: reduceMotion ? 'auto' : 'smooth' }))
-}
-
-function handleStageKeydown(event: KeyboardEvent, index: number) {
-  let targetIndex = index
-  if (event.key === 'ArrowRight') targetIndex = (index + 1) % workbenchStages.length
-  else if (event.key === 'ArrowLeft') targetIndex = (index - 1 + workbenchStages.length) % workbenchStages.length
-  else if (event.key === 'Home') targetIndex = 0
-  else if (event.key === 'End') targetIndex = workbenchStages.length - 1
-  else return
-  event.preventDefault()
-  selectStage(workbenchStages[targetIndex])
-  nextTick(() => document.getElementById(`workbench-stage-${workbenchStages[targetIndex]}`)?.focus())
-}
-
-watch(() => route.query.stage, (stage) => {
-  const value = String(stage || '') as WorkbenchStage
-  if (workbenchStages.includes(value) && value !== tab.value) tab.value = value
-})
 
 watch([dramaId, episodeNumber], ([nextDramaId, nextEpisodeNumber], [previousDramaId, previousEpisodeNumber]) => {
   if (nextDramaId === previousDramaId && nextEpisodeNumber === previousEpisodeNumber) return
