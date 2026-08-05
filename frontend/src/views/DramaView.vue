@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { characterAPI, dramaAPI, episodeAPI, propAPI, sceneAPI, settingsAPI } from '../api'
 import { authStore } from '../auth'
 import { confirmAction } from '../composables/useConfirm'
+import { errorMessage } from '../utils/errorMessage'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,7 +137,7 @@ async function load() {
     }
   } catch (reason) {
     if (request !== loadRequest) return
-    error.value = reason instanceof Error ? reason.message : '项目加载失败'
+    error.value = errorMessage(reason, '项目加载失败')
   } finally {
     if (request === loadRequest) loading.value = false
   }
@@ -206,7 +207,7 @@ async function saveEpisode() {
     closeEpisodeDialog()
     await load()
   } catch (reason) {
-    episodeError.value = reason instanceof Error ? reason.message : (episodeForm.value.id ? '更新剧集失败' : '创建剧集失败')
+    episodeError.value = errorMessage(reason, (episodeForm.value.id ? '更新剧集失败' : '创建剧集失败'))
   } finally {
     busy.value = ''
   }
@@ -262,7 +263,7 @@ async function saveProp() {
     closePropDialog()
     await load()
   } catch (reason) {
-    propError.value = reason instanceof Error ? reason.message : (propForm.value.id ? '更新道具失败' : '添加道具失败')
+    propError.value = errorMessage(reason, (propForm.value.id ? '更新道具失败' : '添加道具失败'))
   } finally {
     busy.value = ''
   }
@@ -277,7 +278,7 @@ async function generatePropImage(prop: any) {
     notify('道具图片任务已提交')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '生成道具图片失败')
+    notify(errorMessage(reason, '生成道具图片失败'))
   } finally {
     busy.value = ''
   }
@@ -297,7 +298,7 @@ async function removeProp(prop: any) {
     notify('道具已删除')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '删除道具失败')
+    notify(errorMessage(reason, '删除道具失败'))
   } finally {
     busy.value = ''
   }
@@ -359,7 +360,7 @@ async function saveCharacter() {
     closeCharacterDialog()
     await load()
   } catch (reason) {
-    characterError.value = reason instanceof Error ? reason.message : (characterForm.value.id ? '更新角色失败' : '添加角色失败')
+    characterError.value = errorMessage(reason, (characterForm.value.id ? '更新角色失败' : '添加角色失败'))
   } finally {
     busy.value = ''
   }
@@ -374,7 +375,7 @@ async function generateCharacterImage(character: any) {
     notify('角色形象任务已提交')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '生成角色形象失败')
+    notify(errorMessage(reason, '生成角色形象失败'))
   } finally {
     busy.value = ''
   }
@@ -389,7 +390,7 @@ async function sampleCharacterVoice(character: any) {
     notify('试听已生成')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '生成试听失败')
+    notify(errorMessage(reason, '生成试听失败'))
   } finally {
     busy.value = ''
   }
@@ -401,7 +402,7 @@ async function saveCharacterToLibrary(character: any) {
     await characterAPI.saveToLibrary(character.id)
     notify(`已将「${character.name}」保存到角色库`)
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '保存到角色库失败')
+    notify(errorMessage(reason, '保存到角色库失败'))
   } finally {
     busy.value = ''
   }
@@ -421,7 +422,7 @@ async function removeCharacter(character: any) {
     notify('角色已删除')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '删除角色失败')
+    notify(errorMessage(reason, '删除角色失败'))
   } finally {
     busy.value = ''
   }
@@ -473,7 +474,7 @@ async function saveScene() {
     closeSceneDialog()
     await load()
   } catch (reason) {
-    sceneError.value = reason instanceof Error ? reason.message : (sceneForm.value.id ? '更新场景失败' : '添加场景失败')
+    sceneError.value = errorMessage(reason, (sceneForm.value.id ? '更新场景失败' : '添加场景失败'))
   } finally {
     busy.value = ''
   }
@@ -488,7 +489,7 @@ async function generateSceneImage(scene: any) {
     notify('场景图片任务已提交')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '生成场景图片失败')
+    notify(errorMessage(reason, '生成场景图片失败'))
   } finally {
     busy.value = ''
   }
@@ -508,7 +509,7 @@ async function removeScene(scene: any) {
     notify('场景已删除')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '删除场景失败')
+    notify(errorMessage(reason, '删除场景失败'))
   } finally {
     busy.value = ''
   }
@@ -552,7 +553,7 @@ async function confirmSceneTransfer() {
     closeSceneTransfer()
     await load()
   } catch (reason) {
-    transferError.value = reason instanceof Error ? reason.message : (transfer.mode === 'copy' ? '复制场景失败' : '迁移场景失败')
+    transferError.value = errorMessage(reason, (transfer.mode === 'copy' ? '复制场景失败' : '迁移场景失败'))
   } finally {
     busy.value = ''
   }
@@ -579,7 +580,7 @@ async function delEpisode(episode: any, event?: Event) {
     notify('剧集已删除')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '删除剧集失败')
+    notify(errorMessage(reason, '删除剧集失败'))
   } finally {
     busy.value = ''
   }
@@ -595,7 +596,7 @@ async function copyEpisode(episode: any, event?: Event) {
     notify(`已复制「${title}」`)
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '复制剧集失败')
+    notify(errorMessage(reason, '复制剧集失败'))
   } finally {
     busy.value = ''
   }
@@ -610,7 +611,7 @@ async function moveEpisode(episode: any, direction: 'up' | 'down', event?: Event
     notify(direction === 'up' ? '已上移' : '已下移')
     await load()
   } catch (reason) {
-    notify(reason instanceof Error ? reason.message : '调整顺序失败')
+    notify(errorMessage(reason, '调整顺序失败'))
   } finally {
     busy.value = ''
   }

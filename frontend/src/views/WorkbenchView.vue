@@ -10,6 +10,8 @@ import {
 import { authStore } from '../auth'
 import { safeMediaHref } from '../utils/mediaUrl'
 import { confirmAction } from '../composables/useConfirm'
+import { usePolling } from '../composables/usePolling'
+import { errorMessage } from '../utils/errorMessage'
 import {
   gridFrameLabel, productionStageLabel, productionStatusLabel,
   referenceImagesToText, shotStatusDot, storyboardStatusLabel,
@@ -43,7 +45,6 @@ const loadError = ref('')
 const assetRefreshWarning = ref('')
 const settingsLoadWarning = ref('')
 const refreshWarning = computed(() => [loadError.value, assetRefreshWarning.value, settingsLoadWarning.value].filter(Boolean).join('；'))
-const pollTimer = ref<number | null>(null)
 let toastTimer: number | null = null
 let loadRequest = 0
 let refreshRequest = 0
@@ -399,7 +400,7 @@ async function load(request = loadRequest): Promise<boolean> {
 	const settingsLabels = ['音色', 'AI 配置', '提示词']
 	settingsLoadWarning.value = settingsResults.flatMap((result, index) => {
 		if (result.status === 'fulfilled') return []
-		const detail = result.reason instanceof Error ? result.reason.message : '服务暂时不可用'
+		const detail = errorMessage(result.reason, '服务暂时不可用')
 		return [`${settingsLabels[index]}加载失败：${detail}`]
 	}).join('；')
   return true
@@ -420,7 +421,7 @@ async function loadWorkbench() {
     }
   } catch (error) {
     if (disposed || request !== loadRequest) return
-    loadError.value = error instanceof Error ? error.message : '加载失败'
+    loadError.value = errorMessage(error, '加载失败')
   } finally {
     if (!disposed && request === loadRequest) loading.value = false
   }
@@ -450,7 +451,7 @@ async function refreshAssets() {
   const failures: string[] = []
   results.forEach((result, index) => {
     if (result.status === 'rejected') {
-      const detail = result.reason instanceof Error ? result.reason.message : '服务暂时不可用'
+      const detail = errorMessage(result.reason, '服务暂时不可用')
       failures.push(`${labels[index]}加载失败：${detail}`)
     }
   })
@@ -482,18 +483,17 @@ async function refreshAssets() {
   assetRefreshWarning.value = failures.join('；')
 }
 
+const assetPoll = usePolling(() => refreshAssets().catch(() => {}), {
+  intervalMs: 5000,
+  shouldRun: () => hasActiveJobs.value || hasActiveProduction.value,
+})
+
 function startPoll() {
   if (disposed) return
-  stopPoll()
-  pollTimer.value = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && (hasActiveJobs.value || hasActiveProduction.value)) refreshAssets().catch(() => {})
-  }, 5000)
+  assetPoll.start()
 }
 function stopPoll() {
-  if (pollTimer.value) {
-    clearInterval(pollTimer.value)
-    pollTimer.value = null
-  }
+  assetPoll.stop()
 }
 
 async function saveContent() {
@@ -556,7 +556,7 @@ async function startProduction() {
     show('自动制作已开始')
     startPoll()
   } catch (error) {
-    productionError.value = error instanceof Error ? error.message : '自动制作启动失败'
+    productionError.value = errorMessage(error, '自动制作启动失败')
   } finally {
     busy.value = ''
   }
@@ -1183,7 +1183,7 @@ async function assignGridCell(index: number) {
     await refreshAssets()
   } catch (error) {
     if (gridContextVersion !== contextVersion || gridHistoryId.value !== historyID) return
-    const message = error instanceof Error ? error.message : '切片分配失败'
+    const message = errorMessage(error, '切片分配失败')
     gridCellErrors.value = { ...gridCellErrors.value, [index]: message }
   } finally {
     if (gridContextVersion === contextVersion && gridHistoryId.value === historyID) assigningGridCell.value = null
@@ -1459,7 +1459,7 @@ async function applySelectedPromptTemplate() {
     const result = await settingsAPI.previewPromptTemplate(editor.template_id, selectedPromptVariables(editor))
     editor.value = result.rendered
   } catch (error) {
-    editor.error = error instanceof Error ? error.message : '模板应用失败'
+    editor.error = errorMessage(error, '模板应用失败')
   } finally {
     busy.value = ''
   }

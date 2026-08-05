@@ -4,6 +4,7 @@ import { FolderInput, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { characterLibraryAPI, dramaAPI } from '../api'
 import { authStore } from '../auth'
 import { confirmAction } from '../composables/useConfirm'
+import { errorMessage } from '../utils/errorMessage'
 
 const templates = ref<any[]>([])
 const dramas = ref<any[]>([])
@@ -47,9 +48,9 @@ async function load() {
   const [library, projects] = await Promise.allSettled([characterLibraryAPI.list(), dramaAPI.list()])
   const failures: string[] = []
   if (library.status === 'fulfilled') templates.value = library.value
-  else failures.push(library.reason instanceof Error ? library.reason.message : '角色模板加载失败')
+  else failures.push(errorMessage(library.reason, '角色模板加载失败'))
   if (projects.status === 'fulfilled') dramas.value = projects.value.items || []
-  else failures.push(projects.reason instanceof Error ? projects.reason.message : '项目列表加载失败')
+  else failures.push(errorMessage(projects.reason, '项目列表加载失败'))
   loadError.value = failures.join('；')
   if (!selectedDrama.value && dramas.value.length) selectedDrama.value = dramas.value[0].id
   loading.value = false
@@ -74,7 +75,7 @@ async function create() {
     notify(isEditing ? '角色模板已更新' : '角色模板已创建')
     await load()
   } catch (reason) {
-    formError.value = reason instanceof Error ? reason.message : '模板保存失败'
+    formError.value = errorMessage(reason, '模板保存失败')
   } finally { busy.value = false }
 }
 
@@ -125,7 +126,7 @@ async function importTemplate() {
     notify(`已将 ${candidate.name} 导入项目`)
     importCandidate.value = null
   } catch (reason) {
-    importError.value = reason instanceof Error ? reason.message : '角色导入失败'
+    importError.value = errorMessage(reason, '角色导入失败')
   } finally { busy.value = false }
 }
 
@@ -141,7 +142,7 @@ async function remove(template: any) {
     await characterLibraryAPI.del(template.id)
     await load()
   } catch (reason) {
-    loadError.value = reason instanceof Error ? reason.message : '角色模板删除失败'
+    loadError.value = errorMessage(reason, '角色模板删除失败')
   }
 }
 

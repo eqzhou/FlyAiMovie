@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { agentAPI, jobsAPI } from '../api'
 import { authStore } from '../auth'
+import { usePolling } from '../composables/usePolling'
+import { errorMessage } from '../utils/errorMessage'
 
 const activeTab = ref<'jobs' | 'agents'>('jobs')
 const jobs = ref<any[]>([])
@@ -23,11 +25,17 @@ const error = ref('')
 const notice = ref('')
 const pendingJobActionIDs = ref<number[]>([])
 const batchCanceling = ref(false)
-let timer: number | null = null
-let detailTimer: number | null = null
 let noticeTimer: number | null = null
 let listRequestToken = 0
 let disposed = false
+
+// refreshAgentDetail / refresh are hoisted function declarations, so they are
+// safe to reference here even though they are defined further down.
+const listPoll = usePolling(() => refresh(), {
+  intervalMs: 4000,
+  shouldRun: () => active.value,
+})
+const detailPoll = usePolling(() => refreshAgentDetail(), { intervalMs: 2000 })
 
 function showNotice(text: string) {
   notice.value = text
@@ -125,7 +133,7 @@ async function load() {
     selected.value = selected.value.filter(id => jobs.value.some(row => row.id === id))
   } catch (reason) {
     if (token !== listRequestToken) return
-    error.value = reason instanceof Error ? reason.message : '加载任务失败'
+    error.value = errorMessage(reason, '加载任务失败')
   } finally {
     if (token === listRequestToken) loading.value = false
   }
@@ -141,7 +149,7 @@ async function loadAgentRuns() {
     agentRuns.value = rows
   } catch (reason) {
     if (token !== listRequestToken) return
-    error.value = reason instanceof Error ? reason.message : '加载 Agent 运行记录失败'
+    error.value = errorMessage(reason, '加载 Agent 运行记录失败')
   } finally {
     if (token === listRequestToken) loading.value = false
   }
@@ -168,7 +176,7 @@ async function toggleEvents(job: any) {
     events.value = { ...events.value, [job.id]: await jobsAPI.events(job.id) }
     expanded.value = job.id
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '加载任务事件失败'
+    error.value = errorMessage(reason, '加载任务事件失败')
   }
 }
 
@@ -179,7 +187,7 @@ async function cancel(job: any) {
     await jobsAPI.cancel(job.id)
     await load()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '取消任务失败'
+    error.value = errorMessage(reason, '取消任务失败')
   } finally {
     pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
@@ -192,7 +200,7 @@ async function retry(job: any) {
     await jobsAPI.retry(job.id)
     await load()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '重试任务失败'
+    error.value = errorMessage(reason, '重试任务失败')
   } finally {
     pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => id !== job.id)
   }
@@ -208,7 +216,7 @@ async function batchCancel() {
     selected.value = []
     await load()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '批量取消失败'
+    error.value = errorMessage(reason, '批量取消失败')
   } finally {
     pendingJobActionIDs.value = pendingJobActionIDs.value.filter((id) => !targetIDs.includes(id))
     batchCanceling.value = false
@@ -222,21 +230,20 @@ async function openAgentDetail(run: any) {
     agentDetail.value = await agentAPI.run(run.id)
     startAgentDetailRefresh()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '加载 Agent 详情失败'
+    error.value = errorMessage(reason, '加载 Agent 详情失败')
   } finally {
     detailLoading.value = false
   }
 }
 
 function stopAgentDetailRefresh() {
-  if (detailTimer) window.clearInterval(detailTimer)
-  detailTimer = null
+  detailPoll.stop()
 }
 
 function startAgentDetailRefresh() {
   stopAgentDetailRefresh()
   if (agentDetail.value?.run.status !== 'running') return
-  detailTimer = window.setInterval(refreshAgentDetail, 2000)
+  detailPoll.start()
 }
 
 async function refreshAgentDetail() {
@@ -253,7 +260,7 @@ async function refreshAgentDetail() {
     }
   } catch (reason) {
     stopAgentDetailRefresh()
-    error.value = reason instanceof Error ? reason.message : '刷新 Agent 详情失败'
+    error.value = errorMessage(reason, '刷新 Agent 详情失败')
   } finally {
     detailRefreshing.value = false
   }
@@ -272,7 +279,7 @@ async function cancelAgentRun(run: any) {
     await agentAPI.cancelRun(run.id)
     await loadAgentRuns()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '取消 Agent 运行失败'
+    error.value = errorMessage(reason, '取消 Agent 运行失败')
   } finally {
     cancelingAgentRunID.value = null
   }
@@ -287,7 +294,7 @@ async function retryAgentRun(run: any) {
     showNotice(`Agent 重试 #${retry.id} 已启动`)
     await loadAgentRuns()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '重试 Agent 运行失败'
+    error.value = errorMessage(reason, '重试 Agent 运行失败')
   } finally {
     retryingAgentRunID.value = null
   }
@@ -317,12 +324,11 @@ onMounted(async () => {
   disposed = false
   await load()
   if (disposed) return
-  timer = window.setInterval(() => { if (active.value && document.visibilityState === 'visible') refresh() }, 4000)
+  listPoll.start()
 })
 onUnmounted(() => {
   disposed = true
   listRequestToken += 1
-  if (timer) window.clearInterval(timer)
   if (noticeTimer) window.clearTimeout(noticeTimer)
   stopAgentDetailRefresh()
 })

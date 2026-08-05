@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { auditAPI } from '../api'
+import { errorMessage } from '../utils/errorMessage'
 
 const rows = ref<any[]>([])
 const page = ref(1)
@@ -24,7 +25,7 @@ async function load(nextPage = page.value) {
     page.value = result.pagination.page
   } catch (reason) {
     if (token !== requestToken) return
-    error.value = reason instanceof Error ? reason.message : '加载失败'
+    error.value = errorMessage(reason, '加载失败')
   } finally {
     if (token === requestToken) loading.value = false
   }

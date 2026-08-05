@@ -8,6 +8,7 @@ import { passwordValidationMessage } from '../utils/password'
 import { confirmAction } from '../composables/useConfirm'
 import ServiceBundleDialog from '../components/ServiceBundleDialog.vue'
 import SkillRegistryEditor from '../components/SkillRegistryEditor.vue'
+import { errorMessage } from '../utils/errorMessage'
 
 const configs = ref<any[]>([])
 const router = useRouter()
@@ -188,7 +189,7 @@ function show(m: string, duration = 2800) {
 }
 
 function humanizeError(error: unknown, fallback = '操作失败') {
-  const raw = error instanceof Error ? error.message : String(error || '')
+  const raw = errorMessage(error, String(error || ''))
   const message = raw.trim() || fallback
   if (/连接失败|厂商|凭据|模型|超时|证书|域名/.test(message)) return message
   if (/provider connection failed/i.test(message)) return message.replace(/^provider connection failed:\s*/i, '连接失败：')
@@ -222,7 +223,7 @@ async function load() {
   const failures: string[] = []
   results.forEach((result, index) => {
     if (result.status === 'fulfilled') requests[index].apply(result.value)
-    else failures.push(result.reason instanceof Error ? result.reason.message : `${requests[index].label}加载失败`)
+    else failures.push(errorMessage(result.reason, `${requests[index].label}加载失败`))
   })
   loadError.value = failures.join('；')
   loading.value = false
@@ -242,7 +243,7 @@ async function addMember() {
     showMemberModal.value = false
     show('成员已添加')
   } catch (error) {
-    show(error instanceof Error ? error.message : '添加成员失败')
+    show(errorMessage(error, '添加成员失败'))
     savingMember.value = false
     return
   }
@@ -268,7 +269,7 @@ async function inviteMember() {
       ? '邀请已创建，邮件已尝试发送；也可复制链接备用'
       : '邀请已创建。邮件未配置或发送失败，请复制链接发送给成员', 4200)
   } catch (error) {
-    show(error instanceof Error ? error.message : '创建邀请失败')
+    show(errorMessage(error, '创建邀请失败'))
     inviting.value = false
     return
   }
@@ -293,7 +294,7 @@ async function revokeInvitation(invitation: any) {
     await memberAPI.revokeInvitation(invitation.id)
     show('邀请已撤销')
   } catch (error) {
-    show(error instanceof Error ? error.message : '撤销邀请失败')
+    show(errorMessage(error, '撤销邀请失败'))
     return
   }
   try { invitations.value = await memberAPI.invitations() } catch { show('邀请已撤销，但邀请列表暂未刷新') }
@@ -311,7 +312,7 @@ async function resendInvitation(invitation: any) {
       ? '邀请已重发，邮件已尝试发送；也可复制新链接'
       : '邀请已重发。邮件未配置或发送失败，请复制新链接', 4200)
   } catch (error) {
-    show(error instanceof Error ? error.message : '重发邀请失败')
+    show(errorMessage(error, '重发邀请失败'))
     inviting.value = false
     return
   }
@@ -374,7 +375,7 @@ async function changeMemberRole(member: any) {
     await memberAPI.update(member.user_id, member.role)
     show('角色已更新')
   } catch (error) {
-    show(error instanceof Error ? error.message : '更新角色失败')
+    show(errorMessage(error, '更新角色失败'))
     await load()
   }
 }
@@ -391,7 +392,7 @@ async function removeMember(member: any) {
     await memberAPI.remove(member.user_id)
     show('成员已移除')
   } catch (error) {
-    show(error instanceof Error ? error.message : '移除成员失败')
+    show(errorMessage(error, '移除成员失败'))
     return
   }
   try { members.value = await memberAPI.list() } catch { show('成员已移除，但成员列表暂未刷新') }
@@ -409,7 +410,7 @@ async function loadPlatformSettings() {
     }
     platformSettingsLoaded.value = true
   } catch (error) {
-    platformSettingsError.value = error instanceof Error ? error.message : '加载注册设置失败'
+    platformSettingsError.value = errorMessage(error, '加载注册设置失败')
   } finally {
     platformSettingsLoading.value = false
   }
@@ -431,7 +432,7 @@ async function savePlatformSettings() {
     platformSettingsLoaded.value = true
     show('注册设置已保存')
   } catch (error) {
-    platformSettingsError.value = error instanceof Error ? error.message : '保存注册设置失败'
+    platformSettingsError.value = errorMessage(error, '保存注册设置失败')
     show(platformSettingsError.value)
   } finally {
     savingPlatformSettings.value = false
@@ -451,7 +452,7 @@ async function changePassword() {
     showPasswordModal.value = false
     show('密码已更新')
   } catch (error) {
-    show(error instanceof Error ? error.message : '修改密码失败')
+    show(errorMessage(error, '修改密码失败'))
   } finally {
     changingPassword.value = false
   }
@@ -469,7 +470,7 @@ async function exportOrganization() {
     URL.revokeObjectURL(url)
     show('组织数据已导出')
   } catch (error) {
-    show(error instanceof Error ? error.message : '导出失败')
+    show(errorMessage(error, '导出失败'))
   }
 }
 
@@ -486,7 +487,7 @@ async function deleteOrganization() {
     await authStore.logout()
     await router.replace('/login')
   } catch (error) {
-    show(error instanceof Error ? error.message : '删除组织失败')
+    show(errorMessage(error, '删除组织失败'))
   }
 }
 
@@ -495,7 +496,7 @@ async function saveQuota() {
     await quotaAPI.update({ daily_job_limit: quota.value.daily_job_limit, max_active_jobs: quota.value.max_active_jobs, daily_budget_cny: quota.value.daily_budget_cny, budget_warning_percent: quota.value.budget_warning_percent })
     show('生成配额已保存')
   } catch (error) {
-    show(error instanceof Error ? error.message : '保存配额失败')
+    show(errorMessage(error, '保存配额失败'))
     return
   }
   try {
@@ -517,7 +518,7 @@ async function purgeCache() {
     cache.value = await cacheAPI.stats()
     show('过期缓存已清理')
   } catch (error) {
-    show(error instanceof Error ? error.message : '清理缓存失败')
+    show(errorMessage(error, '清理缓存失败'))
   }
 }
 
@@ -687,7 +688,7 @@ async function remove(id: number) {
     await load()
     show('AI 服务已删除')
   } catch (error) {
-    show(error instanceof Error ? error.message : '删除 AI 服务失败')
+    show(errorMessage(error, '删除 AI 服务失败'))
   }
 }
 
@@ -698,7 +699,7 @@ async function syncVoices() {
     voiceCatalog.value = await settingsAPI.voices(true)
     show(`已同步 ${res.count ?? voiceCatalog.value.length} 个音色`)
   } catch (error) {
-    show(`同步失败：${error instanceof Error ? error.message : '未知错误'}`)
+    show(`同步失败：${errorMessage(error, '未知错误')}`)
   } finally {
     syncingVoices.value = false
   }
@@ -713,7 +714,7 @@ async function previewVoice(voice: any) {
     voicePreviewURLs.value = { ...voicePreviewURLs.value, [voice.voice_id]: result.audio_url }
     show('试听已生成')
   } catch (error) {
-    show(`试听失败：${error instanceof Error ? error.message : '未知错误'}`)
+    show(`试听失败：${errorMessage(error, '未知错误')}`)
   } finally {
     previewingVoiceID.value = ''
   }
@@ -800,7 +801,7 @@ async function previewPromptForm() {
     promptDraftPreview.value = result.rendered
   } catch (error) {
     if (requestID !== promptDraftRequestID || String(promptForm.value?.content || '') !== content) return
-    promptFormError.value = error instanceof Error ? error.message : '模板检查失败'
+    promptFormError.value = errorMessage(error, '模板检查失败')
   } finally {
     if (requestID === promptDraftRequestID) previewingPromptDraft.value = false
   }
@@ -829,7 +830,7 @@ async function savePrompt() {
     if (promptForm.value.id) await settingsAPI.updatePromptTemplate(promptForm.value.id, data)
     else await settingsAPI.createPromptTemplate(data)
   } catch (error) {
-    promptFormError.value = error instanceof Error ? error.message : '保存失败'
+    promptFormError.value = errorMessage(error, '保存失败')
     savingPrompt.value = false
     return
   }
@@ -873,7 +874,7 @@ async function renderPreview() {
   } catch (error) {
     if (requestID !== previewRequestID || Number(previewTemplate.value?.id) !== templateID) return
     previewResult.value = ''
-    previewError.value = error instanceof Error ? error.message : '预览失败'
+    previewError.value = errorMessage(error, '预览失败')
   } finally {
     if (requestID === previewRequestID) previewingTemplate.value = false
   }
@@ -891,7 +892,7 @@ async function restorePrompt(template: any) {
     promptTemplates.value = await settingsAPI.promptTemplates()
     show('已恢复内置模板')
   } catch (error) {
-    show(error instanceof Error ? error.message : '恢复模板失败')
+    show(errorMessage(error, '恢复模板失败'))
   }
 }
 
@@ -908,7 +909,7 @@ async function openPromptHistory(template: any) {
     promptRevisions.value = revisions
   } catch (error) {
     if (requestID !== promptHistoryRequestID || Number(revisionTemplate.value?.id) !== templateID) return
-    promptHistoryError.value = error instanceof Error ? error.message : '版本历史加载失败'
+    promptHistoryError.value = errorMessage(error, '版本历史加载失败')
   } finally {
     if (requestID === promptHistoryRequestID && Number(revisionTemplate.value?.id) === templateID) promptHistoryLoading.value = false
   }
@@ -938,7 +939,7 @@ async function restorePromptRevision(revision: any) {
     promptActionNotice.value = '已恢复为新版本'
     show('已恢复为新版本')
   } catch (error) {
-    promptHistoryError.value = error instanceof Error ? error.message : '版本恢复失败'
+    promptHistoryError.value = errorMessage(error, '版本恢复失败')
   } finally {
     restoringRevision.value = null
   }
@@ -962,7 +963,7 @@ async function removePrompt(template: any) {
     promptTemplates.value = await settingsAPI.promptTemplates()
     show('提示词已删除')
   } catch (error) {
-    show(error instanceof Error ? error.message : '删除模板失败')
+    show(errorMessage(error, '删除模板失败'))
   }
 }
 
@@ -974,7 +975,7 @@ async function saveAgent() {
     agentForm.value = null
     await load()
   } catch (error) {
-    show(error instanceof Error ? error.message : '保存 Agent 配置失败')
+    show(errorMessage(error, '保存 Agent 配置失败'))
   }
 }
 
