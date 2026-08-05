@@ -3,7 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +26,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/services/production"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"github.com/gin-gonic/gin"
 )
 
@@ -312,19 +312,9 @@ func parseReferenceMediaValues(value string) ([]string, error) {
 	if strings.HasPrefix(value, "data:") {
 		return []string{value}, nil
 	}
-	items := []string(nil)
-	if strings.HasPrefix(value, "[") {
-		if err := json.Unmarshal([]byte(value), &items); err != nil {
-			return nil, fmt.Errorf("invalid reference images: %w", err)
-		}
-	} else {
-		items = strings.Split(value, ",")
-	}
-	clean := make([]string, 0, len(items))
-	for _, item := range items {
-		if item = strings.TrimSpace(item); item != "" {
-			clean = append(clean, item)
-		}
+	clean, err := textutil.ParseStringList(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid reference images: %w", err)
 	}
 	return clean, nil
 }

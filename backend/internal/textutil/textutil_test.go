@@ -1,6 +1,10 @@
 package textutil
 
-import "testing"
+import (
+	"errors"
+	"reflect"
+	"testing"
+)
 
 func TestFirstNonEmpty(t *testing.T) {
 	cases := []struct {
@@ -43,6 +47,62 @@ func TestFirstNonBlank(t *testing.T) {
 				t.Fatalf("FirstNonBlank(%q) = %q, want %q", tc.values, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseStringList(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{name: "empty input yields empty slice", raw: "", want: []string{}},
+		{name: "whitespace-only input yields empty slice", raw: "   ", want: []string{}},
+		{name: "decodes JSON array", raw: `["a","b"]`, want: []string{"a", "b"}},
+		{name: "empty JSON array yields empty slice", raw: `[]`, want: []string{}},
+		{name: "trims items inside JSON array", raw: `[" a ","b"]`, want: []string{"a", "b"}},
+		{name: "drops blank items inside JSON array", raw: `["a","","  "]`, want: []string{"a"}},
+		{name: "splits comma-separated value", raw: "a,b", want: []string{"a", "b"}},
+		{name: "trims comma-separated items", raw: " a , b ", want: []string{"a", "b"}},
+		{name: "drops blank comma-separated items", raw: "a,,b", want: []string{"a", "b"}},
+		{name: "single value becomes one item", raw: "only", want: []string{"only"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseStringList(tc.raw)
+			if err != nil {
+				t.Fatalf("ParseStringList(%q) returned error: %v", tc.raw, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ParseStringList(%q) = %#v, want %#v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseStringListNeverReturnsNilOnSuccess(t *testing.T) {
+	for _, raw := range []string{"", "  ", "[]", "a"} {
+		got, err := ParseStringList(raw)
+		if err != nil {
+			t.Fatalf("ParseStringList(%q) returned error: %v", raw, err)
+		}
+		if got == nil {
+			t.Fatalf("ParseStringList(%q) returned nil slice, want non-nil", raw)
+		}
+	}
+}
+
+func TestParseStringListRejectsMalformedJSON(t *testing.T) {
+	got, err := ParseStringList(`["a"`)
+	if err == nil {
+		t.Fatalf("ParseStringList did not report malformed JSON, got %#v", got)
+	}
+	if !errors.Is(err, ErrInvalidJSONList) {
+		t.Fatalf("error %v does not match ErrInvalidJSONList", err)
+	}
+	if got != nil {
+		t.Fatalf("ParseStringList returned %#v on error, want nil", got)
 	}
 }
 

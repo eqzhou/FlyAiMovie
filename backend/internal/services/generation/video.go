@@ -16,6 +16,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/services/mediaref"
 	"github.com/eqzhou/flyaimovie/internal/storage"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"gorm.io/gorm"
 )
 
@@ -150,19 +151,9 @@ func parseVideoReferenceURLs(raw string) ([]string, error) {
 	if strings.HasPrefix(raw, "data:") {
 		return []string{raw}, nil
 	}
-	values := []string(nil)
-	if strings.HasPrefix(raw, "[") {
-		if err := json.Unmarshal([]byte(raw), &values); err != nil {
-			return nil, fmt.Errorf("invalid reference image URLs: %w", err)
-		}
-	} else {
-		values = strings.Split(raw, ",")
-	}
-	clean := make([]string, 0, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			clean = append(clean, value)
-		}
+	clean, err := textutil.ParseStringList(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid reference image URLs: %w", err)
 	}
 	if len(clean) > 8 {
 		return nil, fmt.Errorf("at most 8 video reference images are allowed")
