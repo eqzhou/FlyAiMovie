@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"gorm.io/gorm"
 )
 
@@ -53,34 +54,25 @@ func (ctx Context) values() map[string]string {
 		"character_names":       joinNames(ctx.CharacterNames),
 		"scene_names":           joinNames(ctx.SceneNames),
 		"shot_title":            ctx.Storyboard.Title,
-		"shot_description":      firstNonEmpty(ctx.Storyboard.Description, ctx.Storyboard.Action, ctx.Storyboard.Title),
-		"image_prompt":          firstNonEmpty(ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description, ctx.Storyboard.Action),
-		"video_prompt":          firstNonEmpty(ctx.Storyboard.VideoPrompt, ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description),
+		"shot_description":      textutil.FirstNonBlank(ctx.Storyboard.Description, ctx.Storyboard.Action, ctx.Storyboard.Title),
+		"image_prompt":          textutil.FirstNonBlank(ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description, ctx.Storyboard.Action),
+		"video_prompt":          textutil.FirstNonBlank(ctx.Storyboard.VideoPrompt, ctx.Storyboard.ImagePrompt, ctx.Storyboard.Description),
 		"grid_rows":             intString(ctx.GridRows),
 		"grid_cols":             intString(ctx.GridCols),
 		"grid_mode":             ctx.GridMode,
 		"character_name":        ctx.Character.Name,
-		"character_role":        firstNonEmpty(ctx.Character.Role, "角色"),
-		"character_appearance":  firstNonEmpty(ctx.Character.Appearance, ctx.Character.Description, ctx.Character.Name),
+		"character_role":        textutil.FirstNonBlank(ctx.Character.Role, "角色"),
+		"character_appearance":  textutil.FirstNonBlank(ctx.Character.Appearance, ctx.Character.Description, ctx.Character.Name),
 		"character_description": ctx.Character.Description,
 		"character_personality": ctx.Character.Personality,
 		"scene_location":        ctx.Scene.Location,
-		"scene_time":            firstNonEmpty(ctx.Scene.Time, "日"),
-		"scene_prompt":          firstNonEmpty(ctx.Scene.Prompt, ctx.Scene.Location),
+		"scene_time":            textutil.FirstNonBlank(ctx.Scene.Time, "日"),
+		"scene_prompt":          textutil.FirstNonBlank(ctx.Scene.Prompt, ctx.Scene.Location),
 		"prop_name":             ctx.Prop.Name,
-		"prop_type":             firstNonEmpty(ctx.Prop.Type, "道具"),
+		"prop_type":             textutil.FirstNonBlank(ctx.Prop.Type, "道具"),
 		"prop_description":      ctx.Prop.Description,
-		"prop_prompt":           firstNonEmpty(ctx.Prop.Prompt, ctx.Prop.Name),
+		"prop_prompt":           textutil.FirstNonBlank(ctx.Prop.Prompt, ctx.Prop.Name),
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func intString(value int) string {
@@ -164,7 +156,7 @@ func ApplyTemplate(database *gorm.DB, organizationID uint, key, category string,
 // explicitPrompt overrides the shot image/description variables when provided.
 func FramePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, storyboard models.Storyboard, frameType, explicitPrompt string, characterNames, sceneNames []string) Resolution {
 	explicit := strings.TrimSpace(explicitPrompt)
-	instruction := firstNonEmpty(explicit, storyboard.ImagePrompt, storyboard.Description, storyboard.Action, storyboard.Title)
+	instruction := textutil.FirstNonBlank(explicit, storyboard.ImagePrompt, storyboard.Description, storyboard.Action, storyboard.Title)
 	if strings.TrimSpace(instruction) == "" {
 		return Resolution{Source: "fallback", Key: "storyboard_image"}
 	}
@@ -193,7 +185,7 @@ func FramePrompt(database *gorm.DB, organizationID uint, drama models.Drama, epi
 // explicitPrompt overrides the shot video/image variables when provided.
 func VideoPrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, storyboard models.Storyboard, explicitPrompt string, characterNames, sceneNames []string) Resolution {
 	explicit := strings.TrimSpace(explicitPrompt)
-	instruction := firstNonEmpty(explicit, storyboard.VideoPrompt, storyboard.ImagePrompt, storyboard.Description, storyboard.Action, storyboard.Title)
+	instruction := textutil.FirstNonBlank(explicit, storyboard.VideoPrompt, storyboard.ImagePrompt, storyboard.Description, storyboard.Action, storyboard.Title)
 	if strings.TrimSpace(instruction) == "" {
 		return Resolution{Source: "fallback", Key: "storyboard_video"}
 	}
@@ -221,7 +213,7 @@ func GridPrompt(database *gorm.DB, organizationID uint, drama models.Drama, epis
 	for i := 0; i < rows*cols; i++ {
 		if i < len(shots) {
 			sb := shots[i]
-			p := firstNonEmpty(sb.ImagePrompt, sb.Description, sb.Action, sb.Title)
+			p := textutil.FirstNonBlank(sb.ImagePrompt, sb.Description, sb.Action, sb.Title)
 			if p == "" {
 				p = "cinematic shot"
 			}
@@ -257,7 +249,7 @@ func GridPrompt(database *gorm.DB, organizationID uint, drama models.Drama, epis
 // explicitPrompt overrides appearance/description variables when provided.
 func CharacterImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, character models.Character, explicitPrompt string) Resolution {
 	explicit := strings.TrimSpace(explicitPrompt)
-	instruction := firstNonEmpty(explicit, character.Appearance, character.Description, character.Name)
+	instruction := textutil.FirstNonBlank(explicit, character.Appearance, character.Description, character.Name)
 	if strings.TrimSpace(instruction) == "" {
 		return Resolution{Source: "fallback", Key: "character_image"}
 	}
@@ -266,7 +258,7 @@ func CharacterImagePrompt(database *gorm.DB, organizationID uint, drama models.D
 		shotCharacter.Appearance = explicit
 		shotCharacter.Description = explicit
 	}
-	fallback := strings.TrimSpace(shotCharacter.Name + ", " + firstNonEmpty(shotCharacter.Appearance, shotCharacter.Description, "人物立绘") + ", high quality, front view, white background")
+	fallback := strings.TrimSpace(shotCharacter.Name + ", " + textutil.FirstNonBlank(shotCharacter.Appearance, shotCharacter.Description, "人物立绘") + ", high quality, front view, white background")
 	context := Context{
 		OrganizationID: organizationID, Drama: drama, Episode: episode, Character: shotCharacter,
 		CharacterNames: []string{shotCharacter.Name}, UserInstruction: instruction,
@@ -277,7 +269,7 @@ func CharacterImagePrompt(database *gorm.DB, organizationID uint, drama models.D
 // SceneImagePrompt builds the image prompt for a scene environment generation.
 func SceneImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, scene models.Scene, explicitPrompt string) Resolution {
 	explicit := strings.TrimSpace(explicitPrompt)
-	instruction := firstNonEmpty(explicit, scene.Prompt, scene.Location)
+	instruction := textutil.FirstNonBlank(explicit, scene.Prompt, scene.Location)
 	if strings.TrimSpace(instruction) == "" {
 		return Resolution{Source: "fallback", Key: "scene_image"}
 	}
@@ -285,10 +277,10 @@ func SceneImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama
 	if explicit != "" {
 		shotScene.Prompt = explicit
 	}
-	fallback := firstNonEmpty(shotScene.Prompt, strings.TrimSpace(shotScene.Location+", "+firstNonEmpty(shotScene.Time, "日")+", cinematic scene, high quality"))
+	fallback := textutil.FirstNonBlank(shotScene.Prompt, strings.TrimSpace(shotScene.Location+", "+textutil.FirstNonBlank(shotScene.Time, "日")+", cinematic scene, high quality"))
 	context := Context{
 		OrganizationID: organizationID, Drama: drama, Episode: episode, Scene: shotScene,
-		SceneNames: []string{firstNonEmpty(shotScene.Location, "场景")}, UserInstruction: instruction,
+		SceneNames: []string{textutil.FirstNonBlank(shotScene.Location, "场景")}, UserInstruction: instruction,
 	}
 	return ApplyTemplate(database, organizationID, "scene_image", "image", context, fallback)
 }
@@ -296,7 +288,7 @@ func SceneImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama
 // PropImagePrompt builds the image prompt for a prop still generation.
 func PropImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama, episode models.Episode, prop models.Prop, explicitPrompt string) Resolution {
 	explicit := strings.TrimSpace(explicitPrompt)
-	instruction := firstNonEmpty(explicit, prop.Prompt, prop.Description, prop.Name)
+	instruction := textutil.FirstNonBlank(explicit, prop.Prompt, prop.Description, prop.Name)
 	if strings.TrimSpace(instruction) == "" {
 		return Resolution{Source: "fallback", Key: "prop_image"}
 	}
@@ -305,7 +297,7 @@ func PropImagePrompt(database *gorm.DB, organizationID uint, drama models.Drama,
 		shotProp.Prompt = explicit
 		shotProp.Description = explicit
 	}
-	fallback := firstNonEmpty(shotProp.Prompt, shotProp.Name+", prop, product photography")
+	fallback := textutil.FirstNonBlank(shotProp.Prompt, shotProp.Name+", prop, product photography")
 	context := Context{
 		OrganizationID: organizationID, Drama: drama, Episode: episode, Prop: shotProp,
 		UserInstruction: instruction,

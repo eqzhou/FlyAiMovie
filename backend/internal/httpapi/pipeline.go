@@ -15,6 +15,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/ffmpeg"
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
 	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -308,7 +309,7 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 			errs = append(errs, fmt.Sprintf("sb %d: empty prompt", id))
 			continue
 		}
-		if firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage) == "" {
+		if textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage) == "" {
 			errs = append(errs, fmt.Sprintf("sb %d: missing first frame", id))
 			continue
 		}
@@ -317,7 +318,7 @@ func (s *Server) batchGenerateVideos(c *gin.Context) {
 		rec := &models.VideoGeneration{
 			OrganizationID: currentOrganizationID(c),
 			StoryboardID:   &sid, DramaID: &did, Prompt: prompt,
-			ImageURL:      firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
+			ImageURL:      textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
 			FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage,
 			ReferenceMode: body.ReferenceMode, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration,
 		}
@@ -423,7 +424,7 @@ func (s *Server) storyboardGenerateVideo(c *gin.Context) {
 	rec := &models.VideoGeneration{
 		OrganizationID: currentOrganizationID(c),
 		StoryboardID:   &sid, DramaID: &did, Prompt: prompt,
-		ImageURL:      firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
+		ImageURL:      textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage),
 		FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage,
 		ReferenceMode: body.ReferenceMode, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration,
 	}

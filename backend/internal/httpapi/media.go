@@ -19,6 +19,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediafetch"
 	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -155,7 +156,7 @@ func (s *Server) createVideo(c *gin.Context) {
 				body.FirstFrameURL = sb.FirstFrameImage
 			}
 			if body.ImageURL == "" {
-				body.ImageURL = firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage)
+				body.ImageURL = textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage)
 			}
 			if body.LastFrameURL == "" {
 				body.LastFrameURL = sb.LastFrameImage
@@ -662,7 +663,7 @@ func (s *Server) mergeEpisode(c *gin.Context) {
 	paths := make([]string, 0, len(rows))
 	inputs := make([]string, 0, len(rows))
 	for _, sb := range rows {
-		src := firstNonEmpty(sb.ComposedVideoURL, sb.VideoURL)
+		src := textutil.FirstNonEmpty(sb.ComposedVideoURL, sb.VideoURL)
 		if src == "" {
 			continue
 		}
@@ -1223,7 +1224,7 @@ func (s *Server) gridSplit(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": err.Error()})
 		return
 	}
-	src := firstNonEmpty(body.ImagePath, body.ImageURL)
+	src := textutil.FirstNonEmpty(body.ImagePath, body.ImageURL)
 	if err := validateLocalMediaOwnership(c, src); err != nil {
 		response.BadRequest(c, err.Error())
 		return

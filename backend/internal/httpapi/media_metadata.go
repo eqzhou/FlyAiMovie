@@ -18,6 +18,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/services/mediacache"
 	"github.com/eqzhou/flyaimovie/internal/services/mediainfo"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -133,8 +134,8 @@ func (s *Server) uploadMedia(c *gin.Context) {
 	}
 	now := response.Now()
 	asset := models.Asset{OrganizationID: currentOrganizationID(c), DramaID: dramaID, EpisodeID: episodeID, StoryboardID: storyboardID,
-		Name: firstNonEmpty(strings.TrimSpace(c.PostForm("name")), filepath.Base(fileHeader.Filename)), Type: assetType,
-		Category: firstNonEmpty(strings.TrimSpace(c.PostForm("category")), "reference"), URL: s.Store.PublicURL(rel),
+		Name: textutil.FirstNonEmpty(strings.TrimSpace(c.PostForm("name")), filepath.Base(fileHeader.Filename)), Type: assetType,
+		Category: textutil.FirstNonEmpty(strings.TrimSpace(c.PostForm("category")), "reference"), URL: s.Store.PublicURL(rel),
 		LocalPath: rel, FileSize: fileHeader.Size, MimeType: mime, ContentHash: hex.EncodeToString(hash.Sum(nil)),
 		ReferenceCount: 1, ProbeStatus: "pending", CreatedAt: now, UpdatedAt: now}
 	if hasVerifiedProbe {

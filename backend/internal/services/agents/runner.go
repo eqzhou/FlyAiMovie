@@ -19,6 +19,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/ai"
 	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
 	"github.com/eqzhou/flyaimovie/internal/services/skillregistry"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"gorm.io/gorm"
 )
 
@@ -1302,21 +1303,12 @@ func (r *Runner) offlineFallback(organizationID uint, agentType string, dramaID,
 			if i >= 4 {
 				break
 			}
-			b.WriteString(fmt.Sprintf("Panel %d: %s\n", i+1, firstNonEmptyLocal(sb.ImagePrompt, sb.Description, sb.Action)))
+			b.WriteString(fmt.Sprintf("Panel %d: %s\n", i+1, textutil.FirstNonBlank(sb.ImagePrompt, sb.Description, sb.Action)))
 		}
 		return &ChatResult{Type: "done", Text: b.String()}, true
 	default:
 		return nil, false
 	}
-}
-
-func firstNonEmptyLocal(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // ignoreSpeaker used by offline extractor; reuse generation-like heuristics

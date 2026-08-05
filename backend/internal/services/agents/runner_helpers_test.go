@@ -10,6 +10,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/models"
 	"github.com/eqzhou/flyaimovie/internal/response"
 	"github.com/eqzhou/flyaimovie/internal/testsupport"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 )
 
 func TestRunnerPureHelpers(t *testing.T) {
@@ -90,8 +91,8 @@ func TestRunnerPureHelpers(t *testing.T) {
 	if got := uniqueAgentIDs([]any{float64(2), 2, 0, float64(2), "3"}); !reflect.DeepEqual(got, []uint{2, 3}) {
 		t.Fatalf("unique IDs=%v", got)
 	}
-	if firstNonEmptyLocal("", " ", "value") != "value" || firstNonEmptyLocal("", " ") != "" {
-		t.Fatal("firstNonEmptyLocal failed")
+	if textutil.FirstNonBlank("", " ", "value") != "value" || textutil.FirstNonBlank("", " ") != "" {
+		t.Fatal("textutil.FirstNonBlank failed")
 	}
 }
 

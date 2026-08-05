@@ -17,6 +17,7 @@ import (
 	"github.com/eqzhou/flyaimovie/internal/services/generation"
 	"github.com/eqzhou/flyaimovie/internal/services/jobs"
 	"github.com/eqzhou/flyaimovie/internal/services/prompttemplate"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -568,11 +569,11 @@ func (s *Service) videoStage(ctx context.Context, run *models.ProductionRun) err
 		characterNames, sceneNames := prompttemplate.ShotAssetNames(s.DB, run.OrganizationID, run.DramaID, &sb)
 		resolution := prompttemplate.VideoPrompt(s.DB, run.OrganizationID, drama, episode, sb, "", characterNames, sceneNames)
 		prompt := strings.TrimSpace(resolution.Prompt)
-		if prompt == "" || firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage) == "" {
+		if prompt == "" || textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage) == "" {
 			return fmt.Errorf("分镜 %d 缺少视频提示词或首帧", sb.ID)
 		}
 		id, dramaID := sb.ID, run.DramaID
-		record := &models.VideoGeneration{OrganizationID: run.OrganizationID, StoryboardID: &id, DramaID: &dramaID, Prompt: prompt, ImageURL: firstNonEmpty(sb.FirstFrameImage, sb.ComposedImage), FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration}
+		record := &models.VideoGeneration{OrganizationID: run.OrganizationID, StoryboardID: &id, DramaID: &dramaID, Prompt: prompt, ImageURL: textutil.FirstNonEmpty(sb.FirstFrameImage, sb.ComposedImage), FirstFrameURL: sb.FirstFrameImage, LastFrameURL: sb.LastFrameImage, ReferenceImageURLs: sb.ReferenceImages, Duration: sb.Duration}
 		generateErr := s.Videos.GenerateProduction(ctx, record, episode.VideoConfigID, run.ID)
 		if generateErr != nil {
 			return generateErr
@@ -650,7 +651,7 @@ func (s *Service) mergeStage(run *models.ProductionRun) error {
 	}
 	inputs := make([]string, 0, len(rows))
 	for _, sb := range rows {
-		input := firstNonEmpty(sb.ComposedVideoURL, sb.VideoURL)
+		input := textutil.FirstNonEmpty(sb.ComposedVideoURL, sb.VideoURL)
 		if input == "" {
 			return fmt.Errorf("分镜 %d 尚未合成", sb.ID)
 		}
@@ -749,7 +750,7 @@ func (s *Service) ensureStageArtifactsReady(run *models.ProductionRun, next stri
 func (s *Service) childFailure(runID uint, targetTypes []string) error {
 	var child models.GenerationJob
 	if err := s.DB.Where("production_run_id = ? AND target_type IN ? AND status IN ?", runID, targetTypes, []string{jobs.StatusFailed, jobs.StatusCanceled}).Order("id desc").First(&child).Error; err == nil {
-		return fmt.Errorf("%s", firstNonEmpty(child.LastError, "子任务失败"))
+		return fmt.Errorf("%s", textutil.FirstNonEmpty(child.LastError, "子任务失败"))
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
@@ -873,13 +874,4 @@ func (s *Service) cancelActiveChildren(organizationID, runID uint) error {
 		}
 		return nil
 	})
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

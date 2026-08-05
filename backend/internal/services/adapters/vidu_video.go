@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 )
 
 // ViduVideoAdapter implements Vidu-style image-to-video APIs.
@@ -40,7 +42,7 @@ func (a *ViduVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoG
 	if in.AspectRatio != "" {
 		body["aspect_ratio"] = in.AspectRatio
 	}
-	img := firstNonEmptyStr(in.FirstFrameURL, in.ImageURL)
+	img := textutil.FirstNonBlank(in.FirstFrameURL, in.ImageURL)
 	if img == "" && len(in.ReferenceImageURLs) == 0 {
 		return nil, fmt.Errorf("vidu image-to-video requires at least one image")
 	}
@@ -157,13 +159,4 @@ func validateViduConfig(cfg AIConfig) error {
 		return fmt.Errorf("vidu API key is required")
 	}
 	return nil
-}
-
-func firstNonEmptyStr(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }

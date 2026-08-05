@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 )
 
 type OpenAIVideoAdapter struct{}
@@ -29,7 +31,7 @@ func (a *OpenAIVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in Vide
 	if len(in.ReferenceImageURLs) > 1 {
 		return nil, fmt.Errorf("openai video supports at most one input reference")
 	}
-	referenceURL := firstNonEmptyStr(in.FirstFrameURL, in.ImageURL)
+	referenceURL := textutil.FirstNonBlank(in.FirstFrameURL, in.ImageURL)
 	if referenceURL == "" && len(in.ReferenceImageURLs) == 1 {
 		referenceURL = in.ReferenceImageURLs[0]
 	}

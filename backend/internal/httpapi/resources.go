@@ -1018,15 +1018,6 @@ func validateStoryboardResources(tx *gorm.DB, dramaID, sceneID uint, characterID
 	return nil
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func asString(v any) string {
 	if v == nil {
 		return ""

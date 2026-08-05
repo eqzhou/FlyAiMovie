@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 )
 
 type MiniMaxVideoAdapter struct{}
@@ -22,7 +24,7 @@ func (a *AliyunVideoAdapter) Name() string     { return "ali" }
 
 func (a *MiniMaxVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoGenInput) (*VideoGenResult, error) {
 	body := map[string]any{"model": defaultString(cfg.Model, "video-01"), "prompt": in.Prompt}
-	if first := firstNonEmptyStr(in.FirstFrameURL, in.ImageURL); first != "" {
+	if first := textutil.FirstNonBlank(in.FirstFrameURL, in.ImageURL); first != "" {
 		body["first_frame_image"] = first
 	}
 	if in.LastFrameURL != "" {
@@ -84,7 +86,7 @@ func (a *MiniMaxVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID str
 
 func (a *VolcengineVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoGenInput) (*VideoGenResult, error) {
 	content := []map[string]any{{"type": "text", "text": in.Prompt}}
-	if first := firstNonEmptyStr(in.FirstFrameURL, in.ImageURL); first != "" {
+	if first := textutil.FirstNonBlank(in.FirstFrameURL, in.ImageURL); first != "" {
 		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": first}, "role": "first_frame"})
 	}
 	if in.LastFrameURL != "" {
@@ -130,7 +132,7 @@ func (a *VolcengineVideoAdapter) Poll(ctx context.Context, cfg AIConfig, taskID 
 
 func (a *AliyunVideoAdapter) Generate(ctx context.Context, cfg AIConfig, in VideoGenInput) (*VideoGenResult, error) {
 	input := map[string]any{"prompt": in.Prompt}
-	if first := firstNonEmptyStr(in.FirstFrameURL, in.ImageURL); first != "" {
+	if first := textutil.FirstNonBlank(in.FirstFrameURL, in.ImageURL); first != "" {
 		input["img_url"] = first
 		input["first_frame_url"] = first
 	}
