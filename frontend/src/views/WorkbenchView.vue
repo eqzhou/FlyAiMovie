@@ -23,6 +23,8 @@ import {
 import { useWorkbenchStages } from './workbench/useWorkbenchStages'
 import PromptEditorModal from './workbench/PromptEditorModal.vue'
 import CharacterLibraryImportModal from './workbench/CharacterLibraryImportModal.vue'
+import CharacterFormModal from './workbench/CharacterFormModal.vue'
+import SceneFormModal from './workbench/SceneFormModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -94,8 +96,8 @@ const productionError = ref('')
 const characterError = ref('')
 const sceneError = ref('')
 const storyboardError = ref('')
-const characterNameInput = ref<HTMLInputElement | null>(null)
-const sceneLocationInput = ref<HTMLInputElement | null>(null)
+const characterFormModal = ref<{ focus: () => void } | null>(null)
+const sceneFormModal = ref<{ focus: () => void } | null>(null)
 const storyboardTitleInput = ref<HTMLInputElement | null>(null)
 
 const dramaId = computed(() => Number(route.params.id))
@@ -648,7 +650,7 @@ async function editCharacter(character?: any) {
     ? { id: character.id, name: character.name, role: character.role || '', appearance: character.appearance || '', description: character.description || '', personality: character.personality || '' }
     : { name: '', role: '', appearance: '', description: '', personality: '' }
   await nextTick()
-  characterNameInput.value?.focus()
+  characterFormModal.value?.focus()
 }
 
 async function saveCharacter() {
@@ -656,7 +658,7 @@ async function saveCharacter() {
   characterError.value = ''
   if (!form?.name?.trim()) {
     characterError.value = '请输入角色名'
-    characterNameInput.value?.focus()
+    characterFormModal.value?.focus()
     return
   }
   busy.value = 'character-save'
@@ -740,7 +742,7 @@ async function editScene(scene?: any) {
     ? { id: scene.id, location: scene.location, time: scene.time || '', prompt: scene.prompt || '' }
     : { location: '', time: '', prompt: '' }
   await nextTick()
-  sceneLocationInput.value?.focus()
+  sceneFormModal.value?.focus()
 }
 
 async function saveScene() {
@@ -748,7 +750,7 @@ async function saveScene() {
   sceneError.value = ''
   if (!form?.location?.trim()) {
     sceneError.value = '请输入场景地点'
-    sceneLocationInput.value?.focus()
+    sceneFormModal.value?.focus()
     return
   }
   busy.value = 'scene-save'
@@ -1965,21 +1967,15 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="characterForm" class="modal-mask" @click.self="characterForm=null">
-      <form class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" :aria-labelledby="characterForm.id ? 'edit-character-title' : 'add-character-title'" @keydown.esc="characterForm=null" @submit.prevent="saveCharacter">
-        <h3 :id="characterForm.id ? 'edit-character-title' : 'add-character-title'">{{ characterForm.id ? '编辑角色' : '添加角色' }}</h3>
-        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
-        <div class="field-grid">
-          <div class="field"><label for="workbench-character-name">角色名 <span class="required-mark">*</span></label><input id="workbench-character-name" ref="characterNameInput" v-model="characterForm.name" maxlength="120" required /></div>
-          <div class="field"><label for="workbench-character-role">定位</label><input id="workbench-character-role" v-model="characterForm.role" maxlength="120" /></div>
-          <div class="field"><label for="workbench-character-appearance">外貌</label><textarea id="workbench-character-appearance" v-model="characterForm.appearance" rows="3" maxlength="4000" /></div>
-          <div class="field"><label for="workbench-character-personality">性格</label><textarea id="workbench-character-personality" v-model="characterForm.personality" rows="3" maxlength="4000" /></div>
-          <div class="field settings-span"><label for="workbench-character-description">说明</label><textarea id="workbench-character-description" v-model="characterForm.description" rows="3" maxlength="4000" /></div>
-        </div>
-        <p v-if="characterError" class="form-error" role="alert">{{ characterError }}</p>
-        <div class="modal-actions"><button class="btn" type="button" @click="characterForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'character-save' ? '保存中…' : '保存角色' }}</button></div>
-      </form>
-    </div>
+    <CharacterFormModal
+      v-if="characterForm"
+      ref="characterFormModal"
+      :form="characterForm"
+      :error="characterError"
+      :busy="busy"
+      @close="characterForm = null"
+      @submit="saveCharacter"
+    />
 
     <CharacterLibraryImportModal
       v-if="showCharacterLibraryImport"
@@ -1993,19 +1989,15 @@ onUnmounted(() => {
       @import="importCharacterFromLibrary"
     />
 
-    <div v-if="sceneForm" class="modal-mask" @click.self="sceneForm=null">
-      <form class="modal settings-modal" role="dialog" aria-modal="true" :aria-labelledby="sceneForm.id ? 'edit-scene-title' : 'add-scene-title'" @keydown.esc="sceneForm=null" @submit.prevent="saveScene">
-        <h3 :id="sceneForm.id ? 'edit-scene-title' : 'add-scene-title'">{{ sceneForm.id ? '编辑场景' : '添加场景' }}</h3>
-        <p class="form-required-note"><span class="required-mark">*</span> 为必填项</p>
-        <div class="field-grid">
-          <div class="field"><label for="workbench-scene-location">地点 <span class="required-mark">*</span></label><input id="workbench-scene-location" ref="sceneLocationInput" v-model="sceneForm.location" maxlength="200" required /></div>
-          <div class="field"><label for="workbench-scene-time">时间</label><input id="workbench-scene-time" v-model="sceneForm.time" maxlength="120" /></div>
-          <div class="field settings-span"><label for="workbench-scene-prompt">画面提示词</label><textarea id="workbench-scene-prompt" v-model="sceneForm.prompt" rows="5" maxlength="10000" /></div>
-        </div>
-        <p v-if="sceneError" class="form-error" role="alert">{{ sceneError }}</p>
-        <div class="modal-actions"><button class="btn" type="button" @click="sceneForm=null">取消</button><button class="btn btn-primary" type="submit" :disabled="!!busy">{{ busy === 'scene-save' ? '保存中…' : '保存场景' }}</button></div>
-      </form>
-    </div>
+    <SceneFormModal
+      v-if="sceneForm"
+      ref="sceneFormModal"
+      :form="sceneForm"
+      :error="sceneError"
+      :busy="busy"
+      @close="sceneForm = null"
+      @submit="saveScene"
+    />
 
     <div v-if="storyboardForm" class="modal-mask" @click.self="storyboardForm=null">
       <form class="modal settings-modal settings-modal-wide storyboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-storyboard-title" @keydown.esc="storyboardForm=null" @submit.prevent="saveStoryboard">

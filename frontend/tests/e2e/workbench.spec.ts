@@ -589,3 +589,20 @@ test('mobile: global navigation collapses without hiding destinations', async ({
   }))
   expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth)
 })
+
+test('desktop: character and scene dialogs autofocus their first field', async ({ page }) => {
+  await mockWorkbenchAPI(page)
+  await page.goto('/drama/2/episode/1?stage=cast')
+  await expect(page.getByRole('heading', { name: '角色' })).toBeVisible()
+
+  await page.getByRole('button', { name: '添加角色' }).click()
+  const characterDialog = page.getByRole('dialog', { name: '添加角色' })
+  await expect(characterDialog).toBeVisible()
+  await expect(characterDialog.getByLabel(/角色名.*\*/)).toBeFocused()
+  await characterDialog.getByRole('button', { name: '取消' }).click()
+
+  await page.getByRole('button', { name: '添加场景' }).click()
+  const sceneDialog = page.getByRole('dialog', { name: '添加场景' })
+  await expect(sceneDialog).toBeVisible()
+  await expect(sceneDialog.getByLabel(/地点.*\*/)).toBeFocused()
+})
