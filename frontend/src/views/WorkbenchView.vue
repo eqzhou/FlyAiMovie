@@ -21,6 +21,7 @@ import {
   type GridCellAssignment, type GridCellTarget,
 } from './workbench/grid'
 import { useWorkbenchStages } from './workbench/useWorkbenchStages'
+import PromptEditorModal from './workbench/PromptEditorModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -2076,29 +2077,15 @@ onUnmounted(() => {
       </form>
     </div>
 
-    <div v-if="promptEditor" class="modal-mask" @click.self="promptEditor=null">
-      <div class="modal settings-modal settings-modal-wide prompt-editor-modal" role="dialog" aria-modal="true" :aria-labelledby="`prompt-editor-${promptEditor.field}`" @keydown.esc="promptEditor=null">
-        <h3 :id="`prompt-editor-${promptEditor.field}`">编辑{{ promptEditor.label }}</h3>
-        <div v-if="promptEditor.category && promptEditorTemplates.length" class="prompt-editor-template-row">
-          <div class="field">
-            <label for="workbench-prompt-template">提示词模板</label>
-            <select id="workbench-prompt-template" v-model.number="promptEditor.template_id">
-              <option v-for="template in promptEditorTemplates" :key="template.id" :value="template.id">{{ template.name }} · v{{ template.version }}</option>
-            </select>
-          </div>
-          <button class="btn" type="button" :disabled="!!busy || !promptEditorTemplates.length" @click="applySelectedPromptTemplate">套用模板</button>
-        </div>
-        <div class="field">
-          <label for="workbench-prompt-value">{{ promptEditor.label }}</label>
-          <textarea id="workbench-prompt-value" v-model="promptEditor.value" rows="10" maxlength="20000" />
-        </div>
-        <p v-if="promptEditor.error" class="form-error" role="alert">{{ promptEditor.error }}</p>
-        <div class="modal-actions">
-          <button class="btn" type="button" @click="promptEditor=null">取消</button>
-          <button class="btn btn-primary" type="button" :disabled="!!busy" @click="savePromptEditor">{{ promptEditor.target === 'grid' ? '应用' : '保存' }}</button>
-        </div>
-      </div>
-    </div>
+    <PromptEditorModal
+      v-if="promptEditor"
+      :editor="promptEditor"
+      :templates="promptEditorTemplates"
+      :busy="busy"
+      @close="promptEditor = null"
+      @apply="applySelectedPromptTemplate"
+      @save="savePromptEditor"
+    />
 
     <div v-if="showProductionModal" class="modal-mask" @click.self="showProductionModal=false">
       <div class="modal production-modal" role="dialog" aria-modal="true" aria-labelledby="production-modal-title" @keydown.esc="showProductionModal=false">
