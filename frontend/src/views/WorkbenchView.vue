@@ -16,6 +16,10 @@ import {
   gridFrameLabel, productionStageLabel, productionStatusLabel,
   referenceImagesToText, shotStatusDot, storyboardStatusLabel,
 } from './workbench/labels'
+import {
+  defaultGridAssignments, listOf, parseJSONList,
+  type GridCellAssignment, type GridCellTarget,
+} from './workbench/grid'
 
 const route = useRoute()
 const router = useRouter()
@@ -56,8 +60,6 @@ const gridCols = ref(2)
 const gridMode = ref('first_frame')
 const gridPrompt = ref('')
 const gridCells = ref<string[]>([])
-type GridCellAssignment = { cell_index: number; storyboard_id: number; frame_type: string }
-type GridCellTarget = { storyboard_id: number; frame_type: string }
 const gridAssignments = ref<GridCellAssignment[]>([])
 const gridCellsVerified = ref(false)
 const gridCellTargets = ref<Record<number, GridCellTarget>>({})
@@ -260,39 +262,6 @@ function show(msg: string) {
     if (toast.value === msg) toast.value = ''
     toastTimer = null
   }, 2600)
-}
-
-function listOf(value: unknown): any[] {
-  return Array.isArray(value) ? value.filter(Boolean) : []
-}
-
-function parseJSONList<T>(value: unknown): T[] {
-  if (Array.isArray(value)) return value.filter(Boolean) as T[]
-  if (typeof value !== 'string' || !value.trim()) return []
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed.filter(Boolean) as T[] : []
-  } catch {
-    return []
-  }
-}
-
-function defaultGridAssignments(history: any, cells: string[]): GridCellAssignment[] {
-  const storyboardIds = parseJSONList<number>(history.storyboard_ids).map(Number).filter((id) => id > 0)
-  if (history.mode === 'first_last') {
-    const half = Math.floor(storyboardIds.length / 2)
-    if (!half) return []
-    return cells.slice(0, storyboardIds.length).map((_, index) => ({
-      cell_index: index,
-      storyboard_id: storyboardIds[index % half],
-      frame_type: index >= Math.floor(cells.length / 2) ? 'last_frame' : 'first_frame',
-    }))
-  }
-  return cells.slice(0, storyboardIds.length).map((_, index) => ({
-    cell_index: index,
-    storyboard_id: storyboardIds[index],
-    frame_type: 'first_frame',
-  }))
 }
 
 function resetGridOutput() {
