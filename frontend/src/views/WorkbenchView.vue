@@ -22,6 +22,7 @@ import {
 } from './workbench/grid'
 import { useWorkbenchStages } from './workbench/useWorkbenchStages'
 import PromptEditorModal from './workbench/PromptEditorModal.vue'
+import CharacterLibraryImportModal from './workbench/CharacterLibraryImportModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1980,32 +1981,17 @@ onUnmounted(() => {
       </form>
     </div>
 
-    <div v-if="showCharacterLibraryImport" class="modal-mask" @click.self="closeCharacterLibraryImport">
-      <div class="modal settings-modal settings-modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-character-library-title" @keydown.esc="closeCharacterLibraryImport">
-        <h3 id="import-character-library-title">从角色库导入</h3>
-        <p class="muted character-import-note">导入后会创建本集独立角色副本，并链接到当前剧集。</p>
-        <label class="library-search"><span class="sr-only">搜索角色模板</span><input v-model="characterLibraryQuery" type="search" aria-label="搜索角色模板" placeholder="搜索名称、定位或音色" /></label>
-        <div v-if="characterLibraryLoading" class="empty">正在加载角色库…</div>
-        <div v-else-if="filteredCharacterLibraryTemplates.length" class="list character-library-picker">
-          <div v-for="template in filteredCharacterLibraryTemplates" :key="template.id" class="list-item">
-            <div class="row between">
-              <div class="stack">
-                <h4>{{ template.name }} <span class="muted">{{ template.role || '未设置定位' }}</span></h4>
-                <p class="muted sm">{{ template.appearance || template.personality || '暂无设定' }}</p>
-                <p class="muted sm mt-6">音色：{{ template.voice_style || '未绑定' }}</p>
-              </div>
-              <div class="row column-end">
-                <img v-if="template.image_url" class="thumb" :src="template.image_url" :alt="`${template.name} 角色形象`" />
-                <button class="btn btn-primary" type="button" :disabled="!!busy" @click="importCharacterFromLibrary(template)">导入本集</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty">{{ characterLibraryTemplates.length ? '没有匹配的角色模板' : '角色库还是空的，可先把现有角色存入角色库' }}</div>
-        <p v-if="characterLibraryError" class="form-error" role="alert">{{ characterLibraryError }}</p>
-        <div class="modal-actions"><button class="btn" type="button" @click="closeCharacterLibraryImport">关闭</button></div>
-      </div>
-    </div>
+    <CharacterLibraryImportModal
+      v-if="showCharacterLibraryImport"
+      v-model:query="characterLibraryQuery"
+      :loading="characterLibraryLoading"
+      :templates="filteredCharacterLibraryTemplates"
+      :total-count="characterLibraryTemplates.length"
+      :error="characterLibraryError"
+      :busy="busy"
+      @close="closeCharacterLibraryImport"
+      @import="importCharacterFromLibrary"
+    />
 
     <div v-if="sceneForm" class="modal-mask" @click.self="sceneForm=null">
       <form class="modal settings-modal" role="dialog" aria-modal="true" :aria-labelledby="sceneForm.id ? 'edit-scene-title' : 'add-scene-title'" @keydown.esc="sceneForm=null" @submit.prevent="saveScene">
