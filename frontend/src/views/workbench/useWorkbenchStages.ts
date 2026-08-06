@@ -20,7 +20,11 @@ export function useWorkbenchStages() {
   const route = useRoute()
   const router = useRouter()
 
-  const active = ref<WorkbenchStage>(isStage(route.query.stage) ? route.query.stage as WorkbenchStage : 'script')
+  // String() before the check, matching the previous inline version: a query
+  // value can arrive as an array, and storing it raw would put a non-string
+  // into a ref every stage comparison assumes is a plain WorkbenchStage.
+  const initial = String(route.query.stage ?? '') as WorkbenchStage
+  const active = ref<WorkbenchStage>(isStage(initial) ? initial : 'script')
 
   function select(stage: string) {
     if (!isStage(stage)) return

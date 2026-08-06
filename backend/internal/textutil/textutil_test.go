@@ -1,8 +1,8 @@
 package textutil
 
 import (
-	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -98,8 +98,10 @@ func TestParseStringListRejectsMalformedJSON(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ParseStringList did not report malformed JSON, got %#v", got)
 	}
-	if !errors.Is(err, ErrInvalidJSONList) {
-		t.Fatalf("error %v does not match ErrInvalidJSONList", err)
+	// The raw decode error is returned unwrapped: callers add their own prefix,
+	// and a sentinel here would show up as a second layer in client messages.
+	if !strings.Contains(err.Error(), "unexpected end of JSON input") {
+		t.Fatalf("error %v does not carry the underlying JSON message", err)
 	}
 	if got != nil {
 		t.Fatalf("ParseStringList returned %#v on error, want nil", got)

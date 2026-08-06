@@ -6,8 +6,12 @@
  * size, which the empty state needs to tell "no matches" apart from "library
  * is empty".
  */
+// query is a model rather than a plain prop so the search box keeps v-model's
+// IME handling: a hand-rolled @input fires on every composition step, which
+// makes the filtered list flicker while typing pinyin.
+const query = defineModel<string>('query', { required: true })
+
 defineProps<{
-  query: string
   loading: boolean
   templates: any[]
   totalCount: number
@@ -16,7 +20,6 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'update:query': [value: string]
   close: []
   import: [template: any]
 }>()
@@ -33,16 +36,7 @@ const emit = defineEmits<{
     >
       <h3 id="import-character-library-title">从角色库导入</h3>
       <p class="muted character-import-note">导入后会创建本集独立角色副本，并链接到当前剧集。</p>
-      <label class="library-search">
-        <span class="sr-only">搜索角色模板</span>
-        <input
-          :value="query"
-          type="search"
-          aria-label="搜索角色模板"
-          placeholder="搜索名称、定位或音色"
-          @input="emit('update:query', ($event.target as HTMLInputElement).value)"
-        />
-      </label>
+      <label class="library-search"><span class="sr-only">搜索角色模板</span><input v-model="query" type="search" aria-label="搜索角色模板" placeholder="搜索名称、定位或音色" /></label>
       <div v-if="loading" class="empty">正在加载角色库…</div>
       <div v-else-if="templates.length" class="list character-library-picker">
         <div v-for="template in templates" :key="template.id" class="list-item">

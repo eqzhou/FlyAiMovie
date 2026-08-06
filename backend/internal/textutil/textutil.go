@@ -8,8 +8,6 @@ package textutil
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -35,10 +33,6 @@ func FirstNonBlank(values ...string) string {
 	return ""
 }
 
-// ErrInvalidJSONList reports that a value looked like a JSON array but could
-// not be decoded. Callers wrap it with a domain-specific message.
-var ErrInvalidJSONList = errors.New("invalid JSON list")
-
 // ParseStringList decodes a stored list field that may be either a JSON array
 // or a comma-separated string, then trims each item and drops blank ones.
 //
@@ -47,6 +41,9 @@ var ErrInvalidJSONList = errors.New("invalid JSON list")
 // Values needing a data-URI escape hatch or a length cap must handle those
 // before and after the call respectively, because those rules differ per
 // caller.
+//
+// A decode failure is returned unwrapped so each caller can attach its own
+// message without the client seeing two layers of prefix.
 func ParseStringList(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -55,7 +52,7 @@ func ParseStringList(raw string) ([]string, error) {
 	var items []string
 	if strings.HasPrefix(raw, "[") {
 		if err := json.Unmarshal([]byte(raw), &items); err != nil {
-			return nil, fmt.Errorf("%w: %s", ErrInvalidJSONList, err)
+			return nil, err
 		}
 	} else {
 		items = strings.Split(raw, ",")
