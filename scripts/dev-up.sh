@@ -26,8 +26,15 @@ fi
 
 npm --prefix "$ROOT/frontend" run build
 
+REVISION="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git -C "$ROOT" diff --quiet HEAD 2>/dev/null; then
+  REVISION="$REVISION-dirty"
+fi
+
 cd "$ROOT/backend"
-go build -o "$ROOT/.run/flyaimovie-server.next" ./cmd/server
+go build \
+  -ldflags "-X github.com/eqzhou/flyaimovie/internal/httpapi.BuildRevision=$REVISION" \
+  -o "$ROOT/.run/flyaimovie-server.next" ./cmd/server
 
 # PM2 launched outside an interactive terminal may not have macOS permission to
 # read Documents. Stage a self-contained runtime under the user's home directory.
@@ -81,3 +88,4 @@ curl -fsS "http://127.0.0.1:${PORT}/api/v1/health"
 echo
 pm2 status flyaimovie
 echo "Runtime: $RUNTIME_DIR"
+echo "Deployed revision: $REVISION"

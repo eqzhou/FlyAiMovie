@@ -101,7 +101,11 @@ func (s *Server) Router() *gin.Engine {
 	r.Use(s.rateLimit(newIPRateLimiter(s.Cfg.Server.RateLimitPerMinute, time.Minute, time.Now)), s.cors())
 
 	r.GET("/api/v1/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "timestamp": time.Now().UTC().Format(time.RFC3339)})
+		c.JSON(http.StatusOK, gin.H{
+			"status":    "ok",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"revision":  BuildRevision,
+		})
 	})
 
 	publicAPI := r.Group("/api/v1")

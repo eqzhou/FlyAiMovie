@@ -29,3 +29,6 @@ artifacts/
 
 # local worktrees
 .worktrees/
+
+# Coverage profiles written by scripts/check-coverage.sh
+coverage.out

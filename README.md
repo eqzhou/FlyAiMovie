@@ -62,6 +62,25 @@ scripts/cosign-offline.sh verify artifacts/flyaimovie-oci.tar cosign.pub
 
 启动脚本会将运行文件发布到 `~/.local/share/flyaimovie` 后交给 PM2 托管，避免 macOS 后台进程无法读取 `Documents`。运行日志和新生成的本地素材也保存在该目录。
 
+### 改完代码如何生效
+
+PM2 运行的是发布到 `~/.local/share/flyaimovie` 的**副本**，不是这个检出目录。因此：
+
+```bash
+make deploy         # 重新构建前后端并发布，然后重启 PM2
+make deploy-status  # 对比运行中的版本与本地 HEAD
+```
+
+`pm2 restart flyaimovie` **不会让新代码生效**——它只是用已发布的旧二进制重新起进程，前端也仍是旧的 bundle。`/api/v1/health` 会返回构建时注入的 `revision`，`make deploy-status` 据此判断线上是否已过期。
+
+### 推送前自查
+
+```bash
+make coverage  # 后端测试 + CI 同一条 80% 覆盖率红线
+```
+
+CI 会在后端覆盖率低于 80% 时失败。这条命令在本地跑同样的门槛，破线时列出覆盖最低的函数；余量不足 1pp 时也会告警，提示随新代码补测试。
+
 ## 制作流水线
 
 工作台支持“自动制作”一次编排整集，也保留以下阶段的手动控制。自动制作使用持久化父流程记录各阶段和子任务，服务重启后可继续推进，并支持取消、失败原因查看和从当前阶段重试。确认启动前会展示本次使用的文本、图片、视频和音频服务；外部厂商可能产生费用。

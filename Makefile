@@ -1,4 +1,4 @@
-.PHONY: dev-api dev-web build sbom smoke-help supply-chain-test oci image-sbom
+.PHONY: dev-api dev-web build deploy deploy-status coverage sbom smoke-help supply-chain-test oci image-sbom
 
 dev-api:
 	cd backend && go run ./cmd/server
@@ -9,6 +9,20 @@ dev-web:
 build:
 	cd frontend && npm run build
 	cd backend && go build -o ../flyaimovie ./cmd/server
+
+# Rebuild and publish to the PM2 runtime. PM2 runs a copy staged under
+# ~/.local/share/flyaimovie, not this checkout, so `pm2 restart flyaimovie`
+# alone reruns the old binary and serves the old frontend bundle.
+deploy:
+	bash scripts/dev-up.sh
+
+# Compare the running service's revision against local HEAD.
+deploy-status:
+	bash scripts/deploy-status.sh
+
+# Enforce the same backend coverage floor as CI, before pushing.
+coverage:
+	bash scripts/check-coverage.sh
 
 sbom:
 	bash scripts/generate-sbom.sh artifacts/sbom
