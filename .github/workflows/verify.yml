@@ -82,6 +82,12 @@ jobs:
         if: always()
         run: |
           docker compose down -v || true
+          # docker-compose.sqlite.yml bind-mounts the checkout's data directory.
+          # The image runs as UID 10001, so prepare the host path with the same
+          # owner before starting the container; otherwise SQLite cannot create
+          # /app/data/flyaimovie.db on GitHub-hosted runners.
+          sudo install -d -m 0700 -o 10001 -g 10001 data data/storage
+          sudo chown -R 10001:10001 data
           docker compose -f docker-compose.sqlite.yml up -d --build
           timeout 180 bash -c 'until curl -fsS http://127.0.0.1:5679/api/v1/health; do sleep 2; done'
           curl -fsS http://127.0.0.1:5679/api/v1/auth/status | grep -q '"setup_required":true'
