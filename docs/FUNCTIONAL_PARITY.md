@@ -80,8 +80,8 @@
 | N-05 | 异步任务可幂等、重试、取消并在重启后恢复 | 已验收主路径：所有生成/合成任务具备状态、取消、幂等创建、重试、租约 claim、owner fencing 和恢复；失败/取消重试采用 5 秒起步的指数退避，最大 5 分钟 | jobs 并发、状态、恢复、重试、claim 测试；`TestRetryBackoffIsBoundedAndExponential` |
 | N-06 | 上传和远程下载限制类型、尺寸、大小并防 SSRF | 已验收主路径：上传/远程媒体下载已有 SSRF 防护；公共 AI 配置拒绝回环、私网、链路本地、运营商级 NAT、基准测试、文档保留地址和云元数据主机，远程厂商必须使用 HTTPS；仅开发环境可为 `openai_local` 精确放行本地文本主机和 HTTP，生产模式拒绝该白名单；已保存的历史配置在测试连接和实际任务加载时都会重新校验；所有主要 AI adapter 通过连接级 DNS/IP 校验 Transport、禁用重定向和代理绕过。私有 HTTPS 端点必须同时提供可解析的 `AI_PROVIDER_CA_FILE` 与精确 `AI_PROVIDER_PRIVATE_HOSTS` 白名单，不关闭 TLS 校验，域名解析到私网 IP 时也按该契约放行；带 Bearer 的媒体下载拒绝跨 authority 重定向；厂商响应设有大小上限，图像、视频、TTS 和文本厂商错误均不持久化原始响应体或查询串密钥；本地宫格源图和切片来源需通过组织归属校验，不能用任意 `/static` 路径自声明归属 | `netguard`、`mediafetch`、`storage` 单元测试；`TestProviderHTTPClientRejectsReservedLiteralAddress`、`TestPrivateProviderHostnameRequiresExactAllowlistAndCustomCA`、`TestDownloadAuthorizedRejectsCrossAuthorityRedirect`、`TestGeminiImageNetworkErrorDoesNotExposeAPIKey`、`TestChatProviderErrorDoesNotExposeResponseBodyOrAPIKey`、`TestOpenAICompatImage*`、`TestPrivateProviderRequiresValidCAAndExactHostAllowlist`、`TestTaskConfigRejectsLegacyInsecureRemoteURL`、宫格归属测试 |
 | N-07 | Webhook 校验签名、时间戳并防重放 | 已验收 | `TestWebhookRequiresValidSignatureAndRejectsReplay` |
-| N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-08-01 全包实测 80.5%；全量 race、定向最终 race 与 `go vet ./...` 通过 | `go test ./... -race -coverprofile=coverage.out -count=1` |
-| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收 Chromium：58 条桌面/移动 Mock E2E 覆盖登录、邀请、设置、服务组合同步 Agent、本地/组织 Skill 版本与恢复、Agent 字段编辑、模型草稿测试、提示词草稿检查/过滤/竞态保护、角色库、素材、URL 阶段恢复、紧凑分镜编辑、宫格切片重分配、旧历史恢复、首尾生成前校验、自动制作确认、局部失败重试、AI 配置加载失败提示、viewer 项目/工作台/任务中心只读；桌面与 390px 移动端菜单均做真实命中检查；PostgreSQL Live 浏览器验证工作台与模型编辑弹窗，WebKit 已纳入 Playwright 项目与 CI；真实设备 Safari 手测仍建议发布前完成 | `frontend/tests/e2e/*.spec.ts`、`frontend/tests/live/local-system.spec.ts` |
+| N-08 | 核心 Go 包测试覆盖率不少于 80% | 已验收：2026-08-08 全包实测 81.2%；全量 race、`go vet ./...` 与供应链检查通过 | `make coverage`、`go test ./... -race -count=1` |
+| N-09 | 桌面和移动端关键流程无阻塞性交互问题 | 已验收：桌面 Chromium 51/51、移动 Chromium 8/8、WebKit 51/51，共 110 条 Mock E2E 断言通过，覆盖登录、邀请、设置、服务组合同步 Agent、本地/组织 Skill 版本与恢复、Agent 字段编辑、模型草稿测试、提示词草稿检查/过滤/竞态保护、角色库、素材、URL 阶段恢复、紧凑分镜编辑、宫格切片重分配、旧历史恢复、首尾生成前校验、自动制作确认、局部失败重试、AI 配置加载失败提示、viewer 项目/工作台/任务中心只读；桌面与 390px 移动端菜单均做真实命中检查；PostgreSQL Live 浏览器验证工作台与模型编辑弹窗；桌面 Chrome 仅在全部断言通过后的本机清理阶段需要中断 runner，未发现断言失败；真实设备 Safari 手测仍建议发布前完成 | `frontend/tests/e2e/*.spec.ts`、`frontend/tests/live/local-system.spec.ts` |
 | N-10 | 所有 API 具备来源隔离的有界限流 | 已验收：覆盖 health、Webhook 与 CORS 预检，不信任转发头 | `rate_limit_test.go` |
 | N-11 | 关键写操作具备组织级审计追踪 | 已验收：记录成员、动作、资源、状态和来源 IP，不保存请求体；仅 owner/admin 可按组织查询 | `audit_test.go` |
 | N-12 | 生成任务具备租户配额与并发成本保护 | 已验收：统一 Job 入口原子检查每日任务、活跃任务和每日金额预算；按厂商/任务类型预留估算成本，成功任务记录实际成本，幂等请求不重复计额，超限返回 429，并暴露预算使用量和预警状态 | `TestOrganizationQuotaLimitsActiveAndDailyJobs`、`TestCostEstimationAndBudgetReservation`、`TestOrganizationQuotaIsScopedAndAdminManaged` |
@@ -90,6 +90,13 @@
 | N-16 | 忘记密码具备安全恢复流程 | 已验收核心及 SMTP 投递实现：请求响应不枚举账号；SMTP 支持 587 STARTTLS/465 隐式 TLS；token 只存哈希、30 分钟过期、一次性消费；成功后更新密码并撤销所有 Session；主动改密和组织删除会清理未消费 token。本地 SMTP 契约与邀请邮件投递已测；真实 SMTP 账号 smoke 通过 `TestLiveSmokeSMTPPasswordResetAndInvitation`（需 SMOKE_SMTP_*） | `TestPasswordResetRequestDoesNotEnumerateAccounts`、`TestPasswordResetConsumesTokenAndRevokesSessions`、`TestPasswordResetExpiredTokenRejected`、`TestSMTPPasswordResetSenderRequiresHTTPSAndCredentials` |
 | N-15 | 敏感组织操作具备 owner 权限与二次确认 | 已验收：组织导出仅 owner 可用；组织删除要求当前密码及组织 slug，在事务内撤销会话、删除租户数据并写入媒体补偿任务；失败任务可审计和重试 | 组织导出、删除与媒体补偿测试 |
 | N-17 | 公开自助注册与平台注册设置 | 已验收：setup 后开放 `POST /auth/register` 与注册 UI；注册创建 user/org/owner 且不认领 legacy 资源；默认开放注册、不强制邮箱校验；`require_email_verification` 第一期仅门禁（未验证不可登录、注册不发邮件）；仅 `is_platform_admin` 可读写平台设置；修改密码入口在设置 → 安全与数据 | `TestAuthRegisterCreatesOwnerWorkspaceAndSession`、`TestAuthRegisterRejectedWhenDisabledOrDuplicate`、`TestAuthRegisterRequiresCompletedSetup`、`TestAuthRegisterVerificationRequiredSkipsSession`、`TestPlatformSettingsOnlyPlatformAdmin`、`TestEmailVerificationGateOnRegisterAndLogin`、`TestChangePasswordRotatesSessionsAndInvalidatesOldPassword`、`frontend/tests/e2e/auth-register.spec.ts`、`frontend/tests/e2e/account-settings-assets.spec.ts` |
+
+## 重构与验证快照（2026-08-08）
+
+- 重构收口：`WorkbenchView.vue` 272 行、`SettingsView.vue` 264 行、`DramaView.vue` 218 行；五阶段工作台组件、设置模块、Drama composable 和共享异步状态已落地。详见 [`docs/REFACTOR_PLAN.md`](./REFACTOR_PLAN.md)。
+- 后端 `go test ./... -race -count=1`、`go vet ./...`、`make coverage` 和 `make supply-chain-test` 均通过；全包覆盖率 81.2%，门槛 80%。
+- 前端 `npm run build`（包含 `vue-tsc -b`）通过。
+- Playwright desktop 51/51、mobile 8/8、WebKit 51/51 断言通过，共 110 条。桌面 Chrome 在全部断言通过后的本机浏览器清理阶段需要人工中断 runner；这不包含断言失败。真实设备 Safari 人工验收仍按发布门槛保留。
 
 ## 独立表达红线
 

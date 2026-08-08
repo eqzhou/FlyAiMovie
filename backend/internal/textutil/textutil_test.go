@@ -119,3 +119,34 @@ func TestSemanticsDiffer(t *testing.T) {
 		t.Fatalf("FirstNonBlank(%q) = %q, want %q", values, got, "fallback")
 	}
 }
+
+func TestJSONValueConversions(t *testing.T) {
+	if AsString(nil, false) != "" || AsString("ok", false) != "ok" || AsString(float64(1.5), false) != "" {
+		t.Fatal("strict string conversion failed")
+	}
+	if AsString(float64(1.5), true) != "1.5" {
+		t.Fatal("numeric string conversion failed")
+	}
+	values := []struct {
+		value any
+		want  int
+	}{
+		{uint(1), 1}, {uint64(2), 2}, {int64(3), 3}, {float64(4.9), 4}, {5, 5}, {"6", 6}, {"6x", 6}, {true, 0},
+	}
+	for _, tc := range values {
+		if got := AsInt(tc.value, true); got != tc.want {
+			t.Fatalf("AsInt(%T(%v))=%d, want %d", tc.value, tc.value, got, tc.want)
+		}
+	}
+	if AsInt("6x", false) != 0 || AsUint("4", false) != 4 {
+		t.Fatal("strict integer conversion failed")
+	}
+	for _, value := range []any{uint(1), uint64(2), int64(3)} {
+		if got := AsInt(value, false); got != 0 {
+			t.Fatalf("strict AsInt(%T(%v))=%d, want 0 to preserve HTTP parsing semantics", value, value, got)
+		}
+	}
+	if got := UniquePositiveIDs([]any{float64(2), 2, 0, float64(2), "3"}, true); !reflect.DeepEqual(got, []uint{2, 3}) {
+		t.Fatalf("UniquePositiveIDs=%v", got)
+	}
+}

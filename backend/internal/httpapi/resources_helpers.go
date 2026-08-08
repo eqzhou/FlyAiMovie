@@ -1,28 +1,13 @@
 package httpapi
 
 import (
-	"strconv"
-
 	"github.com/eqzhou/flyaimovie/internal/models"
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 	"gorm.io/gorm"
 )
 
 func uniquePositiveIDs(value any) []uint {
-	items, _ := value.([]any)
-	seen := make(map[uint]struct{}, len(items))
-	result := make([]uint, 0, len(items))
-	for _, item := range items {
-		id := asUint(item)
-		if id == 0 {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
+	return textutil.UniquePositiveIDs(value, false)
 }
 
 func validateStoryboardResources(tx *gorm.DB, dramaID, sceneID uint, characterIDs []uint) error {
@@ -48,29 +33,11 @@ func validateStoryboardResources(tx *gorm.DB, dramaID, sceneID uint, characterID
 }
 
 func asString(v any) string {
-	if v == nil {
-		return ""
-	}
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		return ""
-	}
+	return textutil.AsString(v, false)
 }
 
 func asInt(v any) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case string:
-		n, _ := strconv.Atoi(t)
-		return n
-	default:
-		return 0
-	}
+	return textutil.AsInt(v, false)
 }
 
-func asUint(v any) uint { return uint(asInt(v)) }
+func asUint(v any) uint { return textutil.AsUint(v, false) }

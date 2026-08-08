@@ -60,7 +60,7 @@ Docker、syft、cosign 缺失时对应脚本会退出并明确提示；脚本不
 - 已实现组织级写操作审计日志、组织 JSON 导出、双重确认删除及本地媒体补偿重试；正式发布仍需定义审计/补偿记录留存周期、可恢复备份流程和隐私政策；
 - AI 请求、外部媒体、上传、图片/视频/TTS 生成、FFmpeg 成片和任务结果已进入组织隔离缓存；缓存支持内容哈希去重、逻辑引用、TTL、容量统计、管理员清理以及失败删除补偿。正式发布仍需按实际磁盘容量校准保留周期和告警阈值；
 - Mock 全链路 E2E、厂商契约测试和关键包 80% 以上覆盖率；
-- 当前核心 Go 全包覆盖率实测为 80.1%，Mock/契约测试和 Chromium 桌面/移动浏览器 E2E 已通过；仍没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test，不得把真实供应商链路标记为已完成。
+- 当前核心 Go 全包覆盖率实测为 81.2%（门槛 80%），Mock/契约测试和 Chromium 桌面/移动浏览器、WebKit E2E 断言已通过；仍没有真实 OpenAI/MiniMax/火山/Vidu/阿里账号 smoke test，不得把真实供应商链路标记为已完成。
 - OpenAI/Sora 视频 Adapter 已依据官方 Videos API 完成创建、轮询、鉴权下载和本地首帧契约测试；尾帧与多参考输入会明确拒绝。真实账号 smoke test 通过前不得标记为生产可用。
 - 本机 Colima 已完成 SQLite/PostgreSQL Compose 冷启动、volume `force-recreate` 与 `pg_dump/pg_restore` 探针。仓库已转为公开，GitHub Actions 对公开仓库免费，`verify` workflow 已恢复并在 `push`/`pull_request` 上运行；其 `test` job 带 PostgreSQL 18 service，与本地测试使用同一引擎。
 - 依赖漏洞扫描、SBOM、许可证归档和法务复核；
@@ -102,10 +102,23 @@ Docker、syft、cosign 缺失时对应脚本会退出并明确提示；脚本不
 - 真实 SMTP 邀请与密码恢复 smoke（需 `SMOKE_SMTP_*` 与 `SMOKE_APP_URL_BASE`）。
 - 正式 SPDX/CycloneDX 许可证结论、法务与模型/肖像/声音授权归档仍需发布流程人工完成。
 
-
 - `make sbom` / `scripts/generate-sbom.sh`：导出 Go modules、npm 依赖树、FFmpeg 版本与 license 证据到 `artifacts/sbom/`
 - CI `sbom` job 上传 artifact `sbom-inventory`；本地等价命令为 `make sbom`
 - Playwright WebKit 项目已加入 `frontend/playwright.config.ts`，CI 安装 chromium + webkit
 - 真实厂商 smoke：`SMOKE_OPENAI_KEY` / `SMOKE_MINIMAX_KEY` / `SMOKE_VIDU_KEY` 等环境变量触发 `TestLiveSmoke*`
 - 真实 SMTP smoke：`SMOKE_SMTP_*` + `SMOKE_APP_URL_BASE` 触发 `TestLiveSmokeSMTPPasswordResetAndInvitation`
 - 邀请链路在配置 SMTP 后会发送邮件；未配置时仍返回 token 供复制链接
+
+## 重构与自动验证快照（2026-08-08）
+
+代码重构范围已收口：Workbench、Settings、Drama 主视图已拆分，后端生产/任务服务已按职责拆分，共享转换与 ID 去重 helper 已集中，`useAsyncState` 已接入任务中心。详细文件规模和验收清单见 [`docs/REFACTOR_PLAN.md`](./REFACTOR_PLAN.md)。
+
+本机自动验证结果：
+
+- `go test ./... -race -count=1`、`go vet ./...`：通过。
+- `make coverage`：通过，总覆盖率 81.2%，floor 80%。
+- `npm run build`：通过，包含 `vue-tsc -b` 和 Vite 构建。
+- `make supply-chain-test`：通过。
+- Playwright desktop 51/51、mobile 8/8、WebKit 51/51 断言通过，共 110 条；桌面 Chrome 仅在全部断言通过后的本机浏览器清理阶段挂起，需要人工中断 runner，未发现断言失败。
+
+以上结果证明代码和 Mock/契约链路已完成自动验收，但不替代上方列出的真实供应商、SMTP、发布基础设施及法务授权门槛。

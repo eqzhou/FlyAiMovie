@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { agentAPI, jobsAPI } from '../api'
 import { authStore } from '../auth'
+import { useAsyncState } from '../composables/useAsyncState'
 import { usePolling } from '../composables/usePolling'
 import { errorMessage } from '../utils/errorMessage'
 
@@ -20,8 +21,7 @@ const detailLoading = ref(false)
 const detailRefreshing = ref(false)
 const retryingAgentRunID = ref<number | null>(null)
 const cancelingAgentRunID = ref<number | null>(null)
-const loading = ref(false)
-const error = ref('')
+const { loading, error, run: runAsync } = useAsyncState()
 const notice = ref('')
 const pendingJobActionIDs = ref<number[]>([])
 const batchCanceling = ref(false)
@@ -52,7 +52,7 @@ const active = computed(() => activeTab.value === 'jobs'
 const canCancelAgentRun = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const canManageTasks = computed(() => !authStore.state.enabled || authStore.state.actor?.role !== 'viewer')
 const cancellableSelected = computed(() => selected.value.filter(id => {
-	if (!canManageTasks.value) return false
+  if (!canManageTasks.value) return false
   if (pendingJobActionIDs.value.includes(id)) return false
   const job = jobs.value.find(row => row.id === id)
   return job && !['succeeded', 'failed', 'canceled'].includes(job.status)
@@ -124,35 +124,21 @@ function agentEventTitle(event: any) {
 
 async function load() {
   const token = ++listRequestToken
-  loading.value = true
-  error.value = ''
-  try {
+  await runAsync(async () => {
     const rows = await jobsAPI.list({ status: status.value || undefined, kind: kind.value || undefined, limit: 100 })
     if (token !== listRequestToken) return
     jobs.value = rows
     selected.value = selected.value.filter(id => jobs.value.some(row => row.id === id))
-  } catch (reason) {
-    if (token !== listRequestToken) return
-    error.value = errorMessage(reason, '加载任务失败')
-  } finally {
-    if (token === listRequestToken) loading.value = false
-  }
+  }, '加载任务失败')
 }
 
 async function loadAgentRuns() {
   const token = ++listRequestToken
-  loading.value = true
-  error.value = ''
-  try {
+  await runAsync(async () => {
     const rows = await agentAPI.runs({ status: agentStatus.value || undefined, agent_type: agentType.value || undefined })
     if (token !== listRequestToken) return
     agentRuns.value = rows
-  } catch (reason) {
-    if (token !== listRequestToken) return
-    error.value = errorMessage(reason, '加载 Agent 运行记录失败')
-  } finally {
-    if (token === listRequestToken) loading.value = false
-  }
+  }, '加载 Agent 运行记录失败')
 }
 
 async function switchTab(tab: 'jobs' | 'agents') {

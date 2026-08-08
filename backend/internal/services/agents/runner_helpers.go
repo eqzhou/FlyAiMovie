@@ -1,9 +1,10 @@
 package agents
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/eqzhou/flyaimovie/internal/textutil"
 )
 
 // ignoreSpeaker used by offline extractor; reuse generation-like heuristics
@@ -27,37 +28,13 @@ func stripCodeFence(s string) string {
 }
 
 func asString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case float64:
-		return fmt.Sprintf("%v", t)
-	default:
-		return ""
-	}
+	return textutil.AsString(v, true)
 }
 
 func asInt(v any) int {
-	switch t := v.(type) {
-	case uint:
-		return int(t)
-	case uint64:
-		return int(t)
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case string:
-		var n int
-		fmt.Sscanf(t, "%d", &n)
-		return n
-	default:
-		return 0
-	}
+	return textutil.AsInt(v, true)
 }
 
 func asUint(v any) uint {
-	return uint(asInt(v))
+	return textutil.AsUint(v, true)
 }
